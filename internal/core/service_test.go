@@ -234,6 +234,15 @@ func TestValidateDockerImageJob(t *testing.T) {
 	if err := validateJob(job); err != nil {
 		t.Fatal(err)
 	}
+	job.DockerRegistryAuth = &schedulerv1.DockerRegistryAuth{Server: "registry.example.com", Username: "robot", Password: "secret", Configured: true}
+	if err := validateJob(job); err != nil {
+		t.Fatalf("valid registry credentials: %v", err)
+	}
+	job.DockerRegistryAuth.Username = "invalid:name"
+	if err := validateJob(job); err == nil {
+		t.Fatal("Docker registry username containing a colon was accepted")
+	}
+	job.DockerRegistryAuth = nil
 	job.ExecutorHandler = "__script__"
 	if err := validateJob(job); err == nil {
 		t.Fatal("Docker job accepted script handler")

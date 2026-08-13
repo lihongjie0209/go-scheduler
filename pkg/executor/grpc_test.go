@@ -135,6 +135,37 @@ func TestGRPCDispatchIsAsyncAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestGRPCDispatchCarriesDockerRegistryCredentials(t *testing.T) {
+	t.Parallel()
+	tasks := make(chan Task, 1)
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Handle("capture", func(_ context.Context, task Task) error {
+		tasks <- task
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reporter := &recordingReporter{completed: make(chan bool, 1)}
+	client, cleanup := newBufconnExecutor(t, server, reporter)
+	defer cleanup()
+
+	request := &executorv1.DispatchRequest{RunId: "registry-run", JobId: "job-1", Handler: "capture", CallbackToken: "token", TimeoutSeconds: 10, DockerRegistryAuth: &executorv1.DockerRegistryAuth{Server: "registry.example.com", Username: "robot", Password: "secret"}}
+	if _, err = client.Dispatch(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case task := <-tasks:
+		if task.DockerRegistryAuth == nil || task.DockerRegistryAuth.Server != "registry.example.com" || task.DockerRegistryAuth.Username != "robot" || task.DockerRegistryAuth.Password != "secret" {
+			t.Fatalf("Docker registry credentials = %+v", task.DockerRegistryAuth)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handler did not receive dispatched task")
+	}
+}
+
 func TestGRPCDispatchEnforcesConcurrencyAndBusyState(t *testing.T) {
 	t.Parallel()
 	started := make(chan string, 2)

@@ -370,6 +370,8 @@ components:
         executor_handler: {type: string, description: Required when executor_group_id is set}
         script_language: {type: string, enum: [shell, python, nodejs, php, powershell, docker, kubernetes], description: Kubernetes jobs require executor_handler=__kubernetes__ and kubernetes_cluster_id}
         script_source: {type: string, minLength: 1, maxLength: 1048576, description: Versioned script source dispatched only to a Script Executor}
+        docker_registry_auth: {$ref: '#/components/schemas/DockerRegistryAuth'}
+        clear_docker_registry_auth: {type: boolean, default: false, description: Explicitly remove stored registry credentials during update}
         kubernetes_cluster_id: {type: string, format: uuid, description: Bound managed cluster for Kubernetes Job execution}
         required_executor_labels: {type: array, maxItems: 32, uniqueItems: true, items: {type: string}}
         excluded_executor_labels: {type: array, maxItems: 32, uniqueItems: true, items: {type: string}}
@@ -386,6 +388,14 @@ components:
         callback_timeout_seconds: {type: integer, minimum: 1, maximum: 86400}
         enabled: {type: boolean}
         version: {type: integer, format: int64}
+    DockerRegistryAuth:
+      type: object
+      required: [server, username, configured]
+      properties:
+        server: {type: string, maxLength: 512}
+        username: {type: string, maxLength: 256}
+        password: {type: string, maxLength: 4096, writeOnly: true, description: Required when creating or changing credentials; never returned}
+        configured: {type: boolean, description: Must be true when credentials are supplied}
     KubernetesClusterInput:
       type: object
       required: [name, auth_mode, namespace]

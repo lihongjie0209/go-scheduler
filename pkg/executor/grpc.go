@@ -163,8 +163,12 @@ func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRe
 	if httpSpec != nil {
 		httpExecution = &HTTPExecution{URL: httpSpec.GetUrl(), Method: httpSpec.GetMethod(), Headers: httpSpec.GetHeaders(), Body: httpSpec.GetBody()}
 	}
+	var dockerRegistryAuth *DockerRegistryAuth
+	if auth := request.GetDockerRegistryAuth(); auth != nil {
+		dockerRegistryAuth = &DockerRegistryAuth{Server: auth.GetServer(), Username: auth.GetUsername(), Password: auth.GetPassword()}
+	}
 	logger := &grpcLogger{reporter: s.reporter, runID: request.GetRunId(), token: request.GetCallbackToken()}
-	err := invokeHandler(ctx, handler, Task{RunID: request.GetRunId(), ExternalExecutionID: request.GetExternalExecutionId(), JobID: request.GetJobId(), Input: request.GetInput(), BroadcastGroupID: request.GetBroadcastGroupId(), BroadcastIndex: request.GetBroadcastIndex(), BroadcastTotal: request.GetBroadcastTotal(), ScriptLanguage: request.GetScriptLanguage(), ScriptSource: request.GetScriptSource(), KubernetesCluster: kubernetes, HTTP: httpExecution, Logger: logger})
+	err := invokeHandler(ctx, handler, Task{RunID: request.GetRunId(), ExternalExecutionID: request.GetExternalExecutionId(), JobID: request.GetJobId(), Input: request.GetInput(), BroadcastGroupID: request.GetBroadcastGroupId(), BroadcastIndex: request.GetBroadcastIndex(), BroadcastTotal: request.GetBroadcastTotal(), ScriptLanguage: request.GetScriptLanguage(), ScriptSource: request.GetScriptSource(), KubernetesCluster: kubernetes, HTTP: httpExecution, DockerRegistryAuth: dockerRegistryAuth, Logger: logger})
 	release()
 	s.finish(request, err)
 }

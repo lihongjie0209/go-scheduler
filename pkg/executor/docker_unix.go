@@ -5,6 +5,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,15 +66,23 @@ func DockerHandler(options DockerOptions) Handler {
 			defer cleanup()
 			return resumeDockerContainer(ctx, binary, name, task.Logger)
 		}
+		pullImage := func() error {
+			environment, cleanupAuth, authErr := dockerRegistryEnvironment(task.DockerRegistryAuth)
+			if authErr != nil {
+				return authErr
+			}
+			defer cleanupAuth()
+			return runDockerCommandWithEnvironment(ctx, binary, task.Logger, environment, "pull", definition.Image)
+		}
 		switch definition.PullPolicy {
 		case "always":
-			if err = runDockerCommand(ctx, binary, task.Logger, "pull", definition.Image); err != nil {
+			if err = pullImage(); err != nil {
 				return fmt.Errorf("pull image: %w", err)
 			}
 		case "if_not_present":
 			inspect := exec.CommandContext(ctx, binary, "image", "inspect", definition.Image) // #nosec G204 -- binary is trusted operator configuration and image is passed as one argument.
 			if inspect.Run() != nil {
-				if err = runDockerCommand(ctx, binary, task.Logger, "pull", definition.Image); err != nil {
+				if err = pullImage(); err != nil {
 					return fmt.Errorf("pull image: %w", err)
 				}
 			}
@@ -215,8 +224,12 @@ func dockerRunArguments(name string, task Task, definition DockerDefinition) []s
 }
 
 func runDockerCommand(ctx context.Context, binary string, logger TaskLogger, arguments ...string) error {
+	return runDockerCommandWithEnvironment(ctx, binary, logger, os.Environ(), arguments...)
+}
+
+func runDockerCommandWithEnvironment(ctx context.Context, binary string, logger TaskLogger, environment []string, arguments ...string) error {
 	command := exec.CommandContext(ctx, binary, arguments...) // #nosec G204 -- all values are passed as arguments without shell evaluation.
-	command.Env = os.Environ()
+	command.Env = environment
 	stdout, stderr := &limitedBuffer{limit: maxScriptOutputBytes}, &limitedBuffer{limit: maxScriptOutputBytes}
 	command.Stdout, command.Stderr = stdout, stderr
 	err := command.Run()
@@ -227,4 +240,45 @@ func runDockerCommand(ctx context.Context, binary string, logger TaskLogger, arg
 		return errors.New("docker output exceeded 1 MiB")
 	}
 	return err
+}
+
+func dockerRegistryEnvironment(auth *DockerRegistryAuth) ([]string, func(), error) {
+	if auth == nil {
+		return os.Environ(), func() {}, nil
+	}
+	if strings.TrimSpace(auth.Server) == "" || strings.TrimSpace(auth.Username) == "" || auth.Password == "" {
+		return nil, nil, errors.New("docker registry server, username and password are required")
+	}
+	if strings.ContainsAny(auth.Server, " \t\r\n") || strings.ContainsAny(auth.Username, ":\r\n") {
+		return nil, nil, errors.New("invalid docker registry server or username")
+	}
+	directory, err := os.MkdirTemp("", "go-scheduler-docker-auth-")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create temporary Docker credentials: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(directory) }
+	config := struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}{Auths: map[string]struct {
+		Auth string `json:"auth"`
+	}{strings.TrimSpace(auth.Server): {Auth: base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(auth.Username) + ":" + auth.Password))}}}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("encode temporary Docker credentials: %w", err)
+	}
+	if err = os.WriteFile(directory+string(os.PathSeparator)+"config.json", raw, 0o600); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("write temporary Docker credentials: %w", err)
+	}
+	environment := os.Environ()
+	filtered := make([]string, 0, len(environment)+1)
+	for _, value := range environment {
+		if !strings.HasPrefix(value, "DOCKER_CONFIG=") {
+			filtered = append(filtered, value)
+		}
+	}
+	return append(filtered, "DOCKER_CONFIG="+directory), cleanup, nil
 }

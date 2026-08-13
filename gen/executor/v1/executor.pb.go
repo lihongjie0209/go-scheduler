@@ -38,6 +38,7 @@ type DispatchRequest struct {
 	ScriptSource        string                 `protobuf:"bytes,13,opt,name=script_source,json=scriptSource,proto3" json:"script_source,omitempty"`
 	KubernetesCluster   *KubernetesCluster     `protobuf:"bytes,14,opt,name=kubernetes_cluster,json=kubernetesCluster,proto3" json:"kubernetes_cluster,omitempty"`
 	Http                *HttpExecution         `protobuf:"bytes,15,opt,name=http,proto3" json:"http,omitempty"`
+	DockerRegistryAuth  *DockerRegistryAuth    `protobuf:"bytes,16,opt,name=docker_registry_auth,json=dockerRegistryAuth,proto3" json:"docker_registry_auth,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -177,6 +178,73 @@ func (x *DispatchRequest) GetHttp() *HttpExecution {
 	return nil
 }
 
+func (x *DispatchRequest) GetDockerRegistryAuth() *DockerRegistryAuth {
+	if x != nil {
+		return x.DockerRegistryAuth
+	}
+	return nil
+}
+
+type DockerRegistryAuth struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Server        string                 `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
+	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string                 `protobuf:"bytes,3,opt,name=password,proto3" json:"password,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DockerRegistryAuth) Reset() {
+	*x = DockerRegistryAuth{}
+	mi := &file_executor_v1_executor_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DockerRegistryAuth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DockerRegistryAuth) ProtoMessage() {}
+
+func (x *DockerRegistryAuth) ProtoReflect() protoreflect.Message {
+	mi := &file_executor_v1_executor_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DockerRegistryAuth.ProtoReflect.Descriptor instead.
+func (*DockerRegistryAuth) Descriptor() ([]byte, []int) {
+	return file_executor_v1_executor_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *DockerRegistryAuth) GetServer() string {
+	if x != nil {
+		return x.Server
+	}
+	return ""
+}
+
+func (x *DockerRegistryAuth) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *DockerRegistryAuth) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
 type HttpExecution struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
@@ -189,7 +257,7 @@ type HttpExecution struct {
 
 func (x *HttpExecution) Reset() {
 	*x = HttpExecution{}
-	mi := &file_executor_v1_executor_proto_msgTypes[1]
+	mi := &file_executor_v1_executor_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -201,7 +269,7 @@ func (x *HttpExecution) String() string {
 func (*HttpExecution) ProtoMessage() {}
 
 func (x *HttpExecution) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_v1_executor_proto_msgTypes[1]
+	mi := &file_executor_v1_executor_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -214,7 +282,7 @@ func (x *HttpExecution) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HttpExecution.ProtoReflect.Descriptor instead.
 func (*HttpExecution) Descriptor() ([]byte, []int) {
-	return file_executor_v1_executor_proto_rawDescGZIP(), []int{1}
+	return file_executor_v1_executor_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *HttpExecution) GetUrl() string {
@@ -260,7 +328,7 @@ type KubernetesCluster struct {
 
 func (x *KubernetesCluster) Reset() {
 	*x = KubernetesCluster{}
-	mi := &file_executor_v1_executor_proto_msgTypes[2]
+	mi := &file_executor_v1_executor_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -272,7 +340,7 @@ func (x *KubernetesCluster) String() string {
 func (*KubernetesCluster) ProtoMessage() {}
 
 func (x *KubernetesCluster) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_v1_executor_proto_msgTypes[2]
+	mi := &file_executor_v1_executor_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -285,7 +353,7 @@ func (x *KubernetesCluster) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KubernetesCluster.ProtoReflect.Descriptor instead.
 func (*KubernetesCluster) Descriptor() ([]byte, []int) {
-	return file_executor_v1_executor_proto_rawDescGZIP(), []int{2}
+	return file_executor_v1_executor_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *KubernetesCluster) GetAuthMode() string {
@@ -348,7 +416,7 @@ type DispatchResponse struct {
 
 func (x *DispatchResponse) Reset() {
 	*x = DispatchResponse{}
-	mi := &file_executor_v1_executor_proto_msgTypes[3]
+	mi := &file_executor_v1_executor_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -360,7 +428,7 @@ func (x *DispatchResponse) String() string {
 func (*DispatchResponse) ProtoMessage() {}
 
 func (x *DispatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_v1_executor_proto_msgTypes[3]
+	mi := &file_executor_v1_executor_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -373,7 +441,7 @@ func (x *DispatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DispatchResponse.ProtoReflect.Descriptor instead.
 func (*DispatchResponse) Descriptor() ([]byte, []int) {
-	return file_executor_v1_executor_proto_rawDescGZIP(), []int{3}
+	return file_executor_v1_executor_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DispatchResponse) GetAccepted() bool {
@@ -407,7 +475,7 @@ type CancelRequest struct {
 
 func (x *CancelRequest) Reset() {
 	*x = CancelRequest{}
-	mi := &file_executor_v1_executor_proto_msgTypes[4]
+	mi := &file_executor_v1_executor_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -419,7 +487,7 @@ func (x *CancelRequest) String() string {
 func (*CancelRequest) ProtoMessage() {}
 
 func (x *CancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_v1_executor_proto_msgTypes[4]
+	mi := &file_executor_v1_executor_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -432,7 +500,7 @@ func (x *CancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRequest.ProtoReflect.Descriptor instead.
 func (*CancelRequest) Descriptor() ([]byte, []int) {
-	return file_executor_v1_executor_proto_rawDescGZIP(), []int{4}
+	return file_executor_v1_executor_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CancelRequest) GetRunId() string {
@@ -458,7 +526,7 @@ type CancelResponse struct {
 
 func (x *CancelResponse) Reset() {
 	*x = CancelResponse{}
-	mi := &file_executor_v1_executor_proto_msgTypes[5]
+	mi := &file_executor_v1_executor_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -470,7 +538,7 @@ func (x *CancelResponse) String() string {
 func (*CancelResponse) ProtoMessage() {}
 
 func (x *CancelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_v1_executor_proto_msgTypes[5]
+	mi := &file_executor_v1_executor_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -483,7 +551,7 @@ func (x *CancelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelResponse.ProtoReflect.Descriptor instead.
 func (*CancelResponse) Descriptor() ([]byte, []int) {
-	return file_executor_v1_executor_proto_rawDescGZIP(), []int{5}
+	return file_executor_v1_executor_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CancelResponse) GetAccepted() bool {
@@ -502,7 +570,7 @@ type InspectRequest struct {
 
 func (x *InspectRequest) Reset() {
 	*x = InspectRequest{}
-	mi := &file_executor_v1_executor_proto_msgTypes[6]
+	mi := &file_executor_v1_executor_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -514,7 +582,7 @@ func (x *InspectRequest) String() string {
 func (*InspectRequest) ProtoMessage() {}
 
 func (x *InspectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_v1_executor_proto_msgTypes[6]
+	mi := &file_executor_v1_executor_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -527,7 +595,7 @@ func (x *InspectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InspectRequest.ProtoReflect.Descriptor instead.
 func (*InspectRequest) Descriptor() ([]byte, []int) {
-	return file_executor_v1_executor_proto_rawDescGZIP(), []int{6}
+	return file_executor_v1_executor_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *InspectRequest) GetRunId() string {
@@ -549,7 +617,7 @@ type ExecutionState struct {
 
 func (x *ExecutionState) Reset() {
 	*x = ExecutionState{}
-	mi := &file_executor_v1_executor_proto_msgTypes[7]
+	mi := &file_executor_v1_executor_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -561,7 +629,7 @@ func (x *ExecutionState) String() string {
 func (*ExecutionState) ProtoMessage() {}
 
 func (x *ExecutionState) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_v1_executor_proto_msgTypes[7]
+	mi := &file_executor_v1_executor_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -574,7 +642,7 @@ func (x *ExecutionState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecutionState.ProtoReflect.Descriptor instead.
 func (*ExecutionState) Descriptor() ([]byte, []int) {
-	return file_executor_v1_executor_proto_rawDescGZIP(), []int{7}
+	return file_executor_v1_executor_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ExecutionState) GetRunId() string {
@@ -609,7 +677,7 @@ var File_executor_v1_executor_proto protoreflect.FileDescriptor
 
 const file_executor_v1_executor_proto_rawDesc = "" +
 	"\n" +
-	"\x1aexecutor/v1/executor.proto\x12\vexecutor.v1\"\xda\x04\n" +
+	"\x1aexecutor/v1/executor.proto\x12\vexecutor.v1\"\xad\x05\n" +
 	"\x0fDispatchRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x122\n" +
 	"\x15external_execution_id\x18\x02 \x01(\tR\x13externalExecutionId\x12\x15\n" +
@@ -626,7 +694,12 @@ const file_executor_v1_executor_proto_rawDesc = "" +
 	"\x0fscript_language\x18\f \x01(\tR\x0escriptLanguage\x12#\n" +
 	"\rscript_source\x18\r \x01(\tR\fscriptSource\x12M\n" +
 	"\x12kubernetes_cluster\x18\x0e \x01(\v2\x1e.executor.v1.KubernetesClusterR\x11kubernetesCluster\x12.\n" +
-	"\x04http\x18\x0f \x01(\v2\x1a.executor.v1.HttpExecutionR\x04http\"\xcc\x01\n" +
+	"\x04http\x18\x0f \x01(\v2\x1a.executor.v1.HttpExecutionR\x04http\x12Q\n" +
+	"\x14docker_registry_auth\x18\x10 \x01(\v2\x1f.executor.v1.DockerRegistryAuthR\x12dockerRegistryAuth\"d\n" +
+	"\x12DockerRegistryAuth\x12\x16\n" +
+	"\x06server\x18\x01 \x01(\tR\x06server\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x03 \x01(\tR\bpassword\"\xcc\x01\n" +
 	"\rHttpExecution\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x16\n" +
 	"\x06method\x18\x02 \x01(\tR\x06method\x12A\n" +
@@ -679,33 +752,35 @@ func file_executor_v1_executor_proto_rawDescGZIP() []byte {
 	return file_executor_v1_executor_proto_rawDescData
 }
 
-var file_executor_v1_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_executor_v1_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_executor_v1_executor_proto_goTypes = []any{
-	(*DispatchRequest)(nil),   // 0: executor.v1.DispatchRequest
-	(*HttpExecution)(nil),     // 1: executor.v1.HttpExecution
-	(*KubernetesCluster)(nil), // 2: executor.v1.KubernetesCluster
-	(*DispatchResponse)(nil),  // 3: executor.v1.DispatchResponse
-	(*CancelRequest)(nil),     // 4: executor.v1.CancelRequest
-	(*CancelResponse)(nil),    // 5: executor.v1.CancelResponse
-	(*InspectRequest)(nil),    // 6: executor.v1.InspectRequest
-	(*ExecutionState)(nil),    // 7: executor.v1.ExecutionState
-	nil,                       // 8: executor.v1.HttpExecution.HeadersEntry
+	(*DispatchRequest)(nil),    // 0: executor.v1.DispatchRequest
+	(*DockerRegistryAuth)(nil), // 1: executor.v1.DockerRegistryAuth
+	(*HttpExecution)(nil),      // 2: executor.v1.HttpExecution
+	(*KubernetesCluster)(nil),  // 3: executor.v1.KubernetesCluster
+	(*DispatchResponse)(nil),   // 4: executor.v1.DispatchResponse
+	(*CancelRequest)(nil),      // 5: executor.v1.CancelRequest
+	(*CancelResponse)(nil),     // 6: executor.v1.CancelResponse
+	(*InspectRequest)(nil),     // 7: executor.v1.InspectRequest
+	(*ExecutionState)(nil),     // 8: executor.v1.ExecutionState
+	nil,                        // 9: executor.v1.HttpExecution.HeadersEntry
 }
 var file_executor_v1_executor_proto_depIdxs = []int32{
-	2, // 0: executor.v1.DispatchRequest.kubernetes_cluster:type_name -> executor.v1.KubernetesCluster
-	1, // 1: executor.v1.DispatchRequest.http:type_name -> executor.v1.HttpExecution
-	8, // 2: executor.v1.HttpExecution.headers:type_name -> executor.v1.HttpExecution.HeadersEntry
-	0, // 3: executor.v1.ExecutorService.Dispatch:input_type -> executor.v1.DispatchRequest
-	4, // 4: executor.v1.ExecutorService.Cancel:input_type -> executor.v1.CancelRequest
-	6, // 5: executor.v1.ExecutorService.Inspect:input_type -> executor.v1.InspectRequest
-	3, // 6: executor.v1.ExecutorService.Dispatch:output_type -> executor.v1.DispatchResponse
-	5, // 7: executor.v1.ExecutorService.Cancel:output_type -> executor.v1.CancelResponse
-	7, // 8: executor.v1.ExecutorService.Inspect:output_type -> executor.v1.ExecutionState
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 0: executor.v1.DispatchRequest.kubernetes_cluster:type_name -> executor.v1.KubernetesCluster
+	2, // 1: executor.v1.DispatchRequest.http:type_name -> executor.v1.HttpExecution
+	1, // 2: executor.v1.DispatchRequest.docker_registry_auth:type_name -> executor.v1.DockerRegistryAuth
+	9, // 3: executor.v1.HttpExecution.headers:type_name -> executor.v1.HttpExecution.HeadersEntry
+	0, // 4: executor.v1.ExecutorService.Dispatch:input_type -> executor.v1.DispatchRequest
+	5, // 5: executor.v1.ExecutorService.Cancel:input_type -> executor.v1.CancelRequest
+	7, // 6: executor.v1.ExecutorService.Inspect:input_type -> executor.v1.InspectRequest
+	4, // 7: executor.v1.ExecutorService.Dispatch:output_type -> executor.v1.DispatchResponse
+	6, // 8: executor.v1.ExecutorService.Cancel:output_type -> executor.v1.CancelResponse
+	8, // 9: executor.v1.ExecutorService.Inspect:output_type -> executor.v1.ExecutionState
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_executor_v1_executor_proto_init() }
@@ -719,7 +794,7 @@ func file_executor_v1_executor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_executor_v1_executor_proto_rawDesc), len(file_executor_v1_executor_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

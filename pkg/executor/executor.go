@@ -31,6 +31,7 @@ type Task struct {
 	ScriptLanguage, ScriptSource                               string
 	KubernetesCluster                                          *KubernetesClusterConfig
 	HTTP                                                       *HTTPExecution
+	DockerRegistryAuth                                         *DockerRegistryAuth
 	BroadcastIndex, BroadcastTotal                             int32
 	Logger                                                     TaskLogger
 }
@@ -38,6 +39,10 @@ type Task struct {
 type HTTPExecution struct {
 	URL, Method, Body string
 	Headers           map[string]string
+}
+
+type DockerRegistryAuth struct {
+	Server, Username, Password string
 }
 
 type Options struct {
@@ -82,6 +87,7 @@ type runRequest struct {
 	ScriptSource        string                   `json:"script_source"`
 	KubernetesCluster   *KubernetesClusterConfig `json:"kubernetes_cluster,omitempty"`
 	HTTP                *HTTPExecution           `json:"http,omitempty"`
+	DockerRegistryAuth  *DockerRegistryAuth      `json:"docker_registry_auth,omitempty"`
 }
 
 func NewServer(options Options) (*Server, error) {
@@ -161,7 +167,7 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(parent, time.Duration(request.TimeoutSeconds)*time.Second)
 		defer cancel()
 		logger := &Logger{client: s.client, url: request.LogURL, token: request.CallbackToken}
-		return invokeHandler(ctx, registered.handler, Task{RunID: request.RunID, JobID: request.JobID, Input: request.Input, BroadcastGroupID: request.BroadcastGroupID, ExternalExecutionID: request.ExternalExecutionID, BroadcastIndex: request.BroadcastIndex, BroadcastTotal: request.BroadcastTotal, ScriptLanguage: request.ScriptLanguage, ScriptSource: request.ScriptSource, KubernetesCluster: request.KubernetesCluster, HTTP: request.HTTP, Logger: logger})
+		return invokeHandler(ctx, registered.handler, Task{RunID: request.RunID, JobID: request.JobID, Input: request.Input, BroadcastGroupID: request.BroadcastGroupID, ExternalExecutionID: request.ExternalExecutionID, BroadcastIndex: request.BroadcastIndex, BroadcastTotal: request.BroadcastTotal, ScriptLanguage: request.ScriptLanguage, ScriptSource: request.ScriptSource, KubernetesCluster: request.KubernetesCluster, HTTP: request.HTTP, DockerRegistryAuth: request.DockerRegistryAuth, Logger: logger})
 	}
 	if registered.async {
 		go func() { err := execute(context.Background()); _ = s.callback(request, err) }()

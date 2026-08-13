@@ -300,6 +300,9 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		}
 		if e.executorGRPC != nil {
 			dispatchRequest := &executorv1.DispatchRequest{RunId: c.Run.ID, ExternalExecutionId: c.Run.ID, JobId: c.Job.ID, Attempt: c.Run.Attempt, Handler: c.Job.ExecutorHandler, Input: c.Run.RuntimeInput, CallbackToken: callbackToken, TimeoutSeconds: c.Job.TimeoutSeconds, BroadcastGroupId: c.Run.BroadcastGroupID, BroadcastIndex: c.Run.ShardIndex, BroadcastTotal: c.Run.ShardTotal, ScriptLanguage: c.Job.ScriptLanguage, ScriptSource: c.Job.ScriptSource}
+			if c.Job.DockerRegistryAuth.Configured {
+				dispatchRequest.DockerRegistryAuth = &executorv1.DockerRegistryAuth{Server: c.Job.DockerRegistryAuth.Server, Username: c.Job.DockerRegistryAuth.Username, Password: c.Job.DockerRegistryAuth.Password}
+			}
 			if c.Job.TargetURL != "" {
 				dispatchRequest.Http = &executorv1.HttpExecution{Url: c.Job.TargetURL, Method: c.Job.HTTPMethod, Headers: c.Job.Headers, Body: body}
 			}
@@ -329,6 +332,9 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		targetURL = strings.TrimRight(node.Address, "/") + "/run"
 		method = http.MethodPost
 		runPayload := map[string]any{"run_id": c.Run.ID, "external_execution_id": c.Run.ID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource}
+		if c.Job.DockerRegistryAuth.Configured {
+			runPayload["docker_registry_auth"] = map[string]string{"server": c.Job.DockerRegistryAuth.Server, "username": c.Job.DockerRegistryAuth.Username, "password": c.Job.DockerRegistryAuth.Password}
+		}
 		if c.Job.TargetURL != "" {
 			runPayload["http"] = map[string]any{"url": c.Job.TargetURL, "method": c.Job.HTTPMethod, "headers": c.Job.Headers, "body": body}
 		}

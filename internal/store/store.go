@@ -32,10 +32,16 @@ type Job struct {
 	ScriptLanguage, ScriptSource                                                                    string
 	RequiredExecutorLabels, ExcludedExecutorLabels                                                  []string
 	Headers                                                                                         map[string]string
+	DockerRegistryAuth                                                                              DockerRegistryAuth
 	TimeoutSeconds, MaxRetries, MaxConcurrentRuns, MaxCatchUp, CallbackTimeoutSeconds, MaxQueueSize int32
 	Enabled                                                                                         bool
 	NextRunAt                                                                                       *time.Time
 	Version                                                                                         int64
+}
+
+type DockerRegistryAuth struct {
+	Server, Username, Password string
+	Configured                 bool
 }
 
 type Run struct {
@@ -279,15 +285,19 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (Job, error) {
 		keyVersion = &version
 		headers = []byte(`{}`)
 	}
+	dockerAuth, dockerAuthKeyVersion, err := s.encryptDockerRegistryAuth(j.DockerRegistryAuth)
+	if err != nil {
+		return Job{}, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Job{}, fmt.Errorf("begin create job: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	err = tx.QueryRow(ctx, `INSERT INTO jobs
-	 (id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,executor_group_id,executor_handler,script_language,script_source,kubernetes_cluster_id)
-	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULLIF($24,'')::uuid,$25,$26,$27,NULLIF($28,'')::uuid)
-	 RETURNING next_run_at,version`, j.ID, j.TenantID, j.Name, j.Description, j.ScheduleType, j.ScheduleExpression, j.Timezone, j.TargetURL, j.HTTPMethod, headers, encrypted, keyVersion, j.BodyTemplate, j.TimeoutSeconds, j.MaxRetries, j.OverlapPolicy, j.MisfirePolicy, j.Enabled, nextArg, j.MaxConcurrentRuns, j.MaxCatchUp, j.CallbackTimeoutSeconds, j.MaxQueueSize, j.ExecutorGroupID, j.ExecutorHandler, j.ScriptLanguage, j.ScriptSource, j.KubernetesClusterID).Scan(&j.NextRunAt, &j.Version)
+	 (id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,encrypted_docker_registry_auth,docker_registry_auth_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,executor_group_id,executor_handler,script_language,script_source,kubernetes_cluster_id)
+	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,NULLIF($26,'')::uuid,$27,$28,$29,NULLIF($30,'')::uuid)
+	 RETURNING next_run_at,version`, j.ID, j.TenantID, j.Name, j.Description, j.ScheduleType, j.ScheduleExpression, j.Timezone, j.TargetURL, j.HTTPMethod, headers, encrypted, keyVersion, dockerAuth, dockerAuthKeyVersion, j.BodyTemplate, j.TimeoutSeconds, j.MaxRetries, j.OverlapPolicy, j.MisfirePolicy, j.Enabled, nextArg, j.MaxConcurrentRuns, j.MaxCatchUp, j.CallbackTimeoutSeconds, j.MaxQueueSize, j.ExecutorGroupID, j.ExecutorHandler, j.ScriptLanguage, j.ScriptSource, j.KubernetesClusterID).Scan(&j.NextRunAt, &j.Version)
 	if err != nil {
 		return Job{}, fmt.Errorf("insert job: %w", err)
 	}
@@ -305,13 +315,13 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (Job, error) {
 	return j, nil
 }
 
-const jobColumns = `id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,version,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,COALESCE(executor_group_id::text,''),executor_handler,script_language,script_source,COALESCE(kubernetes_cluster_id::text,'')`
+const jobColumns = `id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,encrypted_docker_registry_auth,docker_registry_auth_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,version,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,COALESCE(executor_group_id::text,''),executor_handler,script_language,script_source,COALESCE(kubernetes_cluster_id::text,'')`
 
 func (s *Store) scanJob(row pgx.Row) (Job, error) {
 	var j Job
-	var headers, encrypted []byte
-	var keyVersion *int
-	err := row.Scan(&j.ID, &j.TenantID, &j.Name, &j.Description, &j.ScheduleType, &j.ScheduleExpression, &j.Timezone, &j.TargetURL, &j.HTTPMethod, &headers, &encrypted, &keyVersion, &j.BodyTemplate, &j.TimeoutSeconds, &j.MaxRetries, &j.OverlapPolicy, &j.MisfirePolicy, &j.Enabled, &j.NextRunAt, &j.Version, &j.MaxConcurrentRuns, &j.MaxCatchUp, &j.CallbackTimeoutSeconds, &j.MaxQueueSize, &j.ExecutorGroupID, &j.ExecutorHandler, &j.ScriptLanguage, &j.ScriptSource, &j.KubernetesClusterID)
+	var headers, encrypted, dockerAuth []byte
+	var keyVersion, dockerAuthKeyVersion *int
+	err := row.Scan(&j.ID, &j.TenantID, &j.Name, &j.Description, &j.ScheduleType, &j.ScheduleExpression, &j.Timezone, &j.TargetURL, &j.HTTPMethod, &headers, &encrypted, &keyVersion, &dockerAuth, &dockerAuthKeyVersion, &j.BodyTemplate, &j.TimeoutSeconds, &j.MaxRetries, &j.OverlapPolicy, &j.MisfirePolicy, &j.Enabled, &j.NextRunAt, &j.Version, &j.MaxConcurrentRuns, &j.MaxCatchUp, &j.CallbackTimeoutSeconds, &j.MaxQueueSize, &j.ExecutorGroupID, &j.ExecutorHandler, &j.ScriptLanguage, &j.ScriptSource, &j.KubernetesClusterID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
@@ -330,7 +340,49 @@ func (s *Store) scanJob(row pgx.Row) (Job, error) {
 	if err := json.Unmarshal(headers, &j.Headers); err != nil {
 		return Job{}, fmt.Errorf("unmarshal headers: %w", err)
 	}
+	if err = s.decryptDockerRegistryAuth(dockerAuth, dockerAuthKeyVersion, &j.DockerRegistryAuth); err != nil {
+		return Job{}, err
+	}
 	return j, nil
+}
+
+func (s *Store) encryptDockerRegistryAuth(auth DockerRegistryAuth) ([]byte, *int, error) {
+	if !auth.Configured {
+		return nil, nil, nil
+	}
+	if s.headerCipher == nil {
+		return nil, nil, errors.New("docker registry credentials require store cipher")
+	}
+	if auth.Server == "" || auth.Username == "" || auth.Password == "" {
+		return nil, nil, errors.New("docker registry server, username and password are required")
+	}
+	plain, err := json.Marshal(auth)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal docker registry credentials: %w", err)
+	}
+	encrypted, version, err := s.headerCipher.Encrypt(plain)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encrypt docker registry credentials: %w", err)
+	}
+	return encrypted, &version, nil
+}
+
+func (s *Store) decryptDockerRegistryAuth(encrypted []byte, keyVersion *int, auth *DockerRegistryAuth) error {
+	if len(encrypted) == 0 {
+		return nil
+	}
+	if s.headerCipher == nil || keyVersion == nil {
+		return errors.New("encrypted docker registry credentials require store cipher")
+	}
+	plain, err := s.headerCipher.Decrypt(encrypted, *keyVersion)
+	if err != nil {
+		return fmt.Errorf("decrypt docker registry credentials: %w", err)
+	}
+	if err = json.Unmarshal(plain, auth); err != nil {
+		return fmt.Errorf("unmarshal docker registry credentials: %w", err)
+	}
+	auth.Configured = true
+	return nil
 }
 
 func (s *Store) GetJob(ctx context.Context, tenantID, id string) (Job, error) {
@@ -382,6 +434,10 @@ func (s *Store) UpdateJob(ctx context.Context, j Job) (Job, error) {
 		keyVersion = &version
 		headers = []byte(`{}`)
 	}
+	dockerAuth, dockerAuthKeyVersion, err := s.encryptDockerRegistryAuth(j.DockerRegistryAuth)
+	if err != nil {
+		return Job{}, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Job{}, fmt.Errorf("begin update job: %w", err)
@@ -398,7 +454,7 @@ func (s *Store) UpdateJob(ctx context.Context, j Job) (Job, error) {
 		return Job{}, ErrConflict
 	}
 	scriptChanged := current.ScriptLanguage != j.ScriptLanguage || current.ScriptSource != j.ScriptSource
-	err = tx.QueryRow(ctx, `UPDATE jobs SET name=$3,description=$4,schedule_type=$5,schedule_expression=$6,timezone=$7,target_url=$8,http_method=$9,headers=$10,encrypted_headers=$11,encryption_key_version=$12,body_template=$13,timeout_seconds=$14,max_retries=$15,overlap_policy=$16,misfire_policy=$17,enabled=$18,next_run_at=$19,max_concurrent_runs=$20,max_catch_up=$21,callback_timeout_seconds=$22,max_queue_size=$23,executor_group_id=NULLIF($24,'')::uuid,executor_handler=$25,script_language=$26,script_source=$27,kubernetes_cluster_id=NULLIF($28,'')::uuid,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING next_run_at,version`, j.TenantID, j.ID, j.Name, j.Description, j.ScheduleType, j.ScheduleExpression, j.Timezone, j.TargetURL, j.HTTPMethod, headers, encrypted, keyVersion, j.BodyTemplate, j.TimeoutSeconds, j.MaxRetries, j.OverlapPolicy, j.MisfirePolicy, j.Enabled, nextArg, j.MaxConcurrentRuns, j.MaxCatchUp, j.CallbackTimeoutSeconds, j.MaxQueueSize, j.ExecutorGroupID, j.ExecutorHandler, j.ScriptLanguage, j.ScriptSource, j.KubernetesClusterID).Scan(&j.NextRunAt, &j.Version)
+	err = tx.QueryRow(ctx, `UPDATE jobs SET name=$3,description=$4,schedule_type=$5,schedule_expression=$6,timezone=$7,target_url=$8,http_method=$9,headers=$10,encrypted_headers=$11,encryption_key_version=$12,encrypted_docker_registry_auth=$13,docker_registry_auth_key_version=$14,body_template=$15,timeout_seconds=$16,max_retries=$17,overlap_policy=$18,misfire_policy=$19,enabled=$20,next_run_at=$21,max_concurrent_runs=$22,max_catch_up=$23,callback_timeout_seconds=$24,max_queue_size=$25,executor_group_id=NULLIF($26,'')::uuid,executor_handler=$27,script_language=$28,script_source=$29,kubernetes_cluster_id=NULLIF($30,'')::uuid,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING next_run_at,version`, j.TenantID, j.ID, j.Name, j.Description, j.ScheduleType, j.ScheduleExpression, j.Timezone, j.TargetURL, j.HTTPMethod, headers, encrypted, keyVersion, dockerAuth, dockerAuthKeyVersion, j.BodyTemplate, j.TimeoutSeconds, j.MaxRetries, j.OverlapPolicy, j.MisfirePolicy, j.Enabled, nextArg, j.MaxConcurrentRuns, j.MaxCatchUp, j.CallbackTimeoutSeconds, j.MaxQueueSize, j.ExecutorGroupID, j.ExecutorHandler, j.ScriptLanguage, j.ScriptSource, j.KubernetesClusterID).Scan(&j.NextRunAt, &j.Version)
 	if err != nil {
 		return Job{}, fmt.Errorf("update job: %w", err)
 	}
@@ -857,9 +913,9 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 	var out []ClaimedRun
 	for rows.Next() {
 		var x ClaimedRun
-		var headers, encrypted []byte
-		var keyVersion *int
-		err = rows.Scan(&x.Run.ID, &x.Run.TenantID, &x.Run.JobID, &x.Run.TriggerType, &x.Run.Status, &x.Run.Attempt, &x.Run.ScheduledAt, &x.Run.RuntimeInput, &x.Run.ParentRunID, &x.Run.RetryOfRunID, &x.Run.ExecutorNodeID, &x.Run.ExecutorAddress, &x.Run.BroadcastGroupID, &x.Run.ShardIndex, &x.Run.ShardTotal, &x.Run.RescheduleOnTerminal, &x.Run.OverrideAddresses, &x.Run.LeaseToken, &x.Job.ID, &x.Job.TenantID, &x.Job.Name, &x.Job.Description, &x.Job.ScheduleType, &x.Job.ScheduleExpression, &x.Job.Timezone, &x.Job.TargetURL, &x.Job.HTTPMethod, &headers, &encrypted, &keyVersion, &x.Job.BodyTemplate, &x.Job.TimeoutSeconds, &x.Job.MaxRetries, &x.Job.OverlapPolicy, &x.Job.MisfirePolicy, &x.Job.Enabled, &x.Job.NextRunAt, &x.Job.Version, &x.Job.MaxConcurrentRuns, &x.Job.MaxCatchUp, &x.Job.CallbackTimeoutSeconds, &x.Job.MaxQueueSize, &x.Job.ExecutorGroupID, &x.Job.ExecutorHandler, &x.Job.ScriptLanguage, &x.Job.ScriptSource, &x.Job.KubernetesClusterID)
+		var headers, encrypted, dockerAuth []byte
+		var keyVersion, dockerAuthKeyVersion *int
+		err = rows.Scan(&x.Run.ID, &x.Run.TenantID, &x.Run.JobID, &x.Run.TriggerType, &x.Run.Status, &x.Run.Attempt, &x.Run.ScheduledAt, &x.Run.RuntimeInput, &x.Run.ParentRunID, &x.Run.RetryOfRunID, &x.Run.ExecutorNodeID, &x.Run.ExecutorAddress, &x.Run.BroadcastGroupID, &x.Run.ShardIndex, &x.Run.ShardTotal, &x.Run.RescheduleOnTerminal, &x.Run.OverrideAddresses, &x.Run.LeaseToken, &x.Job.ID, &x.Job.TenantID, &x.Job.Name, &x.Job.Description, &x.Job.ScheduleType, &x.Job.ScheduleExpression, &x.Job.Timezone, &x.Job.TargetURL, &x.Job.HTTPMethod, &headers, &encrypted, &keyVersion, &dockerAuth, &dockerAuthKeyVersion, &x.Job.BodyTemplate, &x.Job.TimeoutSeconds, &x.Job.MaxRetries, &x.Job.OverlapPolicy, &x.Job.MisfirePolicy, &x.Job.Enabled, &x.Job.NextRunAt, &x.Job.Version, &x.Job.MaxConcurrentRuns, &x.Job.MaxCatchUp, &x.Job.CallbackTimeoutSeconds, &x.Job.MaxQueueSize, &x.Job.ExecutorGroupID, &x.Job.ExecutorHandler, &x.Job.ScriptLanguage, &x.Job.ScriptSource, &x.Job.KubernetesClusterID)
 		if err != nil {
 			return nil, err
 		}
@@ -875,12 +931,15 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 		if err = json.Unmarshal(headers, &x.Job.Headers); err != nil {
 			return nil, err
 		}
+		if err = s.decryptDockerRegistryAuth(dockerAuth, dockerAuthKeyVersion, &x.Job.DockerRegistryAuth); err != nil {
+			return nil, err
+		}
 		out = append(out, x)
 	}
 	return out, rows.Err()
 }
 func jobColumnsWithAlias(a string) string {
-	return a + `.id,` + a + `.tenant_id,` + a + `.name,` + a + `.description,` + a + `.schedule_type,` + a + `.schedule_expression,` + a + `.timezone,` + a + `.target_url,` + a + `.http_method,` + a + `.headers,` + a + `.encrypted_headers,` + a + `.encryption_key_version,` + a + `.body_template,` + a + `.timeout_seconds,` + a + `.max_retries,` + a + `.overlap_policy,` + a + `.misfire_policy,` + a + `.enabled,` + a + `.next_run_at,` + a + `.version,` + a + `.max_concurrent_runs,` + a + `.max_catch_up,` + a + `.callback_timeout_seconds,` + a + `.max_queue_size,COALESCE(` + a + `.executor_group_id::text,''),` + a + `.executor_handler,` + a + `.script_language,` + a + `.script_source,COALESCE(` + a + `.kubernetes_cluster_id::text,'')`
+	return a + `.id,` + a + `.tenant_id,` + a + `.name,` + a + `.description,` + a + `.schedule_type,` + a + `.schedule_expression,` + a + `.timezone,` + a + `.target_url,` + a + `.http_method,` + a + `.headers,` + a + `.encrypted_headers,` + a + `.encryption_key_version,` + a + `.encrypted_docker_registry_auth,` + a + `.docker_registry_auth_key_version,` + a + `.body_template,` + a + `.timeout_seconds,` + a + `.max_retries,` + a + `.overlap_policy,` + a + `.misfire_policy,` + a + `.enabled,` + a + `.next_run_at,` + a + `.version,` + a + `.max_concurrent_runs,` + a + `.max_catch_up,` + a + `.callback_timeout_seconds,` + a + `.max_queue_size,COALESCE(` + a + `.executor_group_id::text,''),` + a + `.executor_handler,` + a + `.script_language,` + a + `.script_source,COALESCE(` + a + `.kubernetes_cluster_id::text,'')`
 }
 
 func (s *Store) CompleteRun(ctx context.Context, r Run, success bool, status int, body, errorMessage string) error {

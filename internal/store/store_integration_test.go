@@ -1241,6 +1241,24 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if loaded.Headers["Authorization"] != "Bearer top-secret" {
 		t.Fatal("encrypted headers did not round-trip")
 	}
+	dockerJob, err := encryptedStore.CreateJob(ctx, Job{TenantID: tenantID, Name: "private-image", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 60, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", Enabled: false, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "__docker__", ScriptLanguage: "docker", ScriptSource: `{"image":"registry.example.com/team/image:latest"}`, DockerRegistryAuth: DockerRegistryAuth{Server: "registry.example.com", Username: "robot", Password: "registry-secret", Configured: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawDockerAuth []byte
+	if err = direct.QueryRow(ctx, `SELECT encrypted_docker_registry_auth FROM jobs WHERE id=$1`, dockerJob.ID).Scan(&rawDockerAuth); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(rawDockerAuth, []byte("registry-secret")) {
+		t.Fatal("Docker registry credentials were stored in plaintext")
+	}
+	loadedDockerJob, err := encryptedStore.GetJob(ctx, tenantID, dockerJob.ID)
+	if err != nil || loadedDockerJob.DockerRegistryAuth.Password != "registry-secret" || !loadedDockerJob.DockerRegistryAuth.Configured {
+		t.Fatalf("Docker registry credentials = %+v, %v", loadedDockerJob.DockerRegistryAuth, err)
+	}
+	if _, err = one.CreateJob(ctx, Job{TenantID: tenantID, Name: "unencrypted-private-image", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 60, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", Enabled: false, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "__docker__", ScriptLanguage: "docker", ScriptSource: `{"image":"registry.example.com/team/image:latest"}`, DockerRegistryAuth: DockerRegistryAuth{Server: "registry.example.com", Username: "robot", Password: "registry-secret", Configured: true}}); err == nil {
+		t.Fatal("store without an encryption key accepted Docker registry credentials")
+	}
 	kubernetesCluster, err := encryptedStore.CreateKubernetesCluster(ctx, KubernetesCluster{TenantID: tenantID, Name: "integration-k8s", AuthMode: "service_account", APIServer: "https://k8s.example", Namespace: "jobs", Credentials: KubernetesCredentials{Token: "service-account-secret", CAData: "test-ca"}})
 	if err != nil {
 		t.Fatal(err)

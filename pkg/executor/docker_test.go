@@ -3,7 +3,12 @@
 package executor
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -103,5 +108,50 @@ func TestDockerExitStatus(t *testing.T) {
 				t.Fatalf("dockerExitStatus() = %d, %v", got, err)
 			}
 		})
+	}
+}
+
+func TestDockerRegistryEnvironmentUsesTemporaryPrivateConfig(t *testing.T) {
+	t.Parallel()
+	environment, cleanup, err := dockerRegistryEnvironment(&DockerRegistryAuth{Server: "registry.example.com", Username: "robot", Password: "top-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var directory string
+	for _, value := range environment {
+		if strings.HasPrefix(value, "DOCKER_CONFIG=") {
+			directory = strings.TrimPrefix(value, "DOCKER_CONFIG=")
+		}
+	}
+	if directory == "" {
+		t.Fatal("DOCKER_CONFIG was not set")
+	}
+	info, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("temporary Docker config mode = %o, want 700", info.Mode().Perm())
+	}
+	configPath := filepath.Join(directory, "config.json")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}
+	if err = json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	wantAuth := base64.StdEncoding.EncodeToString([]byte("robot:top-secret"))
+	if config.Auths["registry.example.com"].Auth != wantAuth {
+		t.Fatalf("temporary Docker auth = %q, want encoded credentials", config.Auths["registry.example.com"].Auth)
+	}
+	cleanup()
+	if _, err = os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("temporary Docker credentials still exist: %v", err)
 	}
 }

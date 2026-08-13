@@ -128,7 +128,20 @@ Docker Image 任务与脚本任务使用同一个 `script-executor`。设置 `DO
 
 默认不附加网络、只读根文件系统、capability、PID、CPU 或内存策略，容器继承 Docker Runtime 的默认行为。可以通过 `network` 指定 `bridge`、`host` 或自定义 Docker network，通过 `read_only_root`、`memory_mb` 和 `cpus` 显式收窄单个任务。任务定义仍不提供 privileged、宿主目录挂载或 Docker socket 透传字段；Executor 本身属于可信高权限组件，应在基础设施层隔离。
 
-私有仓库认证使用 Docker 标准 `config.json`，凭据只部署在 Docker Executor，不写入任务、PostgreSQL、gRPC 消息或日志：
+私有仓库凭据可在 Docker 任务的 `docker_registry_auth` 中配置。密码使用服务端密钥环 AES-GCM 加密后存入 PostgreSQL，查询任务只返回 `server`、`username` 和 `configured`，不会回显密码。Core 仅在派发该任务时通过受认证的 gRPC 连接发送凭据；Executor 为本次 `docker pull` 创建权限为 `0600` 的临时 `config.json`，拉取结束立即删除，不执行全局 `docker login`。
+
+```json
+{
+  "docker_registry_auth": {
+    "server": "registry.example.com",
+    "username": "robot",
+    "password": "secret",
+    "configured": true
+  }
+}
+```
+
+更新任务时省略该字段会保留原凭据；修改仓库或用户名时必须重新提交密码；设置 `clear_docker_registry_auth: true` 才会明确删除。配置凭据要求 API Server 已配置数据加密密钥，否则请求会失败。未配置任务级凭据时仍可使用 Executor 已有的 Docker 标准 `config.json`：
 
 ```bash
 docker build -f deploy/script-executor/Dockerfile -t go-scheduler-executor .
@@ -145,7 +158,7 @@ docker run --rm -p 9999:9999 \
   go-scheduler-executor
 ```
 
-Kubernetes 中应把仓库凭据以 Secret 挂载为 `/docker-auth/config.json`。挂载宿主 Docker Socket 等价于授予执行器宿主机高权限，生产环境建议使用隔离的专用 Worker 节点或远程受限 Docker Engine。
+Kubernetes 中也可以把共享仓库凭据以 Secret 挂载为 `/docker-auth/config.json`。挂载宿主 Docker Socket 等价于授予执行器宿主机高权限，生产环境建议使用隔离的专用 Worker 节点或远程受限 Docker Engine。
 
 ## Kubernetes Job Executor
 

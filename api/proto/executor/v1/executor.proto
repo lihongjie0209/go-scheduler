@@ -26,6 +26,13 @@ message DispatchRequest {
   string script_source = 13;
   KubernetesCluster kubernetes_cluster = 14;
   HttpExecution http = 15;
+  DockerRegistryAuth docker_registry_auth = 16;
+}
+
+message DockerRegistryAuth {
+  string server = 1;
+  string username = 2;
+  string password = 3;
 }
 
 message HttpExecution {

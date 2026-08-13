@@ -41,6 +41,9 @@ func (s *Service) CreateJob(ctx context.Context, req *schedulerv1.CreateJobReque
 	if err := validateJob(req.Job); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	if auth := req.Job.GetDockerRegistryAuth(); auth != nil && auth.GetConfigured() && auth.GetPassword() == "" {
+		return nil, status.Error(codes.InvalidArgument, "docker registry password is required when creating credentials")
+	}
 	j, err := s.store.CreateJob(ctx, fromProto(req.Job))
 	if err != nil {
 		return nil, toStatus(err)
@@ -79,7 +82,23 @@ func (s *Service) UpdateJob(ctx context.Context, req *schedulerv1.UpdateJobReque
 	if err := validateJob(req.Job); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	j, err := s.store.UpdateJob(ctx, fromProto(req.Job))
+	incoming := fromProto(req.Job)
+	if req.Job.GetClearDockerRegistryAuth() {
+		incoming.DockerRegistryAuth = store.DockerRegistryAuth{}
+	} else if req.Job.GetDockerRegistryAuth() == nil || (incoming.DockerRegistryAuth.Configured && incoming.DockerRegistryAuth.Password == "") {
+		current, loadErr := s.store.GetJob(ctx, incoming.TenantID, incoming.ID)
+		if loadErr != nil {
+			return nil, toStatus(loadErr)
+		}
+		if req.Job.GetDockerRegistryAuth() == nil {
+			incoming.DockerRegistryAuth = current.DockerRegistryAuth
+		} else if !current.DockerRegistryAuth.Configured || current.DockerRegistryAuth.Server != incoming.DockerRegistryAuth.Server || current.DockerRegistryAuth.Username != incoming.DockerRegistryAuth.Username {
+			return nil, status.Error(codes.InvalidArgument, "docker registry password is required when changing credentials")
+		} else {
+			incoming.DockerRegistryAuth = current.DockerRegistryAuth
+		}
+	}
+	j, err := s.store.UpdateJob(ctx, incoming)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -163,6 +182,22 @@ func validateJob(j *schedulerv1.Job) error {
 	}
 	if j.ScriptLanguage != "kubernetes" && j.KubernetesClusterId != "" {
 		return fmt.Errorf("kubernetes_cluster_id is only valid for kubernetes jobs")
+	}
+	if j.DockerRegistryAuth != nil || j.ClearDockerRegistryAuth {
+		if j.ScriptLanguage != "docker" {
+			return fmt.Errorf("docker registry credentials are only valid for docker jobs")
+		}
+		if j.DockerRegistryAuth != nil && j.ClearDockerRegistryAuth {
+			return fmt.Errorf("docker_registry_auth and clear_docker_registry_auth are mutually exclusive")
+		}
+		if auth := j.DockerRegistryAuth; auth != nil {
+			if !auth.Configured || strings.TrimSpace(auth.Server) == "" || strings.TrimSpace(auth.Username) == "" {
+				return fmt.Errorf("configured docker registry credentials require server and username")
+			}
+			if len(auth.Server) > 512 || len(auth.Username) > 256 || len(auth.Password) > 4096 || strings.ContainsAny(auth.Server, " \t\r\n") || strings.ContainsAny(auth.Username, ":\r\n") {
+				return fmt.Errorf("invalid docker registry credentials")
+			}
+		}
 	}
 	required, err := normalizeExecutorLabels(j.RequiredExecutorLabels)
 	if err != nil {
@@ -571,12 +606,19 @@ func (s *Service) ListExecutorNodes(ctx context.Context, req *schedulerv1.ListEx
 }
 
 func fromProto(j *schedulerv1.Job) store.Job {
-	return store.Job{ID: j.Id, TenantID: j.TenantId, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetURL: j.TargetUrl, HTTPMethod: j.HttpMethod, Headers: j.Headers, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupID: j.ExecutorGroupId, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels, KubernetesClusterID: j.KubernetesClusterId}
+	out := store.Job{ID: j.Id, TenantID: j.TenantId, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetURL: j.TargetUrl, HTTPMethod: j.HttpMethod, Headers: j.Headers, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupID: j.ExecutorGroupId, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels, KubernetesClusterID: j.KubernetesClusterId}
+	if auth := j.GetDockerRegistryAuth(); auth != nil {
+		out.DockerRegistryAuth = store.DockerRegistryAuth{Server: strings.TrimSpace(auth.GetServer()), Username: strings.TrimSpace(auth.GetUsername()), Password: auth.GetPassword(), Configured: auth.GetConfigured()}
+	}
+	return out
 }
 func toProto(j store.Job) *schedulerv1.Job {
 	out := &schedulerv1.Job{Id: j.ID, TenantId: j.TenantID, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetUrl: j.TargetURL, HttpMethod: j.HTTPMethod, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupId: j.ExecutorGroupID, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels, KubernetesClusterId: j.KubernetesClusterID}
 	if j.NextRunAt != nil {
 		out.NextRunAt = timestamppb.New(*j.NextRunAt)
+	}
+	if j.DockerRegistryAuth.Configured {
+		out.DockerRegistryAuth = &schedulerv1.DockerRegistryAuth{Server: j.DockerRegistryAuth.Server, Username: j.DockerRegistryAuth.Username, Configured: true}
 	}
 	return out
 }
