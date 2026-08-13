@@ -65,7 +65,7 @@
 `scheduler-bench` 提供两套系统共用的黑盒执行目标：
 
 ```bash
-go run ./cmd/scheduler-bench --listen :19090
+go run ./cmd/scheduler-bench serve --listen :19090
 ```
 
 压测控制器应在触发前把唯一事件 ID 和计划时间写入 sink，任务执行 URL 只携带事件 ID：
@@ -80,3 +80,27 @@ curl http://127.0.0.1:19090/api/v1/report
 ```
 
 sink 对每个 ID 只使用首次到达时间计算延迟，并单独统计重复、未知和非法请求。`POST /api/v1/reset` 清空上一轮数据。正式压测时 sink 必须部署在独立节点，并与两套调度器保持相同网络路径。
+
+## 任务装载器
+
+`scheduler-bench load` 为两套系统生成相同的事件 ID、UTC Quartz Cron 表达式和计划时刻。凭据只从环境变量读取，不放入命令历史：
+
+```bash
+# Go Scheduler；API key 自带租户时可省略 BENCH_TENANT_ID
+BENCH_TOKEN=gsk_xxx BENCH_TENANT_ID=tenant-id \
+  scheduler-bench load --system go \
+  --server http://scheduler:8080 --sink http://sink:19090/execute \
+  --run-id burst-go-001 --count 1000 --concurrency 16 \
+  --scheduled-at 2026-08-14T02:00:00Z > burst-go-001.json
+
+# XXL-JOB 3.4.x 管理端装载；执行器组必须预先创建
+BENCH_XXL_USERNAME=admin BENCH_XXL_PASSWORD=secret \
+BENCH_XXL_EXECUTOR_GROUP=2 \
+  scheduler-bench load --system xxl \
+  --server http://xxl-admin:8080/xxl-job-admin \
+  --sink http://sink:19090/execute --run-id burst-xxl-001 \
+  --count 1000 --concurrency 16 \
+  --scheduled-at 2026-08-14T02:00:00Z > burst-xxl-001.json
+```
+
+XXL-JOB OpenAPI 的任务管理实现带有 100 token/30 秒限流，批量初始化会耗费数十分钟并可能错过统一计划时刻。因此基准装载器使用其登录保护的管理端 `jobinfo/insert` 和 `jobinfo/start`，该兼容层当前以 XXL-JOB 3.4.x 为目标；正式报告必须记录精确 Git SHA。两套服务进程都必须使用 UTC 时区。装载结束时间晚于计划时刻时整轮实验作废。
