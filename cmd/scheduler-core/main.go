@@ -14,7 +14,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/fx"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
@@ -66,15 +65,12 @@ func newCoreService(s *store.Store, registry core.ExecutorRegistry) *core.Servic
 }
 func newGRPCServer(c config.Config, svc *core.Service) (*grpc.Server, error) {
 	opts := []grpc.ServerOption{grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(c.ServiceToken, c.PreviousToken))}
-	if c.GRPCTLSCert != "" || c.GRPCTLSKey != "" {
-		if c.GRPCTLSCert == "" || c.GRPCTLSKey == "" {
-			return nil, fmt.Errorf("GRPC_TLS_CERT and GRPC_TLS_KEY must be configured together")
-		}
-		creds, err := credentials.NewServerTLSFromFile(c.GRPCTLSCert, c.GRPCTLSKey)
-		if err != nil {
-			return nil, fmt.Errorf("load grpc server TLS: %w", err)
-		}
-		opts = append(opts, grpc.Creds(creds))
+	transport, err := rpc.ServerTransportCredentials(c.GRPCTLSCert, c.GRPCTLSKey)
+	if err != nil {
+		return nil, err
+	}
+	if transport != nil {
+		opts = append(opts, grpc.Creds(transport))
 	}
 	server := grpc.NewServer(opts...)
 	schedulerv1.RegisterSchedulerServiceServer(server, svc)
@@ -86,8 +82,12 @@ func newGRPCServer(c config.Config, svc *core.Service) (*grpc.Server, error) {
 func newRegistrar(c config.Config, client *clientv3.Client) (*discovery.Registrar, error) {
 	return discovery.NewRegistrar(client, c.EtcdPrefix, "scheduler-core", discovery.Metadata{InstanceID: c.InstanceID, GRPCAddress: c.AdvertiseGRPC, Version: "dev", StartedAt: time.Now().UTC()})
 }
-func newEngine(c config.Config, s *store.Store) *core.Engine {
-	return core.NewEngine(s, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorGRPC(c.ServiceToken))
+func newEngine(c config.Config, s *store.Store) (*core.Engine, error) {
+	transport, err := rpc.ClientTransportCredentials(c.ExecutorGRPCTLSCA, c.ExecutorGRPCTLSServerName)
+	if err != nil {
+		return nil, err
+	}
+	return core.NewEngine(s, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorGRPCTransport(c.ServiceToken, transport)), nil
 }
 func newNotifier(c config.Config, s *store.Store) *notifier.Worker {
 	return notifier.New(s, c.InstanceID, notifier.SMTPConfig{Address: c.SMTPAddress, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.SMTPFrom})

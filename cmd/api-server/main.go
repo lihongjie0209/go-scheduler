@@ -14,8 +14,6 @@ import (
 	"go.uber.org/fx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/balancer/roundrobin"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
 	apihttp "github.com/lihongjie0209/go-scheduler/internal/api"
@@ -59,13 +57,9 @@ func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
 }
 func newCoreClient(lc fx.Lifecycle, c config.Config, etcd *clientv3.Client) (schedulerv1.SchedulerServiceClient, error) {
 	builder := discovery.NewBuilder(etcd, c.EtcdPrefix)
-	transport := credentials.TransportCredentials(insecure.NewCredentials())
-	if c.GRPCTLSCA != "" {
-		creds, err := credentials.NewClientTLSFromFile(c.GRPCTLSCA, c.GRPCTLSServerName)
-		if err != nil {
-			return nil, fmt.Errorf("load grpc client TLS: %w", err)
-		}
-		transport = creds
+	transport, err := rpc.ClientTransportCredentials(c.GRPCTLSCA, c.GRPCTLSServerName)
+	if err != nil {
+		return nil, err
 	}
 	conn, err := grpc.NewClient("etcd:///scheduler-core", grpc.WithResolvers(builder), grpc.WithTransportCredentials(transport), grpc.WithDefaultServiceConfig(fmt.Sprintf(`{"loadBalancingConfig":[{"%s":{}}]}`, roundrobin.Name)), grpc.WithUnaryInterceptor(rpc.UnaryClientAuth(c.ServiceToken)))
 	if err != nil {

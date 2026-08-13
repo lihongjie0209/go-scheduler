@@ -16,7 +16,6 @@ import (
 	"github.com/lihongjie0209/go-scheduler/internal/rpc"
 	"github.com/lihongjie0209/go-scheduler/pkg/executor"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -60,7 +59,11 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("parse EXECUTOR_TTL: %w", err)
 	}
-	connection, err := grpc.NewClient(schedulerAddress, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithUnaryInterceptor(rpc.UnaryClientAuth(token)))
+	schedulerTransport, err := rpc.ClientTransportCredentials(os.Getenv("SCHEDULER_GRPC_TLS_CA"), os.Getenv("SCHEDULER_GRPC_TLS_SERVER_NAME"))
+	if err != nil {
+		return err
+	}
+	connection, err := grpc.NewClient(schedulerAddress, grpc.WithTransportCredentials(schedulerTransport), grpc.WithUnaryInterceptor(rpc.UnaryClientAuth(token)))
 	if err != nil {
 		return err
 	}
@@ -84,7 +87,15 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(token, "")))
+	serverOptions := []grpc.ServerOption{grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(token, ""))}
+	executorTransport, err := rpc.ServerTransportCredentials(os.Getenv("EXECUTOR_GRPC_TLS_CERT"), os.Getenv("EXECUTOR_GRPC_TLS_KEY"))
+	if err != nil {
+		return err
+	}
+	if executorTransport != nil {
+		serverOptions = append(serverOptions, grpc.Creds(executorTransport))
+	}
+	grpcServer := grpc.NewServer(serverOptions...)
 	executorv1.RegisterExecutorServiceServer(grpcServer, executorService)
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)

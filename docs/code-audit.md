@@ -15,6 +15,7 @@
 - 服务令牌改为恒定时间比较；
 - Argon2 哈希参数在内存分配前验证上下限，阻止异常哈希触发资源耗尽；
 - 登录接口按来源 IP 和邮箱摘要执行有界本地限流，成功认证后重置窗口；
+- API→Core、Executor→Core/standalone 和 Core→Executor 均支持可选 TLS，并有真实 TLS gRPC 握手测试；
 - Docker 执行器按产品约束默认继承 Docker 原生网络和权限策略，网络、只读根文件系统、CPU 和内存限制均改为显式可选；
 - migration 23 为 Claim 活跃集合、过期租约、幂等记录、Outbox 和依赖派发清理增加针对性索引。
 
@@ -104,7 +105,7 @@ Migration 23 增加：
 ### 接受风险与待处理项
 
 - 按产品要求，脚本、HTTP 和 Docker 任务不做目标网络白名单；Docker 默认也不强制 drop capabilities、只读根文件系统或 PID 限制。Executor 因此属于可信高权限组件，必须部署在独立节点/namespace，并由基础设施实施宿主机和凭据隔离。
-- 分布式 gRPC 支持 API→Core TLS，但 Core→Executor 和 Executor→Core 当前默认明文。服务令牌能鉴权但不能防止同网段窃听，应补齐可选 TLS/mTLS，并在生产配置中强制启用。
+- 所有跨进程 gRPC 方向都支持 TLS，但为了兼容本地开发，未配置证书时仍允许明文。生产必须配置 CA/证书或由 service mesh 强制 mTLS；应用原生双向客户端证书校验仍是后续增强项。
 - `/metrics` 默认未鉴权，应只通过内网 Service 或网络策略暴露。
 - 应用内登录限流是单实例状态。集群模式还应由网关实施共享限流，避免攻击者把额度乘以 API 实例数。
 - Kubernetes 配置允许 `insecure_skip_tls_verify`，这是显式运维选项；生产审计应检测并告警，而不是静默启用。

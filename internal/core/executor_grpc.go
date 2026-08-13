@@ -11,13 +11,15 @@ import (
 	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
 	"github.com/lihongjie0209/go-scheduler/internal/rpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 type executorGRPCPool struct {
-	token string
-	mu    sync.Mutex
-	conns map[string]*executorGRPCConnection
+	token     string
+	transport credentials.TransportCredentials
+	mu        sync.Mutex
+	conns     map[string]*executorGRPCConnection
 }
 
 type executorGRPCConnection struct {
@@ -29,7 +31,11 @@ type executorGRPCConnection struct {
 const maxExecutorGRPCConnections = 256
 
 func newExecutorGRPCPool(token string) *executorGRPCPool {
-	return &executorGRPCPool{token: token, conns: make(map[string]*executorGRPCConnection)}
+	return newExecutorGRPCPoolWithTransport(token, insecure.NewCredentials())
+}
+
+func newExecutorGRPCPoolWithTransport(token string, transport credentials.TransportCredentials) *executorGRPCPool {
+	return &executorGRPCPool{token: token, transport: transport, conns: make(map[string]*executorGRPCConnection)}
 }
 
 func (p *executorGRPCPool) acquire(address string) (executorv1.ExecutorServiceClient, func(), error) {
@@ -48,7 +54,7 @@ func (p *executorGRPCPool) acquire(address string) (executorv1.ExecutorServiceCl
 		p.mu.Unlock()
 		return nil, nil, fmt.Errorf("executor gRPC connection pool is full")
 	}
-	connection, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithUnaryInterceptor(rpc.UnaryClientAuth(p.token)))
+	connection, err := grpc.NewClient(target, grpc.WithTransportCredentials(p.transport.Clone()), grpc.WithUnaryInterceptor(rpc.UnaryClientAuth(p.token)))
 	if err != nil {
 		p.mu.Unlock()
 		return nil, nil, fmt.Errorf("connect executor %q: %w", target, err)

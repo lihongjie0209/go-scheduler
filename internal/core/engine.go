@@ -20,6 +20,7 @@ import (
 	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
 	"github.com/lihongjie0209/go-scheduler/internal/observability"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
+	"google.golang.org/grpc/credentials"
 )
 
 type Engine struct {
@@ -45,6 +46,10 @@ func WithHTTPClient(client *http.Client) EngineOption {
 
 func WithExecutorGRPC(token string) EngineOption {
 	return func(engine *Engine) { engine.executorGRPC = newExecutorGRPCPool(token) }
+}
+
+func WithExecutorGRPCTransport(token string, transport credentials.TransportCredentials) EngineOption {
+	return func(engine *Engine) { engine.executorGRPC = newExecutorGRPCPoolWithTransport(token, transport) }
 }
 
 func NewEngine(s *store.Store, owner string, interval time.Duration, workers int, publicBaseURL string, historyRetention time.Duration, _ []string, options ...EngineOption) *Engine {

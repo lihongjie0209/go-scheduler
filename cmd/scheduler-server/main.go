@@ -89,13 +89,21 @@ func newCoreStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher) (
 
 func newCoreService(s *coreStore) *core.Service { return core.NewService(s.Store) }
 
-func newGRPCServer(c config.Config, service *core.Service) *grpc.Server {
-	server := grpc.NewServer(grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(c.ServiceToken, c.PreviousToken)))
+func newGRPCServer(c config.Config, service *core.Service) (*grpc.Server, error) {
+	options := []grpc.ServerOption{grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(c.ServiceToken, c.PreviousToken))}
+	transport, err := rpc.ServerTransportCredentials(c.GRPCTLSCert, c.GRPCTLSKey)
+	if err != nil {
+		return nil, err
+	}
+	if transport != nil {
+		options = append(options, grpc.Creds(transport))
+	}
+	server := grpc.NewServer(options...)
 	schedulerv1.RegisterSchedulerServiceServer(server, service)
 	healthServer := health.NewServer()
 	healthpb.RegisterHealthServer(server, healthServer)
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
-	return server
+	return server, nil
 }
 
 func registerDatabasePoolMetrics(api *apiStore, core *coreStore) error {
@@ -136,8 +144,12 @@ func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s
 	}
 }
 
-func newEngine(c config.Config, s *coreStore) *core.Engine {
-	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorGRPC(c.ServiceToken))
+func newEngine(c config.Config, s *coreStore) (*core.Engine, error) {
+	transport, err := rpc.ClientTransportCredentials(c.ExecutorGRPCTLSCA, c.ExecutorGRPCTLSServerName)
+	if err != nil {
+		return nil, err
+	}
+	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorGRPCTransport(c.ServiceToken, transport)), nil
 }
 
 func newNotifier(c config.Config, s *coreStore) *notifier.Worker {

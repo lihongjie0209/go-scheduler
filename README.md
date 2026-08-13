@@ -52,6 +52,9 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `JWT_SECRET` | 必填 | 至少 32 字节的本地账号 JWT 签名密钥 |
 | `COOKIE_SECURE` | `true` | Refresh Cookie 是否仅通过 HTTPS 发送；仅本地 HTTP 开发设置为 `false` |
 | `PREVIOUS_SERVICE_TOKEN` | 空 | 轮换期间兼容旧令牌 |
+| `GRPC_TLS_CERT` / `GRPC_TLS_KEY` | 空 | Core/standalone gRPC 服务端证书和私钥；必须同时配置 |
+| `GRPC_TLS_CA` / `GRPC_TLS_SERVER_NAME` | 空 | API Server 连接 Core 时使用的 CA 和证书名称 |
+| `EXECUTOR_GRPC_TLS_CA` / `EXECUTOR_GRPC_TLS_SERVER_NAME` | 空 | Core 连接 Executor 时使用的 CA 和证书名称 |
 | `HTTP_ADDRESS` | `:8080` | API 监听地址 |
 | `API_CONTEXT_PATH` | 空 | API URL 前缀，例如 `/scheduler`；健康检查、指标、REST、回调和执行器注册均使用此前缀 |
 | `PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | HTTP 任务异步回调使用的公开 API 地址 |
@@ -65,6 +68,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 生产环境应为 PostgreSQL、公开 HTTP API 和跨主机内部 gRPC 配置 TLS。HTTP、脚本和容器任务的网络访问不做目标地址限制。
 
 配置 `API_CONTEXT_PATH=/scheduler` 后，API readiness 地址变为 `/scheduler/health/ready`，REST 地址变为 `/scheduler/api/v1`。`PUBLIC_BASE_URL` 和 `ADVERTISE_HTTP_ADDRESS` 可以继续填写不带前缀的服务地址，服务会自动附加 context path。`schedulerctl --server` 应填写完整 HTTP 地址。Executor 使用独立的 `SCHEDULER_GRPC_ADDRESS`，不受 HTTP context path 影响。
+
+Executor 连接 Core/standalone 时可设置 `SCHEDULER_GRPC_TLS_CA` 和 `SCHEDULER_GRPC_TLS_SERVER_NAME`；Executor 自身的 gRPC 服务端可设置 `EXECUTOR_GRPC_TLS_CERT` 和 `EXECUTOR_GRPC_TLS_KEY`。生产跨主机部署应同时启用两个方向的 TLS。
 
 单进程模式的 API/Core 调用使用 `bufconn` 内存传输，同时监听内部 gRPC 端口供 Executor 注册、回报和接收调度。需要 API/Core 独立扩缩容时可继续使用分布式入口；它们通过 etcd 动态发现并依靠 PostgreSQL 行锁避免重复执行。
 
