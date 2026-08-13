@@ -70,7 +70,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	schedulerClient := schedulerv1.NewSchedulerServiceClient(connection)
 	reporter, err := executor.NewGRPCReporter(schedulerClient)
 	if err != nil {
@@ -86,7 +86,7 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	listener, err := net.Listen("tcp", listen)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", listen)
 	if err != nil {
 		return err
 	}

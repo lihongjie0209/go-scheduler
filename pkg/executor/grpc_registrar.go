@@ -39,7 +39,8 @@ func (r *GRPCRegistrar) Run(ctx context.Context) error {
 	}()
 	for {
 		heartbeatCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_, _ = r.client.RegisterExecutorNode(heartbeatCtx, &schedulerv1.RegisterExecutorNodeRequest{TenantId: r.options.TenantID, GroupId: r.options.GroupID, NodeId: r.options.NodeID, Address: r.options.Address, TtlSeconds: int32(r.options.TTL / time.Second), Labels: r.options.Labels})
+		ttlSeconds := int32(r.options.TTL / time.Second) // #nosec G115 -- constructor bounds TTL to 5..300 seconds.
+		_, _ = r.client.RegisterExecutorNode(heartbeatCtx, &schedulerv1.RegisterExecutorNodeRequest{TenantId: r.options.TenantID, GroupId: r.options.GroupID, NodeId: r.options.NodeID, Address: r.options.Address, TtlSeconds: ttlSeconds, Labels: r.options.Labels})
 		cancel()
 		select {
 		case <-ctx.Done():

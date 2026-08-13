@@ -28,6 +28,7 @@ import (
 	"github.com/lihongjie0209/go-scheduler/internal/cryptox"
 	"github.com/lihongjie0209/go-scheduler/internal/discovery"
 	"github.com/lihongjie0209/go-scheduler/internal/notifier"
+	"github.com/lihongjie0209/go-scheduler/internal/rpc"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 	"github.com/lihongjie0209/go-scheduler/migrations"
 	executorsdk "github.com/lihongjie0209/go-scheduler/pkg/executor"
@@ -1532,6 +1533,15 @@ func TestPowerShellScriptExecutorImageUseCaseThroughCLI(t *testing.T) {
 	apiPort := listener.Addr().(*net.TCPAddr).Port
 	hostAPIURL := fmt.Sprintf("http://127.0.0.1:%d", apiPort)
 	containerAPIURL := fmt.Sprintf("http://%s:%d", testcontainers.HostInternal, apiPort)
+	grpcListener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(rpc.UnaryServerAuth(token, "")))
+	schedulerv1.RegisterSchedulerServiceServer(grpcServer, core.NewService(fixture.store))
+	go func() { _ = grpcServer.Serve(grpcListener) }()
+	t.Cleanup(func() { grpcServer.Stop() })
+	containerGRPCAddress := net.JoinHostPort(testcontainers.HostInternal, fmt.Sprint(grpcListener.Addr().(*net.TCPAddr).Port))
 
 	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{TenantID: fixture.tenantID, Name: "powershell-image-e2e", RouteStrategy: "round"})
 	if err != nil {
@@ -1543,7 +1553,7 @@ func TestPowerShellScriptExecutorImageUseCaseThroughCLI(t *testing.T) {
 	}
 	executorContainer, err := testcontainers.GenericContainer(t.Context(), testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{
 		FromDockerfile: testcontainers.FromDockerfile{Context: root, Dockerfile: "deploy/script-executor/Dockerfile", Repo: "go-scheduler-script-executor-test", Tag: "powershell-usecase", KeepImage: true},
-		Env:            map[string]string{"SCHEDULER_URL": containerAPIURL, "SCHEDULER_TOKEN": token, "EXECUTOR_GROUP_ID": group.ID, "EXECUTOR_NODE_ID": "powershell-image", "EXECUTOR_ADVERTISE_URL": "http://127.0.0.1:9999", "EXECUTOR_LISTEN": ":9999", "EXECUTOR_TTL": "6s", "SCRIPT_LANGUAGES": "powershell"},
+		Env:            map[string]string{"SCHEDULER_GRPC_ADDRESS": containerGRPCAddress, "SCHEDULER_TOKEN": token, "EXECUTOR_TENANT_ID": fixture.tenantID, "EXECUTOR_GROUP_ID": group.ID, "EXECUTOR_NODE_ID": "powershell-image", "EXECUTOR_ADVERTISE_ADDRESS": "grpc://executor:9999", "EXECUTOR_LISTEN": ":9999", "EXECUTOR_TTL": "6s", "SCRIPT_LANGUAGES": "powershell"},
 		ExposedPorts:   []string{"9999/tcp"},
 		ExtraHosts:     []string{testcontainers.HostInternal + ":host-gateway"},
 		WaitingFor:     waitpkg.ForListeningPort("9999/tcp"),
@@ -1560,7 +1570,7 @@ func TestPowerShellScriptExecutorImageUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executorURL := "http://" + net.JoinHostPort(host, mappedPort.Port())
+	executorURL := "grpc://" + net.JoinHostPort(host, mappedPort.Port())
 	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "powershell-image", executorURL, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
@@ -1597,7 +1607,7 @@ func TestPowerShellScriptExecutorImageUseCaseThroughCLI(t *testing.T) {
 		t.Fatalf("run=%s %v", runOutput, err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "powershell-image-core", 20*time.Millisecond, 1, containerAPIURL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{Timeout: 10 * time.Second}))
+	engine := core.NewEngine(fixture.store, "powershell-image-core", 20*time.Millisecond, 1, containerAPIURL, 90*24*time.Hour, nil, core.WithExecutorGRPC(token))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(15 * time.Second)
