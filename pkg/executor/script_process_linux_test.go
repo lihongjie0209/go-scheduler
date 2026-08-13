@@ -10,7 +10,7 @@ import (
 
 func TestConfigureScriptProcessKillsProcessGroupWithParent(t *testing.T) {
 	t.Parallel()
-	command := exec.Command("true")
+	command := exec.CommandContext(t.Context(), "true")
 	configureScriptProcess(command)
 	if command.SysProcAttr == nil || !command.SysProcAttr.Setpgid || command.SysProcAttr.Pdeathsig != syscall.SIGKILL {
 		t.Fatalf("script process attributes = %+v", command.SysProcAttr)
