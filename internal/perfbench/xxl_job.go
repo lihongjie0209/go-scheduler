@@ -31,7 +31,7 @@ type xxlResponse struct {
 
 func (l *XXLJobLoader) Login(ctx context.Context) error {
 	if l.Username == "" || l.Password == "" {
-		return fmt.Errorf("XXL-JOB username and password are required")
+		return fmt.Errorf("xxl-job username and password are required")
 	}
 	client, err := l.sessionClient()
 	if err != nil {
@@ -42,7 +42,7 @@ func (l *XXLJobLoader) Login(ctx context.Context) error {
 		return err
 	}
 	if response.Code != http.StatusOK {
-		return fmt.Errorf("XXL-JOB login failed: code=%d message=%s", response.Code, response.Msg)
+		return fmt.Errorf("xxl-job login failed: code=%d message=%s", response.Code, response.Msg)
 	}
 	return nil
 }
@@ -52,7 +52,7 @@ func (l *XXLJobLoader) CreateScheduledJob(ctx context.Context, job ScheduledJob)
 		return "", err
 	}
 	if l.ExecutorGroupID < 1 || l.ExecutorHandler == "" {
-		return "", fmt.Errorf("XXL-JOB executor group and handler are required")
+		return "", fmt.Errorf("xxl-job executor group and handler are required")
 	}
 	client, err := l.sessionClient()
 	if err != nil {
@@ -78,21 +78,21 @@ func (l *XXLJobLoader) CreateScheduledJob(ctx context.Context, job ScheduledJob)
 		return "", err
 	}
 	if created.Code != http.StatusOK {
-		return "", fmt.Errorf("XXL-JOB create job failed: code=%d message=%s", created.Code, created.Msg)
+		return "", fmt.Errorf("xxl-job create job failed: code=%d message=%s", created.Code, created.Msg)
 	}
 	var jobID string
 	if err = json.Unmarshal(created.Data, &jobID); err != nil {
 		return "", fmt.Errorf("decode XXL-JOB job ID: %w", err)
 	}
 	if jobID == "" {
-		return "", fmt.Errorf("XXL-JOB create response has no job ID")
+		return "", fmt.Errorf("xxl-job create response has no job ID")
 	}
 	started, err := l.postForm(ctx, client, "/jobinfo/start", url.Values{"ids[]": {jobID}})
 	if err != nil {
 		return "", err
 	}
 	if started.Code != http.StatusOK {
-		return "", fmt.Errorf("XXL-JOB start job %s failed: code=%d message=%s", jobID, started.Code, started.Msg)
+		return "", fmt.Errorf("xxl-job start job %s failed: code=%d message=%s", jobID, started.Code, started.Msg)
 	}
 	return jobID, nil
 }
@@ -127,7 +127,7 @@ func (l *XXLJobLoader) postForm(ctx context.Context, client *http.Client, path s
 		return xxlResponse{}, err
 	}
 	if response.StatusCode != http.StatusOK {
-		return xxlResponse{}, fmt.Errorf("XXL-JOB %s returned HTTP %d: %s", path, response.StatusCode, strings.TrimSpace(string(body)))
+		return xxlResponse{}, fmt.Errorf("xxl-job %s returned HTTP %d: %s", path, response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var result xxlResponse
 	if err = json.Unmarshal(body, &result); err != nil {

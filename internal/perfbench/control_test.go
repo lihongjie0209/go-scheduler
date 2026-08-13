@@ -12,7 +12,7 @@ import (
 func TestRegisterExpectationsUsesBatchesAndControlPath(t *testing.T) {
 	t.Parallel()
 	var requests atomic.Int32
-	var received atomic.Int32
+	var received atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/expect" || r.URL.RawQuery != "" {
 			t.Errorf("control target = %s", r.URL.String())
@@ -24,7 +24,7 @@ func TestRegisterExpectationsUsesBatchesAndControlPath(t *testing.T) {
 			t.Error(err)
 		}
 		requests.Add(1)
-		received.Add(int32(len(payload.Events)))
+		received.Add(int64(len(payload.Events)))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"expected":1}`))
 	}))

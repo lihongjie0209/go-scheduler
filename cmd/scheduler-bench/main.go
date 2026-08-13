@@ -108,7 +108,7 @@ func load(args []string) error {
 	case "go":
 		token := os.Getenv("BENCH_TOKEN")
 		if token == "" {
-			return fmt.Errorf("BENCH_TOKEN is required for Go Scheduler")
+			return fmt.Errorf("benchmark token environment variable BENCH_TOKEN is required for Go Scheduler")
 		}
 		loader = &perfbench.GoSchedulerLoader{BaseURL: *serverURL, Token: token, TenantID: *tenantID}
 	case "xxl":

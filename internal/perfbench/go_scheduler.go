@@ -64,7 +64,7 @@ func (l *GoSchedulerLoader) CreateScheduledJob(ctx context.Context, job Schedule
 		return "", err
 	}
 	if response.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("Go Scheduler create job returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("go scheduler create job returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var created struct {
 		ID string `json:"id"`
@@ -73,7 +73,7 @@ func (l *GoSchedulerLoader) CreateScheduledJob(ctx context.Context, job Schedule
 		return "", fmt.Errorf("decode Go Scheduler create response: %w", err)
 	}
 	if created.ID == "" {
-		return "", fmt.Errorf("Go Scheduler create response has no job ID")
+		return "", fmt.Errorf("go scheduler create response has no job ID")
 	}
 	return created.ID, nil
 }
