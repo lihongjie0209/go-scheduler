@@ -11,6 +11,7 @@
 - 配置类型错误不再静默回退，进程会 fail-fast；
 - HTTP/gRPC 监听端口在启动 hook 中同步绑定，端口冲突会直接使启动失败并回滚已打开的 listener；
 - Core 的 Executor gRPC 连接池增加 256 个连接上限、引用计数和空闲 LRU 淘汰；
+- Notifier 将 30 秒租约内的 claim 批次收窄为 20 条并以 10 路有界并发投递，Webhook/SMTP 单次 deadline 为 10 秒；
 - 并发删除 tenant owner 通过事务和租户行锁串行化，保持至少一个 owner；
 - 服务令牌改为恒定时间比较；
 - Argon2 哈希参数在内存分配前验证上下限，阻止异常哈希触发资源耗尽；
@@ -51,7 +52,7 @@ api-server ── gRPC + etcd discovery ── scheduler core ── gRPC ──
 
 ### 剩余架构风险
 
-- SMTP 发送是同步的，Notifier 单 worker 遇到慢 SMTP 时会降低通知吞吐；不影响调度主路径，但需要独立并发上限和发送超时。
+- 通知投递是 at-least-once：进程在外部服务接受请求后、数据库确认前崩溃时仍可能重复发送。Webhook 消费方应按事件 ID 幂等，后续可在协议中增加明确的幂等 Header。
 - Executor 连接池上限当前为编译期常量 256。超过该规模的集群应先通过容量测试，再决定是否开放配置。
 
 ## 性能审计
