@@ -22,6 +22,7 @@
 - 不存在或禁用账号同样执行生产参数的 dummy Argon2 校验，降低邮箱时序枚举风险；
 - API→Core、Executor→Core/standalone 和 Core→Executor 均支持可选 TLS，并有真实 TLS gRPC 握手测试；
 - Docker 执行器按产品约束默认继承 Docker 原生网络和权限策略，网络、只读根文件系统、CPU 和内存限制均改为显式可选；
+- API、兼容 HTTP Executor 和 Docker 任务定义拒绝首个对象后的第二个 JSON 值，避免校验层与执行层对请求内容产生歧义；
 - migration 23 为 Claim 活跃集合、过期租约、幂等记录、Outbox 和依赖派发清理增加针对性索引。
 
 ## 架构审计
@@ -109,6 +110,7 @@ Migration 23 增加：
 | 中 | 通知租约过期后旧 Worker 可覆盖新 Worker 状态 | 所有完成、重试和死信回写增加 owner + lease fencing |
 | 中 | Webhook/DingTalk 网络错误可能把 URL Token 持久化到通知历史 | 网络错误脱敏，持久化错误限制为合法 UTF-8 的 4 KiB |
 | 中 | 通知渠道无法更新、停用或删除，只能直接修改数据库 | migration 26 增加版本和软删除，提供 gRPC/REST/CLI 完整生命周期管理 |
+| 中 | 普通 JSON 请求和 Docker 定义会忽略首个值后的尾随文档 | 所有流式解码入口在首个值后强制要求 EOF，并增加 unit 与 PostgreSQL API 集成断言 |
 
 `govulncheck v1.6.0 ./...` 未发现可达漏洞。依赖图中存在 19 个模块级公告，但当前代码没有调用受影响符号；仍应由 CI 在每次依赖更新后复查。
 
