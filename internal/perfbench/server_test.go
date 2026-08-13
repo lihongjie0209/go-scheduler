@@ -28,19 +28,19 @@ func TestServerLifecycle(t *testing.T) {
 		t.Fatalf("expect status = %d", status)
 	}
 
-	response = request(t, http.MethodPost, server.URL+"/execute?id=event-1", nil)
-	status = response.StatusCode
-	closeResponse(t, response)
+	executeResponse := request(t, http.MethodPost, server.URL+"/execute?id=event-1", nil)
+	status = executeResponse.StatusCode
+	closeResponse(t, executeResponse)
 	if status != http.StatusOK {
 		t.Fatalf("execute status = %d", status)
 	}
-	response = request(t, http.MethodPost, server.URL+"/execute?id=event-1", nil)
-	closeResponse(t, response)
+	duplicateResponse := request(t, http.MethodPost, server.URL+"/execute?id=event-1", nil)
+	closeResponse(t, duplicateResponse)
 
-	response = request(t, http.MethodGet, server.URL+"/api/v1/report", nil)
+	reportResponse := request(t, http.MethodGet, server.URL+"/api/v1/report", nil)
 	var report Report
-	err = json.NewDecoder(response.Body).Decode(&report)
-	closeResponse(t, response)
+	err = json.NewDecoder(reportResponse.Body).Decode(&report)
+	closeResponse(t, reportResponse)
 	if err != nil {
 		t.Fatal(err)
 	}
