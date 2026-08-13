@@ -1,7 +1,7 @@
 services:
   scheduler-server:
     environment:
-      WORKERS: "${BENCH_WORKERS:-16}"
+      WORKERS: "${BENCH_WORKERS:-64}"
       SCHEDULER_INTERVAL: "${BENCH_SCHEDULER_INTERVAL:-1s}"
     depends_on:
       benchmark-sink:
@@ -14,3 +14,14 @@ services:
         TARGET: scheduler-bench
     command: ["serve", "--listen", ":19090"]
     ports: ["19090:19090"]
+
+  executor:
+    build:
+      context: ..
+      dockerfile: deploy/benchmark-executor.Dockerfile
+    environment:
+      SCHEDULER_TOKEN: "compose-internal-service-token-change-in-production"
+      EXECUTOR_TENANT_ID: "${BENCH_EXECUTOR_TENANT_ID:-}"
+      EXECUTOR_GROUP_ID: "${BENCH_EXECUTOR_GROUP_ID:-}"
+      DOCKER_ENABLED: "false"
+      KUBERNETES_ENABLED: "false"

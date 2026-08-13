@@ -88,7 +88,7 @@ func Load(serviceName string) (Config, error) {
 		GRPCTLSCA:            os.Getenv("GRPC_TLS_CA"),
 		GRPCTLSServerName:    os.Getenv("GRPC_TLS_SERVER_NAME"),
 		SchedulerInterval:    duration("SCHEDULER_INTERVAL", time.Second),
-		Workers:              integer("WORKERS", 16),
+		Workers:              integer("WORKERS", 64),
 		APIDatabaseMaxConns:  integer32("API_DATABASE_MAX_CONNS", 8),
 		APIDatabaseMinConns:  integer32("API_DATABASE_MIN_CONNS", 1),
 		CoreDatabaseMaxConns: integer32("CORE_DATABASE_MAX_CONNS", 24),

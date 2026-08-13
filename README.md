@@ -53,7 +53,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `HTTP_ADDRESS` | `:8080` | API 监听地址 |
 | `API_CONTEXT_PATH` | 空 | API URL 前缀，例如 `/scheduler`；健康检查、指标、REST、回调和执行器注册均使用此前缀 |
 | `PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | HTTP 任务异步回调使用的公开 API 地址 |
-| `WORKERS` | `16` | 单 Core 最大并发执行数 |
+| `WORKERS` | `64` | 单 Core 最大并发下发数；执行任务本身在 Executor 运行，不长期占用该槽位 |
 | `API_DATABASE_MAX_CONNS` / `API_DATABASE_MIN_CONNS` | `8` / `1` | API PostgreSQL 连接池上限与保底连接数 |
 | `CORE_DATABASE_MAX_CONNS` / `CORE_DATABASE_MIN_CONNS` | `24` / `2` | 调度、执行状态和通知 PostgreSQL 连接池上限与保底连接数 |
 | `HISTORY_RETENTION` | `2160h` | 历史记录和运行分区保留期，必须不超过 90 天 |

@@ -21,14 +21,14 @@ func TestGoSchedulerLoaderCreatesEnabledCronJob(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["schedule_expression"] != "5 4 3 2 1 ?" || body["timezone"] != "UTC" || body["enabled"] != true || body["target_url"] != "https://sink.example/execute?id=event-1" || body["misfire_policy"] != "fire_once" {
+		if body["schedule_expression"] != "5 4 3 2 1 ?" || body["timezone"] != "UTC" || body["enabled"] != true || body["target_url"] != "https://sink.example/execute?id=event-1" || body["misfire_policy"] != "fire_once" || body["executor_group_id"] != "group-1" || body["executor_handler"] != "__http__" {
 			t.Errorf("body = %#v", body)
 		}
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"job-1"}`))
 	}))
 	t.Cleanup(server.Close)
-	loader := &GoSchedulerLoader{BaseURL: server.URL + "/platform", Token: "benchmark-token", TenantID: "tenant-1", Client: server.Client()}
+	loader := &GoSchedulerLoader{BaseURL: server.URL + "/platform", Token: "benchmark-token", TenantID: "tenant-1", ExecutorGroupID: "group-1", ExecutorHandler: "__http__", Client: server.Client()}
 	jobID, err := loader.CreateScheduledJob(t.Context(), ScheduledJob{Name: "benchmark", EventID: "event-1", ScheduledAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), SinkURL: "https://sink.example/execute"})
 	if err != nil {
 		t.Fatal(err)

@@ -5,7 +5,7 @@ BENCH_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BENCH_REPO_ROOT"
 
 BENCH_COUNT="${BENCH_COUNT:-1000}"
-BENCH_WORKERS="${BENCH_WORKERS:-16}"
+BENCH_WORKERS="${BENCH_WORKERS:-64}"
 BENCH_SCHEDULER_INTERVAL="${BENCH_SCHEDULER_INTERVAL:-1s}"
 BENCH_LOAD_CONCURRENCY="${BENCH_LOAD_CONCURRENCY:-32}"
 BENCH_LEAD_SECONDS="${BENCH_LEAD_SECONDS:-45}"
@@ -43,6 +43,9 @@ BENCH_COMPOSE=(docker compose --project-name "$BENCH_COMPOSE_PROJECT" --file dep
 BENCH_CAPTURED=false
 BENCH_TEMP_DIR="$(mktemp -d)"
 BENCH_TOOL="$BENCH_TEMP_DIR/scheduler-bench"
+BENCH_EXECUTOR_GROUP_ID=""
+BENCH_EXECUTOR_TENANT_ID=""
+export BENCH_EXECUTOR_GROUP_ID BENCH_EXECUTOR_TENANT_ID
 
 benchmark_capture() {
   if [[ "$BENCH_CAPTURED" == true ]]; then
@@ -83,7 +86,7 @@ trap benchmark_cleanup EXIT
 
 echo "starting isolated single-node benchmark stack" >&2
 BENCH_WORKERS="$BENCH_WORKERS" BENCH_SCHEDULER_INTERVAL="$BENCH_SCHEDULER_INTERVAL" \
-  "${BENCH_COMPOSE[@]}" build --quiet benchmark-sink scheduler-server migrate bootstrap postgres
+  "${BENCH_COMPOSE[@]}" build --quiet benchmark-sink scheduler-server executor migrate bootstrap postgres
 BENCH_WORKERS="$BENCH_WORKERS" BENCH_SCHEDULER_INTERVAL="$BENCH_SCHEDULER_INTERVAL" \
   "${BENCH_COMPOSE[@]}" up --no-build --detach benchmark-sink scheduler-server
 
@@ -108,6 +111,34 @@ if [[ -z "$BENCH_TOKEN" || -z "$BENCH_TENANT_ID" ]]; then
 fi
 export BENCH_TOKEN BENCH_TENANT_ID
 
+BENCH_GROUP_RESPONSE="$(curl --fail --silent --show-error \
+  --request POST http://127.0.0.1:18080/api/v1/executor-groups \
+  --header "Authorization: Bearer $BENCH_TOKEN" \
+  --header "X-Tenant-ID: $BENCH_TENANT_ID" \
+  --header 'Content-Type: application/json' \
+  --data '{"name":"standalone-benchmark","route_strategy":"round","registration_mode":"automatic"}')"
+BENCH_EXECUTOR_GROUP_ID="$(jq -r '.id // empty' <<<"$BENCH_GROUP_RESPONSE")"
+BENCH_EXECUTOR_TENANT_ID="$BENCH_TENANT_ID"
+export BENCH_EXECUTOR_GROUP_ID BENCH_EXECUTOR_TENANT_ID
+if [[ -z "$BENCH_EXECUTOR_GROUP_ID" ]]; then
+  echo "benchmark executor group was not created" >&2
+  exit 1
+fi
+
+"${BENCH_COMPOSE[@]}" up --no-build --no-deps --detach executor
+for BENCH_ATTEMPT in $(seq 1 60); do
+  BENCH_REGISTERED="$("${BENCH_COMPOSE[@]}" exec -T postgres psql -U scheduler -d scheduler -X --tuples-only --no-align -c \
+    "SELECT count(*) FROM executor_nodes WHERE group_id='$BENCH_EXECUTOR_GROUP_ID'::uuid AND expires_at>now()" 2>/dev/null || true)"
+  if [[ "$BENCH_REGISTERED" == 1 ]]; then
+    break
+  fi
+  if [[ "$BENCH_ATTEMPT" == 60 ]]; then
+    echo "benchmark executor did not register" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
 go build -trimpath -o "$BENCH_TOOL" ./cmd/scheduler-bench
 BENCH_SCHEDULED_AT="$(date --utc --date="+$BENCH_LEAD_SECONDS seconds" '+%Y-%m-%dT%H:%M:%SZ')"
 echo "loading $BENCH_COUNT jobs scheduled at $BENCH_SCHEDULED_AT" >&2
@@ -120,6 +151,7 @@ echo "loading $BENCH_COUNT jobs scheduled at $BENCH_SCHEDULED_AT" >&2
   --count "$BENCH_COUNT" \
   --concurrency "$BENCH_LOAD_CONCURRENCY" \
   --scheduled-at "$BENCH_SCHEDULED_AT" \
+  --go-executor-group "$BENCH_EXECUTOR_GROUP_ID" \
   > "$BENCH_ARTIFACT_DIR/manifest.json"
 
 while [[ "$(date +%s)" -lt "$(date --date="$BENCH_SCHEDULED_AT" +%s)" ]]; do

@@ -531,8 +531,8 @@ func (s *Service) RegisterExecutorNode(ctx context.Context, req *schedulerv1.Reg
 		return nil, status.Error(codes.InvalidArgument, "tenant_id, group_id and node_id are required")
 	}
 	parsed, err := url.ParseRequestURI(req.GetAddress())
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-		return nil, status.Error(codes.InvalidArgument, "address must be an absolute HTTP or HTTPS URL without userinfo")
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "grpc") || parsed.User != nil {
+		return nil, status.Error(codes.InvalidArgument, "address must be an absolute HTTP(S) or gRPC URL without userinfo")
 	}
 	if req.GetTtlSeconds() < 5 || req.GetTtlSeconds() > 300 {
 		return nil, status.Error(codes.InvalidArgument, "ttl_seconds must be between 5 and 300")

@@ -11,10 +11,9 @@ import (
 )
 
 type GoSchedulerLoader struct {
-	BaseURL  string
-	Token    string
-	TenantID string
-	Client   *http.Client
+	BaseURL, Token, TenantID         string
+	ExecutorGroupID, ExecutorHandler string
+	Client                           *http.Client
 }
 
 func (l *GoSchedulerLoader) CreateScheduledJob(ctx context.Context, job ScheduledJob) (string, error) {
@@ -41,6 +40,8 @@ func (l *GoSchedulerLoader) CreateScheduledJob(ctx context.Context, job Schedule
 		"callback_timeout_seconds": 30,
 		"max_queue_size":           1,
 		"enabled":                  true,
+		"executor_group_id":        l.ExecutorGroupID,
+		"executor_handler":         l.ExecutorHandler,
 	})
 	if err != nil {
 		return "", err

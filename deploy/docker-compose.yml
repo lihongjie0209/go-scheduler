@@ -6,7 +6,7 @@ services:
       args: {POSTGRES_MAJOR: "16", PG_PARTMAN_VERSION: "5.5.0"}
     image: go-scheduler-postgres:16-partman-5.5.0
     environment: {POSTGRES_DB: scheduler, POSTGRES_USER: scheduler, POSTGRES_PASSWORD: scheduler}
-    healthcheck: {test: [CMD-SHELL, "pg_isready -U scheduler"], interval: 2s, timeout: 2s, retries: 20}
+    healthcheck: {test: [CMD-SHELL, "pg_isready -U scheduler -d scheduler"], interval: 2s, timeout: 2s, retries: 20, start_period: 10s}
     command: [postgres, -c, shared_preload_libraries=pg_partman_bgw, -c, pg_partman_bgw.dbname=scheduler, -c, pg_partman_bgw.role=scheduler, -c, pg_partman_bgw.interval=3600]
   migrate:
     build: {context: .., args: {TARGET: migrate}}
@@ -47,7 +47,7 @@ services:
       SCHEDULER_TOKEN: "${SCHEDULER_EXECUTOR_TOKEN:-}"
       EXECUTOR_GROUP_ID: "${SCHEDULER_EXECUTOR_GROUP_ID:-}"
       EXECUTOR_NODE_ID: "compose-executor-1"
-      EXECUTOR_ADVERTISE_ADDRESS: "executor:9999"
+      EXECUTOR_ADVERTISE_ADDRESS: "grpc://executor:9999"
       EXECUTOR_LABELS: "${SCHEDULER_EXECUTOR_LABELS:-linux,docker,kubernetes}"
       DOCKER_ENABLED: "true"
       KUBERNETES_ENABLED: "true"

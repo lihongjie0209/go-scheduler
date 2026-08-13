@@ -150,6 +150,8 @@ func load(args []string) error {
 	scheduledAtText := flags.String("scheduled-at", "", "shared future schedule time in RFC3339")
 	timeout := flags.Duration("timeout", 30*time.Minute, "maximum setup duration")
 	tenantID := flags.String("tenant", os.Getenv("BENCH_TENANT_ID"), "Go Scheduler tenant ID")
+	goExecutorGroup := flags.String("go-executor-group", os.Getenv("BENCH_GO_EXECUTOR_GROUP"), "Go Scheduler executor group ID")
+	goExecutorHandler := flags.String("go-executor-handler", "__http__", "Go Scheduler executor handler")
 	xxlGroup := flags.Int("xxl-executor-group", envInt("BENCH_XXL_EXECUTOR_GROUP", 0), "XXL-JOB executor group ID")
 	xxlHandler := flags.String("xxl-handler", "schedulerBenchmarkHandler", "XXL-JOB benchmark executor handler")
 	if err := flags.Parse(args); err != nil {
@@ -176,7 +178,10 @@ func load(args []string) error {
 		if token == "" {
 			return fmt.Errorf("benchmark token environment variable BENCH_TOKEN is required for Go Scheduler")
 		}
-		loader = &perfbench.GoSchedulerLoader{BaseURL: *serverURL, Token: token, TenantID: *tenantID}
+		if *goExecutorGroup == "" || *goExecutorHandler == "" {
+			return fmt.Errorf("go-executor-group and go-executor-handler are required for Go Scheduler")
+		}
+		loader = &perfbench.GoSchedulerLoader{BaseURL: *serverURL, Token: token, TenantID: *tenantID, ExecutorGroupID: *goExecutorGroup, ExecutorHandler: *goExecutorHandler}
 	case "xxl":
 		xxl := &perfbench.XXLJobLoader{BaseURL: *serverURL, Username: os.Getenv("BENCH_XXL_USERNAME"), Password: os.Getenv("BENCH_XXL_PASSWORD"), ExecutorGroupID: *xxlGroup, ExecutorHandler: *xxlHandler}
 		loginCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

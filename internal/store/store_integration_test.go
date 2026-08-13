@@ -628,6 +628,43 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if _, err = one.RegisterExecutorNode(ctx, tenantID, routeGroup.ID, "node-b", "http://worker-b:9999", 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
+	parallelJob, err := one.CreateJob(ctx, Job{TenantID: tenantID, Name: "parallel-routed-job", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "demoHandler", Enabled: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEntered, releaseFirst := make(chan struct{}), make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, routeErr := one.ReserveExecutorRoute(ctx, tenantID, routeGroup.ID, routedJob.ID, func(snapshot ExecutorRoutingSnapshot) (ExecutorNode, error) {
+			close(firstEntered)
+			<-releaseFirst
+			return snapshot.Nodes[0], nil
+		})
+		firstDone <- routeErr
+	}()
+	<-firstEntered
+	secondEntered := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		_, routeErr := two.ReserveExecutorRoute(ctx, tenantID, routeGroup.ID, parallelJob.ID, func(snapshot ExecutorRoutingSnapshot) (ExecutorNode, error) {
+			close(secondEntered)
+			return snapshot.Nodes[0], nil
+		})
+		secondDone <- routeErr
+	}()
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		close(releaseFirst)
+		t.Fatal("different jobs were serialized by the shared executor group row")
+	}
+	close(releaseFirst)
+	if err = <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err = <-secondDone; err != nil {
+		t.Fatal(err)
+	}
 	if _, err = one.pool.Exec(ctx, `UPDATE executor_groups SET route_strategy='lfu' WHERE id=$1`, routeGroup.ID); err != nil {
 		t.Fatal(err)
 	}

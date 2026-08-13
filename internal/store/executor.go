@@ -36,7 +36,7 @@ func (s *Store) ReserveExecutorRoute(ctx context.Context, tenantID, groupID, job
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var snapshot ExecutorRoutingSnapshot
-	err = tx.QueryRow(ctx, `SELECT g.route_strategy FROM executor_groups g JOIN jobs j ON j.executor_group_id=g.id WHERE g.tenant_id=$1 AND g.id=$2 AND j.id=$3 FOR UPDATE OF g`, tenantID, groupID, jobID).Scan(&snapshot.Strategy)
+	err = tx.QueryRow(ctx, `SELECT g.route_strategy FROM executor_groups g JOIN jobs j ON j.executor_group_id=g.id WHERE g.tenant_id=$1 AND g.id=$2 AND j.id=$3`, tenantID, groupID, jobID).Scan(&snapshot.Strategy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ExecutorNode{}, ErrNotFound
 	}
@@ -111,7 +111,7 @@ func (s *Store) ReserveExecutorOverrideRoute(ctx context.Context, tenantID, grou
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var snapshot ExecutorRoutingSnapshot
-	if err = tx.QueryRow(ctx, `SELECT g.route_strategy FROM executor_groups g JOIN jobs j ON j.executor_group_id=g.id WHERE g.tenant_id=$1 AND g.id=$2 AND j.id=$3 FOR UPDATE OF g`, tenantID, groupID, jobID).Scan(&snapshot.Strategy); errors.Is(err, pgx.ErrNoRows) {
+	if err = tx.QueryRow(ctx, `SELECT g.route_strategy FROM executor_groups g JOIN jobs j ON j.executor_group_id=g.id WHERE g.tenant_id=$1 AND g.id=$2 AND j.id=$3`, tenantID, groupID, jobID).Scan(&snapshot.Strategy); errors.Is(err, pgx.ErrNoRows) {
 		return ExecutorNode{}, ErrNotFound
 	} else if err != nil {
 		return ExecutorNode{}, err

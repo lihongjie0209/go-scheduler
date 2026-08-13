@@ -11,7 +11,7 @@ on:
       workers:
         description: Scheduler execution workers
         required: true
-        default: "16"
+        default: "64"
         type: string
       scheduler_interval:
         description: Due-job scan interval

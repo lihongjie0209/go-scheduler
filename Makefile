@@ -2,6 +2,7 @@
 
 generate:
 	protoc -I api/proto --go_out=. --go_opt=module=github.com/lihongjie0209/go-scheduler --go-grpc_out=. --go-grpc_opt=module=github.com/lihongjie0209/go-scheduler api/proto/scheduler/v1/scheduler.proto api/proto/executor/v1/executor.proto
+	sed -i -E 's#(//[[:space:]]*(- )?protoc[[:space:]]+)v[^[:space:]]+#\1v4.25.1#' gen/*/v1/*.pb.go
 
 test:
 	go test ./...

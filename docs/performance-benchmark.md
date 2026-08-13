@@ -90,7 +90,7 @@ sink 对每个 ID 只使用首次到达时间计算延迟，并单独统计重�
 - PostgreSQL 中的运行状态和派发延迟；
 - 完整容器日志、提交 SHA 和 runner 环境。
 
-工作流和本地入口执行同一个 `make integration-benchmark` 目标，要求 missing、duplicate、unexpected 和 invalid 全部为零，否则失败。默认参数为 1,000 个任务、16 个执行 worker 和 1 秒调度间隔，可从 Actions 页面调整。
+工作流和本地入口执行同一个 `make integration-benchmark` 目标，要求 missing、duplicate、unexpected 和 invalid 全部为零，否则失败。任务统一由 Core 通过 gRPC 下发到 Executor，再由 `__http__` handler 请求 sink。默认参数为 1,000 个任务、64 个下发 worker 和 1 秒调度间隔，可从 Actions 页面调整。
 
 ## 本地等价命令
 
@@ -122,7 +122,7 @@ BENCH_TOKEN=gsk_xxx BENCH_TENANT_ID=tenant-id \
   --scheduled-at 2026-08-14T02:00:00Z > burst-go-001.json
 ```
 
-`--executor` 仅在需要把目标请求经过共享执行器转发时使用；单节点调度器基准直接请求 sink，避免额外代理影响结果。服务进程必须使用 UTC 时区，装载结束时间晚于计划时刻时整轮实验作废。
+Go Scheduler 压测必须指定 `--go-executor-group`，确保覆盖生产使用的 Core gRPC → Executor → HTTP handler 链路。服务进程必须使用 UTC 时区，装载结束时间晚于计划时刻时整轮实验作废。
 
 ## 2026-08-13 单节点瓶颈记录
 
@@ -139,3 +139,18 @@ BENCH_TOKEN=gsk_xxx BENCH_TENANT_ID=tenant-id \
 同一优化下的 1,000 任务结果为 256.76/s、P99 3,864 ms、零丢失、零重复；数据库记录的派发 P99 为 3.849 秒。该轮 Core 连接池累计等待 403 次、等待 1.296 秒，说明解除 tick 限流后，下一个主要方向是批量化到期入队和降低运行状态 SQL 往返。
 
 这些数字用于记录当前机器上的优化前后证据，不是生产容量承诺。后续 Core/Executor gRPC 外置执行模型完成后必须重新建立基线。
+
+### gRPC Executor 基线与路由锁优化
+
+迁移到 Core → gRPC Executor → HTTP sink 后，发现 `ReserveExecutorRoute` 对共享的 `executor_groups` 行执行 `FOR UPDATE`。不同任务虽然拥有独立的路由计数器，仍会因为绑定同一执行器组而串行。移除该无关组锁后，按任务隔离的 counter/state upsert 继续保证轮询及 LFU/LRU 状态原子性。
+
+同一台本地机器、1,000 个同时到期任务、1 秒调度周期的单轮诊断结果：
+
+| 场景 | 吞吐 | P50 | P99 | 丢失 / 重复 |
+| --- | ---: | ---: | ---: | ---: |
+| 共享组行锁，16 workers | 123.07/s | 4,662 ms | 8,064 ms | 0 / 0 |
+| 共享组行锁，64 workers | 121.87/s | 5,068 ms | 8,146 ms | 0 / 0 |
+| 移除组行锁，16 workers | 199.01/s | 3,487 ms | 4,972 ms | 0 / 0 |
+| 移除组行锁，64 workers | 276.11/s | 2,667 ms | 3,617 ms | 0 / 0 |
+
+相对初始 gRPC 基线，64 workers 下吞吐提高 124.4%，P99 降低 55.1%。修复后 PostgreSQL 峰值约 278% CPU、Core 153%、Executor 56%，说明并发工作已经能分散到多个数据库后端；后续优化应聚焦减少每次运行的 SQL 往返和批量化状态转换。
