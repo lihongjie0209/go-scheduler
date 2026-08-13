@@ -110,7 +110,7 @@ docker run --rm -p 9999:9999 \
 
 ## Docker Image Executor
 
-Docker Image 任务与脚本任务使用同一个 `script-executor`。设置 `DOCKER_ENABLED=true` 后，执行器同时注册 `__script__` 和 `__docker__`；任务定义使用 `script_language: "docker"`、`executor_handler: "__docker__"`，`script_source` 保存版本化 JSON 定义：
+Docker Image 任务与脚本任务使用同一个 `script-executor`。设置 `DOCKER_ENABLED=true` 后，执行器同时注册 `__script__` 和 `__docker__`；任务定义使用 `script_language: "docker"`、`executor_handler: "__docker__"`，`script_source` 保存版本化 JSON 定义。容器使用 run ID 确定性命名并带受管标签；executor 异常重启后，同一运行重派会校验标签、等待并接管原容器，恢复日志和退出码后清理，不会启动第二个容器。名称被非本运行占用时会拒绝接管。
 
 ```json
 {

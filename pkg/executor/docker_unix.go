@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,23 @@ func DockerHandler(options DockerOptions) Handler {
 		if _, err = exec.LookPath(binary); err != nil {
 			return fmt.Errorf("find docker client: %w", err)
 		}
+		name := "go-scheduler-" + strings.Trim(safeContainerName.ReplaceAllString(task.RunID, "-"), "-.")
+		if name == "go-scheduler-" {
+			return errors.New("run ID cannot form a container name")
+		}
+		exists, err := inspectManagedDockerContainer(ctx, binary, name, task)
+		if err != nil {
+			return err
+		}
+		cleanup := func() {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			_ = exec.CommandContext(cleanupCtx, binary, "rm", "--force", name).Run() // #nosec G204 -- fixed Docker arguments.
+		}
+		if exists {
+			defer cleanup()
+			return resumeDockerContainer(ctx, binary, name, task.Logger)
+		}
 		switch definition.PullPolicy {
 		case "always":
 			if err = runDockerCommand(ctx, binary, task.Logger, "pull", definition.Image); err != nil {
@@ -60,15 +78,6 @@ func DockerHandler(options DockerOptions) Handler {
 				}
 			}
 		}
-		name := "go-scheduler-" + strings.Trim(safeContainerName.ReplaceAllString(task.RunID, "-"), "-.")
-		if name == "go-scheduler-" {
-			return errors.New("run ID cannot form a container name")
-		}
-		cleanup := func() {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-			defer cancel()
-			_ = exec.CommandContext(cleanupCtx, binary, "rm", "--force", name).Run() // #nosec G204 -- fixed Docker arguments.
-		}
 		defer cleanup()
 		arguments := dockerRunArguments(name, task, definition)
 		if err = runDockerCommand(ctx, binary, task.Logger, arguments...); err != nil {
@@ -76,6 +85,67 @@ func DockerHandler(options DockerOptions) Handler {
 		}
 		return nil
 	}
+}
+
+func inspectManagedDockerContainer(ctx context.Context, binary, name string, task Task) (bool, error) {
+	command := exec.CommandContext(ctx, binary, "container", "inspect", name) // #nosec G204 -- binary is trusted operator configuration and name is generated internally.
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	raw, err := command.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && (strings.Contains(stderr.String(), "No such object") || strings.Contains(stderr.String(), "No such container")) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect Docker container: %w", err)
+	}
+	if err = validateManagedDockerInspection(raw, task); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func validateManagedDockerInspection(raw []byte, task Task) error {
+	var inspected []struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if err := json.Unmarshal(raw, &inspected); err != nil || len(inspected) != 1 {
+		return errors.New("decode Docker container inspection")
+	}
+	labels := inspected[0].Config.Labels
+	if labels["go-scheduler.managed-by"] != "lihongjie0209" || labels["go-scheduler.run-id"] != task.RunID || labels["go-scheduler.job-id"] != task.JobID {
+		return errors.New("Docker container name is occupied by an unmanaged or different execution")
+	}
+	return nil
+}
+
+func resumeDockerContainer(ctx context.Context, binary, name string, logger TaskLogger) error {
+	wait := exec.CommandContext(ctx, binary, "container", "wait", name) // #nosec G204 -- binary is trusted operator configuration and name is generated internally.
+	raw, err := wait.Output()
+	if err != nil {
+		return fmt.Errorf("wait for existing Docker container: %w", err)
+	}
+	exitCode, err := dockerExitStatus(raw)
+	if err != nil {
+		return err
+	}
+	if err = runDockerCommand(ctx, binary, logger, "container", "logs", name); err != nil {
+		return fmt.Errorf("read existing Docker container logs: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("existing Docker container exited with status %d", exitCode)
+	}
+	return nil
+}
+
+func dockerExitStatus(raw []byte) (int, error) {
+	exitCode, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || exitCode < 0 || exitCode > 255 {
+		return 0, errors.New("decode existing Docker container exit code")
+	}
+	return exitCode, nil
 }
 
 func parseDockerDefinition(source string) (DockerDefinition, error) {
@@ -108,7 +178,7 @@ func parseDockerDefinition(source string) (DockerDefinition, error) {
 }
 
 func dockerRunArguments(name string, task Task, definition DockerDefinition) []string {
-	arguments := []string{"run", "--rm", "--name", name}
+	arguments := []string{"run", "--name", name, "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.run-id=" + task.RunID, "--label", "go-scheduler.job-id=" + task.JobID}
 	if definition.Network != "" {
 		arguments = append(arguments, "--network", definition.Network)
 	}

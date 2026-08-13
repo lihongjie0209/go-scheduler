@@ -153,3 +153,35 @@ func TestDockerHandlerRunsAndRemovesContainer(t *testing.T) {
 		t.Fatalf("stdout = %#v", logger.stdout)
 	}
 }
+
+func TestDockerHandlerResumesManagedContainerAfterExecutorRestart(t *testing.T) {
+	const name = "go-scheduler-docker-resume"
+	managed, err := testcontainers.GenericContainer(t.Context(), testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{
+		Image: "alpine:3.22", Name: name,
+		Labels: map[string]string{
+			"go-scheduler.managed-by": "lihongjie0209",
+			"go-scheduler.run-id":     "docker-resume",
+			"go-scheduler.job-id":     "job-docker-resume",
+		},
+		Cmd: []string{"sh", "-c", "sleep 1; printf resumed-output"},
+	}, Started: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = managed.Terminate(context.Background()) })
+	logger := &recordingLogger{}
+	handler := DockerHandler(DockerOptions{})
+	err = handler(t.Context(), Task{
+		RunID: "docker-resume", JobID: "job-docker-resume", Logger: logger,
+		ScriptSource: `{"image":"alpine:3.22","pull_policy":"never"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(logger.stdout, ""), "resumed-output") {
+		t.Fatalf("resumed stdout = %#v", logger.stdout)
+	}
+	if _, err = managed.Inspect(t.Context()); err == nil {
+		t.Fatal("resumed container was not removed")
+	}
+}

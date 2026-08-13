@@ -34,7 +34,7 @@ func TestDockerRunArgumentsAreDeterministic(t *testing.T) {
 	readOnly := true
 	definition := DockerDefinition{Image: "alpine:3.22", Command: []string{"echo"}, Args: []string{"ok"}, Env: map[string]string{"B": "2", "A": "1"}, Network: "none", ReadOnlyRoot: &readOnly}
 	got := dockerRunArguments("run-1", Task{RunID: "run-1", JobID: "job-1", Input: "payload"}, definition)
-	wantPrefix := []string{"run", "--rm", "--name", "run-1", "--network", "none", "--read-only"}
+	wantPrefix := []string{"run", "--name", "run-1", "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.run-id=run-1", "--label", "go-scheduler.job-id=job-1", "--network", "none", "--read-only"}
 	if !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("arguments prefix = %#v", got)
 	}
@@ -45,7 +45,7 @@ func TestDockerRunArgumentsAreDeterministic(t *testing.T) {
 
 func TestDockerRunArgumentsDefaultToDockerRuntimePolicy(t *testing.T) {
 	got := dockerRunArguments("run-1", Task{RunID: "run-1", JobID: "job-1"}, DockerDefinition{Image: "alpine:3.22"})
-	wantPrefix := []string{"run", "--rm", "--name", "run-1"}
+	wantPrefix := []string{"run", "--name", "run-1", "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.run-id=run-1", "--label", "go-scheduler.job-id=job-1"}
 	if !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("arguments prefix = %#v", got)
 	}
@@ -55,5 +55,53 @@ func TestDockerRunArgumentsDefaultToDockerRuntimePolicy(t *testing.T) {
 				t.Fatalf("default arguments unexpectedly include %s: %#v", forbidden, got)
 			}
 		}
+	}
+}
+
+func TestValidateManagedDockerInspection(t *testing.T) {
+	t.Parallel()
+	task := Task{RunID: "run-1", JobID: "job-1"}
+	tests := []struct {
+		name string
+		raw  string
+		ok   bool
+	}{
+		{name: "matching", raw: `[{"Config":{"Labels":{"go-scheduler.managed-by":"lihongjie0209","go-scheduler.run-id":"run-1","go-scheduler.job-id":"job-1"}}}]`, ok: true},
+		{name: "different run", raw: `[{"Config":{"Labels":{"go-scheduler.managed-by":"lihongjie0209","go-scheduler.run-id":"run-2","go-scheduler.job-id":"job-1"}}}]`},
+		{name: "unmanaged", raw: `[{"Config":{"Labels":{}}}]`},
+		{name: "malformed", raw: `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateManagedDockerInspection([]byte(tt.raw), task)
+			if (err == nil) != tt.ok {
+				t.Fatalf("validateManagedDockerInspection() error = %v, ok = %v", err, tt.ok)
+			}
+		})
+	}
+}
+
+func TestDockerExitStatus(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		raw  string
+		want int
+		ok   bool
+	}{
+		{name: "success", raw: "0\n", want: 0, ok: true},
+		{name: "failure", raw: "137\n", want: 137, ok: true},
+		{name: "malformed", raw: "failed"},
+		{name: "out of range", raw: "256"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := dockerExitStatus([]byte(tt.raw))
+			if (err == nil) != tt.ok || got != tt.want {
+				t.Fatalf("dockerExitStatus() = %d, %v", got, err)
+			}
+		})
 	}
 }
