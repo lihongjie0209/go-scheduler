@@ -47,11 +47,12 @@ func DockerHandler(options DockerOptions) Handler {
 		if _, err = exec.LookPath(binary); err != nil {
 			return fmt.Errorf("find docker client: %w", err)
 		}
-		if definition.PullPolicy == "always" {
+		switch definition.PullPolicy {
+		case "always":
 			if err = runDockerCommand(ctx, binary, task.Logger, "pull", definition.Image); err != nil {
 				return fmt.Errorf("pull image: %w", err)
 			}
-		} else if definition.PullPolicy == "if_not_present" {
+		case "if_not_present":
 			inspect := exec.CommandContext(ctx, binary, "image", "inspect", definition.Image) // #nosec G204 -- binary is trusted operator configuration and image is passed as one argument.
 			if inspect.Run() != nil {
 				if err = runDockerCommand(ctx, binary, task.Logger, "pull", definition.Image); err != nil {
@@ -86,7 +87,7 @@ func parseDockerDefinition(source string) (DockerDefinition, error) {
 	}
 	definition.Image = strings.TrimSpace(definition.Image)
 	if definition.Image == "" || len(definition.Image) > 512 || strings.ContainsAny(definition.Image, " \t\r\n") {
-		return DockerDefinition{}, errors.New("Docker image must be a non-empty reference of at most 512 bytes")
+		return DockerDefinition{}, errors.New("docker image must be a non-empty reference of at most 512 bytes")
 	}
 	if definition.PullPolicy == "" {
 		definition.PullPolicy = "if_not_present"
@@ -104,7 +105,7 @@ func parseDockerDefinition(source string) (DockerDefinition, error) {
 		return DockerDefinition{}, errors.New("invalid Docker resource limit")
 	}
 	if len(definition.Command)+len(definition.Args) > 256 || len(definition.Env) > 128 {
-		return DockerDefinition{}, errors.New("Docker command, arguments, or environment exceeds limits")
+		return DockerDefinition{}, errors.New("docker command, arguments, or environment exceeds limits")
 	}
 	return definition, nil
 }
@@ -157,7 +158,7 @@ func runDockerCommand(ctx context.Context, binary string, logger TaskLogger, arg
 		err = logErr
 	}
 	if stdout.exceeded || stderr.exceeded {
-		return errors.New("Docker output exceeded 1 MiB")
+		return errors.New("docker output exceeded 1 MiB")
 	}
 	return err
 }
