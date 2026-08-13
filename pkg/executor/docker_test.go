@@ -134,7 +134,7 @@ func TestDockerRegistryEnvironmentUsesTemporaryPrivateConfig(t *testing.T) {
 		t.Fatalf("temporary Docker config mode = %o, want 700", info.Mode().Perm())
 	}
 	configPath := filepath.Join(directory, "config.json")
-	raw, err := os.ReadFile(configPath)
+	raw, err := os.ReadFile(configPath) // #nosec G304 -- directory is created by dockerRegistryEnvironment with os.MkdirTemp.
 	if err != nil {
 		t.Fatal(err)
 	}
