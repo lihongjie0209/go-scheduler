@@ -9,11 +9,13 @@ services:
     healthcheck: {test: [CMD-SHELL, "pg_isready -U scheduler -d scheduler"], interval: 2s, timeout: 2s, retries: 20, start_period: 10s}
     command: [postgres, -c, shared_preload_libraries=pg_partman_bgw, -c, pg_partman_bgw.dbname=scheduler, -c, pg_partman_bgw.role=scheduler, -c, pg_partman_bgw.interval=3600]
   migrate:
-    build: {context: .., args: {TARGET: migrate}}
+    build: {context: .., args: {TARGET: scheduler}}
+    command: [migrate]
     environment: {DATABASE_URL: "postgres://scheduler:scheduler@postgres:5432/scheduler?sslmode=disable"}
     depends_on: {postgres: {condition: service_healthy}}
   bootstrap:
-    build: {context: .., args: {TARGET: bootstrap}}
+    build: {context: .., args: {TARGET: scheduler}}
+    command: [bootstrap]
     environment: &app-env
       DATABASE_URL: "postgres://scheduler:scheduler@postgres:5432/scheduler?sslmode=disable"
       SERVICE_TOKEN: "compose-internal-service-token-change-in-production"
@@ -24,7 +26,8 @@ services:
       ADMIN_PASSWORD: "SchedulerDemo123!"
     depends_on: {migrate: {condition: service_completed_successfully}}
   scheduler-server:
-    build: {context: .., args: {TARGET: scheduler-server}}
+    build: {context: .., args: {TARGET: scheduler}}
+    command: [server]
     environment:
       <<: *app-env
       HTTP_ADDRESS: ":8080"

@@ -1,4 +1,4 @@
-package main
+package scriptexecutor
 
 import (
 	"context"
@@ -21,13 +21,7 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-func run() error {
+func Run() error {
 	schedulerAddress := os.Getenv("SCHEDULER_GRPC_ADDRESS")
 	token, groupID := os.Getenv("SCHEDULER_TOKEN"), os.Getenv("EXECUTOR_GROUP_ID")
 	nodeID, address := os.Getenv("EXECUTOR_NODE_ID"), os.Getenv("EXECUTOR_ADVERTISE_ADDRESS")

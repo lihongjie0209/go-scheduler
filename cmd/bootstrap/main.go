@@ -1,4 +1,4 @@
-package main
+package bootstrapcmd
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/lihongjie0209/go-scheduler/internal/auth"
 )
 
-func main() {
+func Run() {
 	databaseURL := os.Getenv("DATABASE_URL")
 	tenantName := os.Getenv("TENANT_NAME")
 	adminEmail, adminPassword := os.Getenv("ADMIN_EMAIL"), os.Getenv("ADMIN_PASSWORD")

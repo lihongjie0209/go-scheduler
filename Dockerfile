@@ -12,3 +12,4 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/service /service
 USER nonroot:nonroot
 ENTRYPOINT ["/service"]
+CMD ["server"]

@@ -5,7 +5,7 @@ ENV GOPROXY=${GOPROXY}
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/script-executor ./cmd/script-executor
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/scheduler ./cmd/scheduler
 
 FROM alpine:3.22
 ARG POWERSHELL_VERSION=7.6.4
@@ -24,6 +24,7 @@ RUN apk add --no-cache ca-certificates docker-cli icu-libs krb5-libs libgcc libi
     && apk del .powershell-download \
     && addgroup -S executor \
     && adduser -S -G executor executor
-COPY --from=build /out/script-executor /usr/local/bin/script-executor
+COPY --from=build /out/scheduler /usr/local/bin/scheduler
 USER executor:executor
-ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/script-executor"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/scheduler"]
+CMD ["executor"]

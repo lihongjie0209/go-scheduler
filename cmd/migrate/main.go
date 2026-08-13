@@ -1,4 +1,4 @@
-package main
+package migratecmd
 
 import (
 	"fmt"
@@ -13,7 +13,7 @@ import (
 	"github.com/lihongjie0209/go-scheduler/migrations"
 )
 
-func main() {
+func Run() {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		fatal("DATABASE_URL is required")

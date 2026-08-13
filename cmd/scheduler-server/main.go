@@ -1,4 +1,4 @@
-package main
+package schedulerserver
 
 import (
 	"context"
@@ -26,7 +26,7 @@ import (
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
 
-func main() {
+func Run() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	fx.New(
 		fx.Provide(

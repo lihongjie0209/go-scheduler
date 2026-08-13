@@ -4,8 +4,11 @@
 
 ## 组件
 
-- `scheduler-server`：默认部署入口；REST API 与调度 Core 位于同一进程，通过内存 gRPC 通信，不需要 etcd，也不开放 Core gRPC 端口。
-- `api-server` / `scheduler-core`：保留的分布式部署入口，需要 etcd 服务发现。
+- `scheduler server`：默认部署入口；REST API 与调度 Core 位于同一进程，通过内存 gRPC 通信，不需要 etcd，也不开放 Core gRPC 端口。
+- `scheduler api-server` / `scheduler core`：分布式部署入口，需要 etcd 服务发现。
+- `scheduler executor`：脚本、HTTP、Docker 与 Kubernetes Job 执行器。
+- `scheduler migrate` / `scheduler bootstrap`：数据库迁移和首次初始化。
+- `schedulerctl`：独立的 API 运维客户端。发行包只包含 `scheduler` 与 `schedulerctl` 两个二进制。
 - `schedulerctl`：面向开发和运维的 API 命令行客户端，支持账号密码、JWT 和 API Key 认证。
 - PostgreSQL：任务和运行状态的唯一事实来源。
 - etcd：仅在选择分布式入口时用于服务注册与发现。
@@ -21,9 +24,9 @@ export MASTER_KEY="$(openssl rand -base64 32)"
 export JWT_SECRET="$(openssl rand -base64 48)"
 
 make migrate-up
-TENANT_NAME=demo ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='replace-with-strong-password' go run ./cmd/bootstrap
+TENANT_NAME=demo ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='replace-with-strong-password' go run ./cmd/scheduler bootstrap
 
-HTTP_ADDRESS=:8080 go run ./cmd/scheduler-server
+HTTP_ADDRESS=:8080 go run ./cmd/scheduler server
 ```
 
 项目不包含 Web UI，根路径返回 404；管理和运维使用 `schedulerctl` 或 `/api/v1` REST API。`make build` 会同时构建单进程服务、可选分布式服务、CLI 和 Script Executor。

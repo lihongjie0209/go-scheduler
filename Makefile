@@ -34,12 +34,9 @@ security:
 	govulncheck ./...
 
 build:
-	go build -o bin/scheduler-server ./cmd/scheduler-server
-	go build -o bin/api-server ./cmd/api-server
-	go build -o bin/scheduler-core ./cmd/scheduler-core
+	go build -o bin/scheduler ./cmd/scheduler
 	go build -o bin/schedulerctl ./cmd/schedulerctl
-	go build -o bin/script-executor ./cmd/script-executor
 	go build -o bin/scheduler-bench ./cmd/scheduler-bench
 
 migrate-up:
-	go run ./cmd/migrate
+	go run ./cmd/scheduler migrate
