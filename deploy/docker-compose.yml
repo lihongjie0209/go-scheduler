@@ -29,6 +29,7 @@ services:
     environment:
       <<: *app-env
       HTTP_ADDRESS: ":8080"
+      API_CONTEXT_PATH: ""
       PUBLIC_BASE_URL: "http://scheduler-server:8080"
       COOKIE_SECURE: "false"
       INSTANCE_ID: "standalone-compose-1"

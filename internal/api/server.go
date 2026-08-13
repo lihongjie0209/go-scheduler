@@ -36,6 +36,7 @@ type Server struct {
 	store        *store.Store
 	auth         *auth.Manager
 	cookieSecure bool
+	contextPath  string
 	etcd         *clientv3.Client
 	etcdPrefix   string
 	instances    []map[string]any
@@ -52,6 +53,8 @@ func (s *Server) SetDiscovery(client *clientv3.Client, prefix string) {
 	s.etcd = client
 	s.etcdPrefix = prefix
 }
+
+func (s *Server) SetContextPath(contextPath string) { s.contextPath = contextPath }
 
 func NewServer(client schedulerv1.SchedulerServiceClient, s *store.Store, manager *auth.Manager, cookieSecure ...bool) *Server {
 	secure := true
@@ -117,7 +120,13 @@ func (s *Server) Routes() http.Handler {
 		r.Delete("/api-keys/{id}", s.revokeAPIKey)
 	})
 	r.NotFound(http.NotFoundHandler().ServeHTTP)
-	return r
+	if s.contextPath == "" {
+		return r
+	}
+	root := chi.NewRouter()
+	root.Mount(s.contextPath, r)
+	root.NotFound(http.NotFoundHandler().ServeHTTP)
+	return root
 }
 func requireTenantAdmin(w http.ResponseWriter, r *http.Request) bool {
 	p := getPrincipal(r.Context())
@@ -307,10 +316,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setRefreshCookie(w http.ResponseWriter, value string, ttl time.Duration) {
-	http.SetCookie(w, &http.Cookie{Name: "scheduler_refresh", Value: value, Path: "/api/v1/auth", MaxAge: int(ttl.Seconds()), HttpOnly: true, Secure: s.cookieSecure, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "scheduler_refresh", Value: value, Path: s.contextPath + "/api/v1/auth", MaxAge: int(ttl.Seconds()), HttpOnly: true, Secure: s.cookieSecure, SameSite: http.SameSiteStrictMode})
 }
 func (s *Server) clearRefreshCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: "scheduler_refresh", Path: "/api/v1/auth", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "scheduler_refresh", Path: s.contextPath + "/api/v1/auth", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure, SameSite: http.SameSiteStrictMode})
 }
 func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("scheduler_refresh")

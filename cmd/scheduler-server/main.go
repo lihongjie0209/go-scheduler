@@ -77,6 +77,7 @@ func newAuthManager(c config.Config) (*auth.Manager, error) {
 
 func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s *store.Store, manager *auth.Manager) *http.Server {
 	handler := apihttp.NewServer(client, s, manager, c.CookieSecure)
+	handler.SetContextPath(c.APIContextPath)
 	handler.SetStandaloneInstance(c.InstanceID, time.Now())
 	return &http.Server{
 		Addr:              c.HTTPAddress,

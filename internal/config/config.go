@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ type Config struct {
 	ServiceName       string
 	InstanceID        string
 	HTTPAddress       string
+	APIContextPath    string
 	CoreHTTPAddress   string
 	GRPCAddress       string
 	AdvertiseGRPC     string
@@ -46,10 +48,15 @@ type Config struct {
 }
 
 func Load(serviceName string) (Config, error) {
+	contextPath, err := normalizeContextPath(os.Getenv("API_CONTEXT_PATH"))
+	if err != nil {
+		return Config{}, err
+	}
 	c := Config{
 		ServiceName:       serviceName,
 		InstanceID:        env("INSTANCE_ID", hostname()),
 		HTTPAddress:       env("HTTP_ADDRESS", ":8080"),
+		APIContextPath:    contextPath,
 		CoreHTTPAddress:   env("CORE_HTTP_ADDRESS", ":8081"),
 		GRPCAddress:       env("GRPC_ADDRESS", ":9090"),
 		AdvertiseGRPC:     env("ADVERTISE_GRPC_ADDRESS", "127.0.0.1:9090"),
@@ -82,6 +89,8 @@ func Load(serviceName string) (Config, error) {
 		Workers:           integer("WORKERS", 16),
 		HistoryRetention:  duration("HISTORY_RETENTION", 90*24*time.Hour),
 	}
+	c.PublicBaseURL = appendContextPath(c.PublicBaseURL, c.APIContextPath)
+	c.AdvertiseHTTP = appendContextPath(c.AdvertiseHTTP, c.APIContextPath)
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
@@ -104,6 +113,33 @@ func Load(serviceName string) (Config, error) {
 		return Config{}, fmt.Errorf("ETCD_CERT and ETCD_KEY must be configured together")
 	}
 	return c, nil
+}
+
+func normalizeContextPath(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "/" {
+		return "", nil
+	}
+	if strings.ContainsAny(value, "?#\\") {
+		return "", fmt.Errorf("API_CONTEXT_PATH must be a URL path without query, fragment, or backslash")
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	value = strings.TrimRight(value, "/")
+	cleaned := path.Clean(value)
+	if cleaned != value || strings.Contains(value, "//") {
+		return "", fmt.Errorf("API_CONTEXT_PATH must be a clean URL path")
+	}
+	return cleaned, nil
+}
+
+func appendContextPath(baseURL, contextPath string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if contextPath == "" || strings.HasSuffix(baseURL, contextPath) {
+		return baseURL
+	}
+	return baseURL + contextPath
 }
 func boolean(key string, fallback bool) bool {
 	v, err := strconv.ParseBool(os.Getenv(key))

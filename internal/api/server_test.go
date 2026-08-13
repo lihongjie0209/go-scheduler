@@ -18,6 +18,29 @@ func TestRoutesDoNotServeWebUI(t *testing.T) {
 	}
 }
 
+func TestRoutesUseConfiguredContextPath(t *testing.T) {
+	server := NewServer(nil, nil, nil)
+	server.SetContextPath("/scheduler")
+	handler := server.Routes()
+
+	for _, test := range []struct {
+		name, target string
+		want         int
+	}{
+		{name: "prefixed health endpoint", target: "/scheduler/health/live", want: http.StatusOK},
+		{name: "unprefixed endpoint is hidden", target: "/health/live", want: http.StatusNotFound},
+		{name: "context root does not serve UI", target: "/scheduler/", want: http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.target, nil))
+			if response.Code != test.want {
+				t.Fatalf("GET %s status = %d, want %d", test.target, response.Code, test.want)
+			}
+		})
+	}
+}
+
 func TestDecodeProtobufJSONAcceptsStringInt64(t *testing.T) {
 	request := httptest.NewRequest("PUT", "/api/v1/jobs/job-1", strings.NewReader(`{"name":"updated","version":"7"}`))
 	response := httptest.NewRecorder()

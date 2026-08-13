@@ -6,6 +6,42 @@ import (
 	"testing"
 )
 
+func TestNormalizeContextPath(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+		wantErr           bool
+	}{
+		{name: "empty", input: "", want: ""},
+		{name: "root", input: "/", want: ""},
+		{name: "adds leading slash", input: "scheduler", want: "/scheduler"},
+		{name: "removes trailing slash", input: "/scheduler/", want: "/scheduler"},
+		{name: "nested", input: "/platform/scheduler", want: "/platform/scheduler"},
+		{name: "rejects traversal", input: "/platform/../scheduler", wantErr: true},
+		{name: "rejects duplicate slash", input: "/platform//scheduler", wantErr: true},
+		{name: "rejects query", input: "/scheduler?debug=true", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := normalizeContextPath(test.input)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("normalizeContextPath(%q) error = %v, wantErr %v", test.input, err, test.wantErr)
+			}
+			if got != test.want {
+				t.Fatalf("normalizeContextPath(%q) = %q, want %q", test.input, got, test.want)
+			}
+		})
+	}
+}
+
+func TestAppendContextPath(t *testing.T) {
+	if got := appendContextPath("https://scheduler.example.com/", "/scheduler"); got != "https://scheduler.example.com/scheduler" {
+		t.Fatalf("appendContextPath() = %q", got)
+	}
+	if got := appendContextPath("https://scheduler.example.com/scheduler", "/scheduler"); got != "https://scheduler.example.com/scheduler" {
+		t.Fatalf("appendContextPath() duplicated path: %q", got)
+	}
+}
+
 func TestLoadRequiresTargetAllowlist(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("SERVICE_TOKEN", "service-token")

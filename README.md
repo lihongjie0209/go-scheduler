@@ -52,6 +52,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `COOKIE_SECURE` | `true` | Refresh Cookie 是否仅通过 HTTPS 发送；仅本地 HTTP 开发设置为 `false` |
 | `PREVIOUS_SERVICE_TOKEN` | 空 | 轮换期间兼容旧令牌 |
 | `HTTP_ADDRESS` | `:8080` | API 监听地址 |
+| `API_CONTEXT_PATH` | 空 | API URL 前缀，例如 `/scheduler`；健康检查、指标、REST、回调和执行器注册均使用此前缀 |
 | `PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | HTTP 任务异步回调使用的公开 API 地址 |
 | `WORKERS` | `16` | 单 Core 最大并发执行数 |
 | `HISTORY_RETENTION` | `2160h` | 历史记录和运行分区保留期，必须不超过 90 天 |
@@ -60,6 +61,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | 空 | SMTP 凭据和发件人 |
 
 生产环境应为 PostgreSQL 和公开 HTTP API 配置 TLS；单进程模式的 gRPC 只走内存连接。任务目标默认拒绝私网、环回、链路本地和未指定地址，以降低 SSRF 风险。
+
+配置 `API_CONTEXT_PATH=/scheduler` 后，API readiness 地址变为 `/scheduler/health/ready`，REST 地址变为 `/scheduler/api/v1`。`PUBLIC_BASE_URL` 和 `ADVERTISE_HTTP_ADDRESS` 可以继续填写不带前缀的服务地址，服务会自动附加 context path。`schedulerctl --server` 与 Script Executor 的 `SCHEDULER_URL` 应填写完整地址，例如 `http://scheduler-server:8080/scheduler`。Kubernetes Probe 和反向代理路由也需要使用相同前缀。
 
 单进程模式仍保留 API/Core 的 protobuf 和 gRPC 边界，但使用 `bufconn` 内存传输，不涉及服务注册、网络监听和 TLS。需要 API/Core 独立扩缩容时可继续使用保留的分布式入口；它们通过 etcd 动态发现并依靠 PostgreSQL 行锁避免重复执行。
 
