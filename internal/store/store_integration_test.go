@@ -327,7 +327,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if _, err = one.RegisterExecutorNode(ctx, tenantID, routeGroup.ID, "node-b", "http://worker-b:9999", 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = two.RegisterExecutorNode(ctx, tenantID, routeGroup.ID, "node-a", "http://worker-a:9999", 30*time.Second); err != nil {
+	if _, err = two.RegisterExecutorNode(ctx, tenantID, routeGroup.ID, "node-a", "http://worker-a:9999", 30*time.Second, []string{"gpu", "linux"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = one.pool.Exec(ctx, `UPDATE executor_nodes SET expires_at=now()-interval '1 second' WHERE group_id=$1 AND node_id='node-b'`, routeGroup.ID); err != nil {
@@ -336,6 +336,9 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	liveNodes, err := two.ListExecutorNodes(ctx, tenantID, routeGroup.ID, true)
 	if err != nil || len(liveNodes) != 1 || liveNodes[0].NodeID != "node-a" {
 		t.Fatalf("live nodes = %+v, %v", liveNodes, err)
+	}
+	if strings.Join(liveNodes[0].Labels, ",") != "gpu,linux" {
+		t.Fatalf("node labels = %v", liveNodes[0].Labels)
 	}
 	unregisterGroup, err := one.CreateExecutorGroup(ctx, ExecutorGroup{TenantID: tenantID, Name: "unregister-workers", RouteStrategy: "first"})
 	if err != nil {

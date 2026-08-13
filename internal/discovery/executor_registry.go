@@ -41,7 +41,7 @@ func NewExecutorRegistry(client *clientv3.Client, prefix string, database Execut
 }
 
 func (r *ExecutorRegistry) RegisterExecutorNode(ctx context.Context, tenantID, groupID, nodeID, address string, ttl time.Duration, labelSets ...[]string) (store.ExecutorNode, error) {
-	var labels []string
+	labels := []string{}
 	if len(labelSets) > 0 {
 		labels = labelSets[0]
 	}

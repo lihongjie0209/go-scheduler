@@ -257,7 +257,7 @@ func (s *Store) ListExecutorGroups(ctx context.Context, tenantID string) ([]Exec
 
 func (s *Store) RegisterExecutorNode(ctx context.Context, tenantID, groupID, nodeID, address string, ttl time.Duration, labelSets ...[]string) (ExecutorNode, error) {
 	var node ExecutorNode
-	var labels []string
+	labels := []string{}
 	if len(labelSets) > 0 {
 		labels = labelSets[0]
 	}
