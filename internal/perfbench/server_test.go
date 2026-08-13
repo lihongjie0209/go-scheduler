@@ -3,6 +3,7 @@ package perfbench
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -21,23 +22,26 @@ func TestServerLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := request(t, http.MethodPost, server.URL+"/api/v1/expect", expectBody)
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("expect status = %d", response.StatusCode)
+	status := response.StatusCode
+	closeResponse(t, response)
+	if status != http.StatusOK {
+		t.Fatalf("expect status = %d", status)
 	}
-	response.Body.Close()
 
 	response = request(t, http.MethodPost, server.URL+"/execute?id=event-1", nil)
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("execute status = %d", response.StatusCode)
+	status = response.StatusCode
+	closeResponse(t, response)
+	if status != http.StatusOK {
+		t.Fatalf("execute status = %d", status)
 	}
-	response.Body.Close()
 	response = request(t, http.MethodPost, server.URL+"/execute?id=event-1", nil)
-	response.Body.Close()
+	closeResponse(t, response)
 
 	response = request(t, http.MethodGet, server.URL+"/api/v1/report", nil)
-	defer response.Body.Close()
 	var report Report
-	if err = json.NewDecoder(response.Body).Decode(&report); err != nil {
+	err = json.NewDecoder(response.Body).Decode(&report)
+	closeResponse(t, response)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if report.Expected != 1 || report.Received != 1 || report.Missing != 0 || report.DuplicateRequests != 1 {
@@ -66,9 +70,10 @@ func TestServerRejectsInvalidRequests(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response := request(t, test.method, server.URL+test.path, test.body)
-			defer response.Body.Close()
-			if response.StatusCode != test.status {
-				t.Fatalf("status = %d, want %d", response.StatusCode, test.status)
+			status := response.StatusCode
+			closeResponse(t, response)
+			if status != test.status {
+				t.Fatalf("status = %d, want %d", status, test.status)
 			}
 		})
 	}
@@ -91,4 +96,14 @@ func request(t *testing.T, method, target string, body []byte) *http.Response {
 		t.Fatal(err)
 	}
 	return response
+}
+
+func closeResponse(t *testing.T, response *http.Response) {
+	t.Helper()
+	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+		t.Errorf("drain response body: %v", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Errorf("close response body: %v", err)
+	}
 }

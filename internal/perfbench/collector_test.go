@@ -1,6 +1,7 @@
 package perfbench
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -56,7 +57,7 @@ func TestCollectorExpectIsAtomic(t *testing.T) {
 	collector := NewCollector()
 	base := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	err := collector.Expect([]ExpectedEvent{{ID: "valid", ScheduledAt: base}, {ID: "", ScheduledAt: base}})
-	if err != ErrEmptyEventID {
+	if !errors.Is(err, ErrEmptyEventID) {
 		t.Fatalf("Expect() error = %v, want %v", err, ErrEmptyEventID)
 	}
 	if report := collector.Report(); report.Expected != 0 {
