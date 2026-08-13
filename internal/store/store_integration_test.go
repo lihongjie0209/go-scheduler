@@ -529,14 +529,15 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err = one.CleanupAuxiliaryHistory(ctx, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM job_run_logs WHERE run_id=$1 AND entry_id LIKE 'cleanup-%'`, firstShard.ID).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("bounded cleanup remaining logs = %d, want 1: %v", count, err)
+	var cleanupCount int
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM job_run_logs WHERE run_id=$1 AND entry_id LIKE 'cleanup-%'`, firstShard.ID).Scan(&cleanupCount); err != nil || cleanupCount != 1 {
+		t.Fatalf("bounded cleanup remaining logs = %d, want 1: %v", cleanupCount, err)
 	}
 	if err = one.CleanupAuxiliaryHistory(ctx, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM job_run_logs WHERE run_id=$1 AND entry_id LIKE 'cleanup-%'`, firstShard.ID).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("repeated cleanup remaining logs = %d, want 0: %v", count, err)
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM job_run_logs WHERE run_id=$1 AND entry_id LIKE 'cleanup-%'`, firstShard.ID).Scan(&cleanupCount); err != nil || cleanupCount != 0 {
+		t.Fatalf("repeated cleanup remaining logs = %d, want 0: %v", cleanupCount, err)
 	}
 	delay := time.Second
 	broadcastRetry, err := one.FailRun(ctx, *firstShard, "failed", 500, "retry shard", &delay)

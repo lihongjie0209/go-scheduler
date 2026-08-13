@@ -107,7 +107,7 @@ func TestProcessDeliveriesBoundsConcurrency(t *testing.T) {
 		active.Add(-1)
 		completed.Add(1)
 	})
-	if got := completed.Load(); got != int32(len(deliveries)) {
+	if got := completed.Load(); got != 30 {
 		t.Fatalf("completed = %d, want %d", got, len(deliveries))
 	}
 	if got := peak.Load(); got > 4 || got < 2 {
