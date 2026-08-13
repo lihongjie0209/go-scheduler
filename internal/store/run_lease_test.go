@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestRequireRunLease(t *testing.T) {
 	t.Parallel()
@@ -20,7 +23,7 @@ func TestRequireRunLease(t *testing.T) {
 			if tt.ok && err != nil {
 				t.Fatalf("requireRunLease() error = %v", err)
 			}
-			if !tt.ok && err != ErrConflict {
+			if !tt.ok && !errors.Is(err, ErrConflict) {
 				t.Fatalf("requireRunLease() error = %v, want %v", err, ErrConflict)
 			}
 		})
