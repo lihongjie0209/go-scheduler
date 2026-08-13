@@ -12,6 +12,7 @@
 - HTTP/gRPC 监听端口在启动 hook 中同步绑定，端口冲突会直接使启动失败并回滚已打开的 listener；
 - Core 的 Executor gRPC 连接池增加 256 个连接上限、引用计数和空闲 LRU 淘汰；
 - Notifier 将 30 秒租约内的 claim 批次收窄为 20 条并以 10 路有界并发投递，Webhook/SMTP 单次 deadline 为 10 秒；
+- 高频辅助历史清理改为每 10 秒最多删除每表 10,000 行，终态运行清理仍按小时逐租户执行，避免无上限 DELETE 长事务和高频租户扫描；
 - 并发删除 tenant owner 通过事务和租户行锁串行化，保持至少一个 owner；
 - 服务令牌改为恒定时间比较；
 - Argon2 哈希参数在内存分配前验证上下限，阻止异常哈希触发资源耗尽；
@@ -80,6 +81,7 @@ Migration 23 增加：
 - 构造包含大量终态历史、少量 active/pending 的数据集，对 migration 23 前后执行 `EXPLAIN (ANALYZE, BUFFERS)` 和至少五轮 Claim/cleanup 对照。
 - steady、catch-up 和 recovery 场景尚未达到文档要求的五轮正式容量验收。
 - migration 23 在已有大表上创建索引会占用 I/O 和锁资源，生产升级需维护窗口；后续可评估非事务 `CREATE INDEX CONCURRENTLY` 的独立迁移流程。
+- 当前辅助历史批次上限提供约每表每日 8,640 万行的理论清理能力；实际能力受行宽、级联删除、WAL 和 autovacuum 影响，正式容量验收需监控 oldest-age 水位，而不能只观察单轮耗时。
 
 ## 安全审计
 
@@ -119,6 +121,7 @@ Migration 23 增加：
 - `go vet ./...`：通过；
 - PostgreSQL migration 23 Testcontainers：通过；
 - PostgreSQL 并发 owner 删除 Testcontainers：通过；
+- PostgreSQL 辅助历史清理批次上限与重复调用收敛 Testcontainers：通过；
 - `govulncheck v1.6.0 ./...`：无可达漏洞。
 
 完整集成回归和镜像构建仍以 GitHub Actions 为最终门禁。

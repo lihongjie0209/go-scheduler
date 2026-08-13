@@ -33,10 +33,13 @@ type Engine struct {
 	wg               sync.WaitGroup
 	historyRetention time.Duration
 	lastCleanup      time.Time
+	lastRunCleanup   time.Time
 	lastPartitionRun time.Time
 	dispatchWake     chan struct{}
 	executorGRPC     *executorGRPCPool
 }
+
+const auxiliaryHistoryCleanupInterval = 10 * time.Second
 
 type EngineOption func(*Engine)
 
@@ -112,11 +115,17 @@ func (e *Engine) tick(ctx context.Context, sem chan struct{}) error {
 	if err := e.store.ExpireCallbacks(ctx); err != nil {
 		return fmt.Errorf("expire callbacks: %w", err)
 	}
-	if time.Since(e.lastCleanup) >= time.Hour {
+	if time.Since(e.lastCleanup) >= auxiliaryHistoryCleanupInterval {
 		if err := e.store.CleanupAuxiliaryHistory(ctx, e.historyRetention); err != nil {
 			return fmt.Errorf("cleanup auxiliary history: %w", err)
 		}
 		e.lastCleanup = time.Now()
+	}
+	if time.Since(e.lastRunCleanup) >= time.Hour {
+		if err := e.store.CleanupRunHistory(ctx, e.historyRetention); err != nil {
+			return fmt.Errorf("cleanup run history: %w", err)
+		}
+		e.lastRunCleanup = time.Now()
 	}
 	available := availableWorkerSlots(sem)
 	if available == 0 {

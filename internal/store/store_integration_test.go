@@ -521,6 +521,23 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil || len(cleanedLogs) != 0 {
 		t.Fatalf("cleaned logs = %+v, %v", cleanedLogs, err)
 	}
+	if _, err = one.pool.Exec(ctx, `INSERT INTO job_run_logs(tenant_id,run_id,entry_id,stream,content,created_at)
+		SELECT $1,$2,'cleanup-'||n,'stdout','old',now()-interval '2 hours'
+		FROM generate_series(1,$3) AS n`, tenantID, firstShard.ID, historyCleanupBatchSize+1); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.CleanupAuxiliaryHistory(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM job_run_logs WHERE run_id=$1 AND entry_id LIKE 'cleanup-%'`, firstShard.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("bounded cleanup remaining logs = %d, want 1: %v", count, err)
+	}
+	if err = one.CleanupAuxiliaryHistory(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM job_run_logs WHERE run_id=$1 AND entry_id LIKE 'cleanup-%'`, firstShard.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("repeated cleanup remaining logs = %d, want 0: %v", count, err)
+	}
 	delay := time.Second
 	broadcastRetry, err := one.FailRun(ctx, *firstShard, "failed", 500, "retry shard", &delay)
 	if err != nil || broadcastRetry.BroadcastGroupID != primary.BroadcastGroupID || broadcastRetry.ShardIndex != 0 || broadcastRetry.ExecutorNodeID != "node-a" {
@@ -1573,7 +1590,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if _, err = one.pool.Exec(ctx, `UPDATE job_runs SET scheduled_at=now()-interval '2 hours' WHERE id=$1`, otherJobRunID); err != nil {
 		t.Fatal(err)
 	}
-	if err = one.CleanupAuxiliaryHistory(ctx, time.Hour); err != nil {
+	if err = one.CleanupRunHistory(ctx, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM job_runs WHERE id=$1`, otherJobRunID).Scan(&count); err != nil || count != 0 {

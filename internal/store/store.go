@@ -1121,27 +1121,54 @@ func (s *Store) ExpireCallbacks(ctx context.Context) error {
 	}
 	return tx.Commit(ctx)
 }
+
+const historyCleanupBatchSize = 10000
+
 func (s *Store) CleanupAuxiliaryHistory(ctx context.Context, retention time.Duration) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin history cleanup: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `DELETE FROM job_run_idempotency WHERE created_at<now()-$1*interval '1 second'`, retention.Seconds()); err != nil {
+	if _, err = tx.Exec(ctx, `WITH doomed AS (
+		SELECT ctid FROM job_run_idempotency
+		WHERE created_at<now()-$1*interval '1 second'
+		ORDER BY created_at
+		LIMIT $2 FOR UPDATE SKIP LOCKED
+	) DELETE FROM job_run_idempotency AS history USING doomed WHERE history.ctid=doomed.ctid`, retention.Seconds(), historyCleanupBatchSize); err != nil {
 		return fmt.Errorf("clean idempotency history: %w", err)
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM job_run_logs WHERE created_at<now()-$1*interval '1 second'`, retention.Seconds()); err != nil {
+	if _, err = tx.Exec(ctx, `WITH doomed AS (
+		SELECT ctid FROM job_run_logs
+		WHERE created_at<now()-$1*interval '1 second'
+		ORDER BY created_at
+		LIMIT $2 FOR UPDATE SKIP LOCKED
+	) DELETE FROM job_run_logs AS history USING doomed WHERE history.ctid=doomed.ctid`, retention.Seconds(), historyCleanupBatchSize); err != nil {
 		return fmt.Errorf("clean run logs: %w", err)
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM outbox_events WHERE published_at IS NOT NULL AND published_at<now()-$1*interval '1 second'`, retention.Seconds()); err != nil {
+	if _, err = tx.Exec(ctx, `WITH doomed AS (
+		SELECT ctid FROM outbox_events
+		WHERE published_at IS NOT NULL AND published_at<now()-$1*interval '1 second'
+		ORDER BY published_at
+		LIMIT $2 FOR UPDATE SKIP LOCKED
+	) DELETE FROM outbox_events AS history USING doomed WHERE history.ctid=doomed.ctid`, retention.Seconds(), historyCleanupBatchSize); err != nil {
 		return fmt.Errorf("clean outbox history: %w", err)
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM job_dependency_dispatches WHERE created_at<now()-$1*interval '1 second'`, retention.Seconds()); err != nil {
+	if _, err = tx.Exec(ctx, `WITH doomed AS (
+		SELECT ctid FROM job_dependency_dispatches
+		WHERE created_at<now()-$1*interval '1 second'
+		ORDER BY created_at
+		LIMIT $2 FOR UPDATE SKIP LOCKED
+	) DELETE FROM job_dependency_dispatches AS history USING doomed WHERE history.ctid=doomed.ctid`, retention.Seconds(), historyCleanupBatchSize); err != nil {
 		return fmt.Errorf("clean dependency dispatch history: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit history cleanup: %w", err)
 	}
+	return nil
+}
+
+func (s *Store) CleanupRunHistory(ctx context.Context, retention time.Duration) error {
 	rows, err := s.pool.Query(ctx, `SELECT id FROM tenants ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("list tenants for run cleanup: %w", err)
