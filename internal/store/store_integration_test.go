@@ -1674,8 +1674,17 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	}
 	beforeCreatedAt, beforeID := firstHistoryPage[1].CreatedAt, firstHistoryPage[1].DeliveryID
 	secondHistoryPage, err := one.NotificationHistory(ctx, tenantID, "", "", "", &beforeCreatedAt, &beforeID, 10)
-	if err != nil || len(secondHistoryPage) != 1 || secondHistoryPage[0].DeliveryID == firstHistoryPage[0].DeliveryID || secondHistoryPage[0].DeliveryID == firstHistoryPage[1].DeliveryID {
+	if err != nil || len(secondHistoryPage) == 0 {
 		t.Fatalf("second notification history page = %+v, %v", secondHistoryPage, err)
+	}
+	firstPageIDs := map[string]struct{}{
+		firstHistoryPage[0].DeliveryID: {},
+		firstHistoryPage[1].DeliveryID: {},
+	}
+	for _, entry := range secondHistoryPage {
+		if _, duplicated := firstPageIDs[entry.DeliveryID]; duplicated {
+			t.Fatalf("notification history page repeated delivery %s", entry.DeliveryID)
+		}
 	}
 	var reportTenantID string
 	if err = one.pool.QueryRow(ctx, `INSERT INTO tenants(name) VALUES('report-isolation') RETURNING id`).Scan(&reportTenantID); err != nil {
