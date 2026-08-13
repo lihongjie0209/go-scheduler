@@ -211,7 +211,7 @@ func parseDockerDefinition(source string) (DockerDefinition, error) {
 		return DockerDefinition{}, fmt.Errorf("decode Docker definition: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return DockerDefinition{}, errors.New("Docker definition must contain exactly one JSON value")
+		return DockerDefinition{}, errors.New("docker definition must contain exactly one JSON value")
 	}
 	definition.Image = strings.TrimSpace(definition.Image)
 	if definition.Image == "" || len(definition.Image) > 512 || strings.ContainsAny(definition.Image, " \t\r\n") {
