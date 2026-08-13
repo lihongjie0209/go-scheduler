@@ -21,6 +21,7 @@ func TestParseDockerDefinition(t *testing.T) {
 		{name: "private image", source: `{"image":"registry.example.com/team/job:v1","pull_policy":"always","network":"bridge","memory_mb":256,"cpus":0.5}`},
 		{name: "missing image", source: `{}`, wantErr: true},
 		{name: "unknown field", source: `{"image":"alpine","privileged":true}`, wantErr: true},
+		{name: "trailing document", source: `{"image":"alpine"}{"image":"busybox"}`, wantErr: true},
 		{name: "host network", source: `{"image":"alpine","network":"host"}`},
 		{name: "custom network", source: `{"image":"alpine","network":"tenant-jobs"}`},
 		{name: "invalid network", source: `{"image":"alpine","network":"bad network"}`, wantErr: true},
