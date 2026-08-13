@@ -2,6 +2,13 @@ name: Code generation
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - api/proto/**
+      - gen/**
+      - Makefile
+      - .github/workflows/codegen.yml
   pull_request:
     paths:
       - api/proto/**
@@ -33,7 +40,7 @@ jobs:
       - name: Generate protobuf
         run: make generate
       - name: Verify generated files
-        if: github.event_name == 'pull_request'
+        if: github.event_name != 'workflow_dispatch'
         run: git diff --exit-code -- gen
       - name: Upload generated sources
         if: github.event_name == 'workflow_dispatch'
