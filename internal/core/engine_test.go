@@ -107,3 +107,25 @@ func TestRetryDelayIsBoundedExponentialWithJitter(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutorCommandRetryDelay(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		attempt int
+		want    time.Duration
+	}{
+		{name: "normalizes zero", attempt: 0, want: time.Second},
+		{name: "first attempt", attempt: 1, want: time.Second},
+		{name: "exponential retry", attempt: 4, want: 8 * time.Second},
+		{name: "bounded retry", attempt: 100, want: 5 * time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := executorCommandRetryDelay(tt.attempt); got != tt.want {
+				t.Fatalf("executorCommandRetryDelay(%d) = %s, want %s", tt.attempt, got, tt.want)
+			}
+		})
+	}
+}

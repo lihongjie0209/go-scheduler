@@ -15,11 +15,12 @@ import (
 type recordingCancellationServer struct {
 	executorv1.UnimplementedExecutorServiceServer
 	request chan *executorv1.CancelRequest
+	accept  bool
 }
 
 func (s *recordingCancellationServer) Cancel(_ context.Context, request *executorv1.CancelRequest) (*executorv1.CancelResponse, error) {
 	s.request <- request
-	return &executorv1.CancelResponse{Accepted: true}, nil
+	return &executorv1.CancelResponse{Accepted: s.accept}, nil
 }
 
 func TestExecutorControllerCancel(t *testing.T) {
@@ -29,7 +30,7 @@ func TestExecutorControllerCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := grpc.NewServer()
-	recorder := &recordingCancellationServer{request: make(chan *executorv1.CancelRequest, 1)}
+	recorder := &recordingCancellationServer{request: make(chan *executorv1.CancelRequest, 1), accept: true}
 	executorv1.RegisterExecutorServiceServer(server, recorder)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {
@@ -50,6 +51,29 @@ func TestExecutorControllerCancel(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("executor did not receive cancel request")
+	}
+}
+
+func TestExecutorControllerCancelRejectsUnacceptedCancellation(t *testing.T) {
+	t.Parallel()
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	recorder := &recordingCancellationServer{request: make(chan *executorv1.CancelRequest, 1)}
+	executorv1.RegisterExecutorServiceServer(server, recorder)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	controller := NewExecutorController("token", insecure.NewCredentials())
+	t.Cleanup(controller.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err = controller.Cancel(ctx, listener.Addr().String(), "missing-run", "operator requested"); err == nil {
+		t.Fatal("executor rejection was treated as a successful cancellation")
 	}
 }
 

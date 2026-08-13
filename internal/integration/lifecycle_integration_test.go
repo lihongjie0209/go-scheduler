@@ -893,6 +893,96 @@ func TestCancelRunStopsAssignedGRPCExecutor(t *testing.T) {
 	}
 }
 
+func TestExecutorCancellationRecoversAfterExecutorReconnects(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+
+	reservation, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executorAddress := reservation.Addr().String()
+	if err = reservation.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	job := createPolicyJob(t, fixture, "cancel-reconnect", "serial")
+	run, err := fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "cancel-reconnect", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := fixture.store.ClaimRuns(t.Context(), "cancel-reconnect-core", 1, time.Minute)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim run: count=%d err=%v", len(claims), err)
+	}
+	tokenHash := sha256.Sum256([]byte("reconnect-callback-token"))
+	if err = fixture.store.PrepareClaimedExecutorDispatch(t.Context(), claims[0].Run, "executor-reconnect", executorAddress, tokenHash[:], time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.store.CancelRun(t.Context(), fixture.tenantID, run.ID, "executor reconnect test"); err != nil {
+		t.Fatal(err)
+	}
+
+	controller := core.NewExecutorController("internal-token", insecure.NewCredentials())
+	engine := core.NewEngine(fixture.store, "cancel-command-core", 20*time.Millisecond, 1, "http://scheduler.invalid", 24*time.Hour, nil, core.WithExecutorController(controller))
+	engineCtx, cancelEngine := context.WithCancel(t.Context())
+	engine.Run(engineCtx)
+	defer func() {
+		cancelEngine()
+		engine.Wait()
+	}()
+
+	connection, err := pgx.Connect(t.Context(), fixture.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.Close(context.Background()) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var attempts int
+		var lastError string
+		err = connection.QueryRow(t.Context(), `SELECT attempts,COALESCE(last_error,'') FROM executor_commands WHERE run_id=$1`, run.ID).Scan(&attempts, &lastError)
+		if err == nil && attempts >= 1 && lastError != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("executor command was not retried while disconnected: attempts=%d error=%q query_error=%v", attempts, lastError, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	executorListener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", executorAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executorServer := grpc.NewServer()
+	recorder := &cancellationRecordingExecutor{requests: make(chan *executorv1.CancelRequest, 1)}
+	executorv1.RegisterExecutorServiceServer(executorServer, recorder)
+	go func() { _ = executorServer.Serve(executorListener) }()
+	defer executorServer.Stop()
+	defer func() { _ = executorListener.Close() }()
+
+	select {
+	case request := <-recorder.requests:
+		if request.GetRunId() != run.ID || request.GetReason() != "executor reconnect test" {
+			t.Fatalf("recovered cancel request = %+v", request)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not receive persisted cancellation after reconnect")
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		var commandStatus string
+		if err = connection.QueryRow(t.Context(), `SELECT status FROM executor_commands WHERE run_id=$1`, run.ID).Scan(&commandStatus); err == nil && commandStatus == "delivered" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("executor command status was not delivered: status=%q error=%v", commandStatus, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestCrossModuleRetryLineageThroughGRPC(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()

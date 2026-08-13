@@ -414,6 +414,13 @@ func (s *Service) CancelRun(ctx context.Context, req *schedulerv1.CancelRunReque
 		cancel()
 		if cancelErr != nil {
 			slog.Warn("cancel executor run failed", "run_id", run.ID, "executor_address", run.ExecutorAddress, "error", cancelErr)
+		} else {
+			completeCtx, completeCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			completeErr := s.store.CompleteExecutorCancelCommand(completeCtx, run.TenantID, run.ID)
+			completeCancel()
+			if completeErr != nil {
+				slog.Warn("complete executor cancel command failed", "run_id", run.ID, "error", completeErr)
+			}
 		}
 	}
 	return runToProto(run), nil

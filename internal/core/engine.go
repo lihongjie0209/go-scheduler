@@ -41,6 +41,13 @@ type Engine struct {
 
 const auxiliaryHistoryCleanupInterval = 10 * time.Second
 
+const (
+	executorCommandBatchSize   = 16
+	executorCommandConcurrency = 8
+	executorCommandMaxPoll     = time.Second
+	executorCommandTimeout     = 5 * time.Second
+)
+
 type EngineOption func(*Engine)
 
 func WithHTTPClient(client *http.Client) EngineOption {
@@ -78,6 +85,10 @@ func NewEngine(s *store.Store, owner string, interval time.Duration, workers int
 func (e *Engine) Run(ctx context.Context) {
 	e.wg.Add(1)
 	go func() { defer e.wg.Done(); e.loop(ctx) }()
+	if e.executorGRPC != nil {
+		e.wg.Add(1)
+		go func() { defer e.wg.Done(); e.executorCommandLoop(ctx) }()
+	}
 }
 func (e *Engine) Wait() {
 	e.wg.Wait()
@@ -141,6 +152,75 @@ func (e *Engine) tick(ctx context.Context, sem chan struct{}) error {
 		return nil
 	}
 	return e.dispatch(ctx, sem)
+}
+
+func (e *Engine) executorCommandLoop(ctx context.Context) {
+	poll := min(e.interval, executorCommandMaxPoll)
+	if poll <= 0 {
+		poll = executorCommandMaxPoll
+	}
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		claimed := e.processExecutorCommands(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if claimed == executorCommandBatchSize {
+			timer.Reset(0)
+		} else {
+			timer.Reset(poll)
+		}
+	}
+}
+
+func (e *Engine) processExecutorCommands(ctx context.Context) int {
+	commands, err := e.store.ClaimExecutorCommands(ctx, e.owner, executorCommandBatchSize)
+	if err != nil {
+		slog.Error("claim executor commands", "error", err)
+		return 0
+	}
+	semaphore := make(chan struct{}, executorCommandConcurrency)
+	var group sync.WaitGroup
+	for _, command := range commands {
+		if ctx.Err() != nil {
+			break
+		}
+		semaphore <- struct{}{}
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			defer func() { <-semaphore }()
+			commandCtx, cancel := context.WithTimeout(ctx, executorCommandTimeout)
+			deliverErr := e.executorGRPC.cancel(commandCtx, command.ExecutorAddress, command.RunID, command.Reason)
+			cancel()
+			if deliverErr == nil {
+				if completeErr := e.store.CompleteExecutorCommand(ctx, e.owner, command.ID); completeErr != nil && !errors.Is(completeErr, store.ErrConflict) {
+					slog.Error("complete executor command", "command_id", command.ID, "run_id", command.RunID, "error", completeErr)
+				}
+				return
+			}
+			delay := executorCommandRetryDelay(command.Attempts)
+			if retryErr := e.store.RetryExecutorCommand(ctx, e.owner, command.ID, deliverErr.Error(), delay); retryErr != nil && !errors.Is(retryErr, store.ErrConflict) {
+				slog.Error("retry executor command", "command_id", command.ID, "run_id", command.RunID, "error", retryErr)
+			}
+		}()
+	}
+	group.Wait()
+	return len(commands)
+}
+
+func executorCommandRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	shift := min(attempt-1, 9)
+	return min(time.Second*time.Duration(1<<shift), 5*time.Minute)
 }
 
 func (e *Engine) dispatch(ctx context.Context, sem chan struct{}) error {

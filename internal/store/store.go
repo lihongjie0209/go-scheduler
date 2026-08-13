@@ -1295,6 +1295,14 @@ func (s *Store) CleanupAuxiliaryHistory(ctx context.Context, retention time.Dura
 	) DELETE FROM job_dependency_dispatches AS history USING doomed WHERE history.ctid=doomed.ctid`, retention.Seconds(), historyCleanupBatchSize); err != nil {
 		return fmt.Errorf("clean dependency dispatch history: %w", err)
 	}
+	if _, err = tx.Exec(ctx, `WITH doomed AS (
+		SELECT ctid FROM executor_commands
+		WHERE delivered_at IS NOT NULL AND delivered_at<now()-$1*interval '1 second'
+		ORDER BY delivered_at
+		LIMIT $2 FOR UPDATE SKIP LOCKED
+	) DELETE FROM executor_commands AS history USING doomed WHERE history.ctid=doomed.ctid`, retention.Seconds(), historyCleanupBatchSize); err != nil {
+		return fmt.Errorf("clean executor command history: %w", err)
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit history cleanup: %w", err)
 	}
@@ -1445,6 +1453,11 @@ func (s *Store) CancelRun(ctx context.Context, tenantID, runID, reason string) (
 		if err = emitRunLifecycleEventTx(ctx, tx, run.ID, "cancelled"); err != nil {
 			return Run{}, err
 		}
+		if run.ExecutorAddress != "" {
+			if _, err = tx.Exec(ctx, `INSERT INTO executor_commands(tenant_id,run_id,executor_address,command_type,payload) VALUES($1,$2,$3,'cancel',jsonb_build_object('reason',$4::text)) ON CONFLICT(tenant_id,run_id,command_type) DO NOTHING`, run.TenantID, run.ID, run.ExecutorAddress, reason); err != nil {
+				return Run{}, fmt.Errorf("enqueue executor cancellation: %w", err)
+			}
+		}
 		if run.FinishedAt != nil {
 			if err = rearmFixedDelay(ctx, tx, run, *run.FinishedAt); err != nil {
 				return Run{}, err
@@ -1466,6 +1479,11 @@ func (s *Store) CancelRun(ctx context.Context, tenantID, runID, reason string) (
 		return Run{}, fmt.Errorf("read run after cancel: %w", err)
 	}
 	if run.Status == "cancelled" {
+		if run.ExecutorAddress != "" {
+			if _, err = tx.Exec(ctx, `INSERT INTO executor_commands(tenant_id,run_id,executor_address,command_type,payload) VALUES($1,$2,$3,'cancel',jsonb_build_object('reason',$4::text)) ON CONFLICT(tenant_id,run_id,command_type) DO NOTHING`, run.TenantID, run.ID, run.ExecutorAddress, run.ErrorMessage); err != nil {
+				return Run{}, fmt.Errorf("ensure executor cancellation: %w", err)
+			}
+		}
 		if err = tx.Commit(ctx); err != nil {
 			return Run{}, err
 		}

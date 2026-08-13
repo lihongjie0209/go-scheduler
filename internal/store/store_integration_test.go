@@ -1051,11 +1051,43 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal("callback run claim was not found")
 	}
 	callbackHash := sha256.Sum256([]byte("cancelled-callback-token"))
-	if err = one.MarkClaimedWaitingCallback(ctx, waitingClaim.Run, http.StatusAccepted, callbackHash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = one.PrepareClaimedExecutorDispatch(ctx, waitingClaim.Run, "cancel-executor", "127.0.0.1:19091", callbackHash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = two.CancelRun(ctx, tenantID, waitingRun.ID, "cancel callback wait"); err != nil {
 		t.Fatal(err)
+	}
+	commands, err := one.ClaimExecutorCommands(ctx, "command-core-a", 10)
+	if err != nil || len(commands) != 1 || commands[0].RunID != waitingRun.ID || commands[0].ExecutorAddress != "127.0.0.1:19091" || commands[0].Reason != "cancel callback wait" || commands[0].Attempts != 1 {
+		t.Fatalf("claimed executor commands = %+v, %v", commands, err)
+	}
+	commandID := commands[0].ID
+	if repeated, repeatErr := one.CancelRun(ctx, tenantID, waitingRun.ID, "different reason"); repeatErr != nil || repeated.Status != "cancelled" {
+		t.Fatalf("repeat waiting cancellation = %+v, %v", repeated, repeatErr)
+	}
+	if err = one.RetryExecutorCommand(ctx, "command-core-a", commands[0].ID, "executor unavailable", time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	commands, err = two.ClaimExecutorCommands(ctx, "command-core-b", 10)
+	if err != nil || len(commands) != 1 || commands[0].Attempts != 2 {
+		t.Fatalf("reclaimed executor commands = %+v, %v", commands, err)
+	}
+	if err = two.CompleteExecutorCommand(ctx, "command-core-b", commands[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if commands, err = one.ClaimExecutorCommands(ctx, "command-core-a", 10); err != nil || len(commands) != 0 {
+		t.Fatalf("delivered executor command was reclaimed: %+v, %v", commands, err)
+	}
+	if _, err = one.pool.Exec(ctx, `UPDATE executor_commands SET delivered_at=now()-interval '2 hours' WHERE id=$1`, commandID); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.CleanupAuxiliaryHistory(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	var commandCount int
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM executor_commands WHERE id=$1`, commandID).Scan(&commandCount); err != nil || commandCount != 0 {
+		t.Fatalf("cleaned executor command count = %d, want 0: %v", commandCount, err)
 	}
 	if err = one.CompleteCallback(ctx, waitingRun.ID, callbackHash[:], true, "late callback"); err != ErrNotFound {
 		t.Fatalf("callback completed cancelled run: %v", err)

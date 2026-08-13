@@ -117,9 +117,12 @@ func (p *executorGRPCPool) cancel(ctx context.Context, address, runID, reason st
 		return err
 	}
 	defer release()
-	_, err = client.Cancel(ctx, &executorv1.CancelRequest{RunId: runID, Reason: reason})
+	response, err := client.Cancel(ctx, &executorv1.CancelRequest{RunId: runID, Reason: reason})
 	if err != nil {
 		return fmt.Errorf("cancel executor run: %w", err)
+	}
+	if !response.GetAccepted() {
+		return fmt.Errorf("executor rejected cancellation")
 	}
 	return nil
 }
