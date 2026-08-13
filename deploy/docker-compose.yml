@@ -52,6 +52,7 @@ services:
       EXECUTOR_NODE_ID: "compose-executor-1"
       EXECUTOR_ADVERTISE_ADDRESS: "grpc://executor:9999"
       EXECUTOR_LABELS: "${SCHEDULER_EXECUTOR_LABELS:-linux,docker,kubernetes}"
+      EXECUTOR_MAX_CONCURRENCY: "${SCHEDULER_EXECUTOR_MAX_CONCURRENCY:-32}"
       DOCKER_ENABLED: "true"
       KUBERNETES_ENABLED: "true"
       DOCKER_CONFIG: "/docker-auth"

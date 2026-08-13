@@ -23,5 +23,6 @@ services:
       SCHEDULER_TOKEN: "compose-internal-service-token-change-in-production"
       EXECUTOR_TENANT_ID: "${BENCH_EXECUTOR_TENANT_ID:-}"
       EXECUTOR_GROUP_ID: "${BENCH_EXECUTOR_GROUP_ID:-}"
+      EXECUTOR_MAX_CONCURRENCY: "${BENCH_EXECUTOR_MAX_CONCURRENCY:-256}"
       DOCKER_ENABLED: "false"
       KUBERNETES_ENABLED: "false"
