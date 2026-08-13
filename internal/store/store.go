@@ -23,6 +23,7 @@ var ErrRegistrationMode = errors.New("executor group does not accept dynamic reg
 var ErrExecutorGroupInUse = errors.New("executor group is referenced by a job")
 var ErrOverrideRequiresExecutorGroup = errors.New("executor address override requires an executor group job")
 var ErrNotificationLeaseLost = errors.New("notification delivery lease lost")
+var ErrNotificationConfigUnreadable = errors.New("notification channel configuration is unreadable")
 var ErrInvalidNotificationScope = errors.New("notification channel must target all jobs or one or more specific jobs")
 
 type Job struct {

@@ -1766,6 +1766,48 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil || len(history) != 1 || history[0].RunID != "matching" || history[0].Attempts != 1 || history[0].LastError != "attempts exhausted" || history[0].DeadAt == nil {
 		t.Fatalf("notification history = %+v, %v", history, err)
 	}
+	unreadableChannel, err := one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "webhook", Name: "unreadable-config", Config: json.RawMessage(`{"url":"https://alerts.example.com/unreadable"}`), Events: []string{"job.run.failed"}, AllJobs: true, MaxAttempts: 1, BackoffInitialSeconds: 1, BackoffMaxSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthyChannel, err := one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "webhook", Name: "healthy-config", Config: json.RawMessage(`{"url":"https://alerts.example.com/healthy"}`), Events: []string{"job.run.failed"}, AllJobs: true, MaxAttempts: 1, BackoffInitialSeconds: 1, BackoffMaxSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mixedConfigEventID string
+	if err = one.pool.QueryRow(ctx, `INSERT INTO outbox_events(tenant_id,topic,payload) VALUES($1,'job.run.failed','{"run_id":"mixed-config"}') RETURNING id`, tenantID).Scan(&mixedConfigEventID); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.PrepareNotificationDeliveries(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = one.pool.Exec(ctx, `UPDATE notification_channels SET encrypted_config=decode('00','hex') WHERE id=$1`, unreadableChannel.ID); err != nil {
+		t.Fatal(err)
+	}
+	mixedConfigDeliveries, err := one.ClaimNotificationDeliveries(ctx, "notifier-mixed-config", 10)
+	if err != nil || len(mixedConfigDeliveries) != 2 {
+		t.Fatalf("mixed config claims = %+v, %v", mixedConfigDeliveries, err)
+	}
+	for _, delivery := range mixedConfigDeliveries {
+		switch delivery.Channel.ID {
+		case unreadableChannel.ID:
+			if !errors.Is(delivery.LoadError, ErrNotificationConfigUnreadable) || len(delivery.Channel.Config) != 0 {
+				t.Fatalf("unreadable delivery = %+v", delivery)
+			}
+			if err = one.DeadLetterNotificationDelivery(ctx, "notifier-mixed-config", delivery.ID, delivery.EventID, delivery.LoadError.Error()); err != nil {
+				t.Fatal(err)
+			}
+		case healthyChannel.ID:
+			if delivery.LoadError != nil || !bytes.Contains(delivery.Channel.Config, []byte("/healthy")) {
+				t.Fatalf("healthy delivery = %+v", delivery)
+			}
+			if err = one.CompleteNotificationDelivery(ctx, "notifier-mixed-config", delivery.ID, delivery.EventID); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("unexpected mixed config delivery channel %s", delivery.Channel.ID)
+		}
+	}
 	firstHistoryPage, err := one.NotificationHistory(ctx, tenantID, "", "", "", nil, nil, 2)
 	if err != nil || len(firstHistoryPage) != 2 {
 		t.Fatalf("first notification history page = %+v, %v", firstHistoryPage, err)

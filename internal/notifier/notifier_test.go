@@ -198,6 +198,27 @@ func TestNotificationProviderBoundsMetricLabels(t *testing.T) {
 	}
 }
 
+func TestAttemptDeliveryDoesNotCallProviderForUnreadableConfig(t *testing.T) {
+	t.Parallel()
+	called := false
+	worker := &Worker{senders: map[string]func(context.Context, store.NotificationChannel, store.OutboxEvent) error{
+		"webhook": func(context.Context, store.NotificationChannel, store.OutboxEvent) error {
+			called = true
+			return nil
+		},
+	}}
+	delivery := store.NotificationDelivery{
+		Channel:   store.NotificationChannel{Kind: "webhook"},
+		LoadError: store.ErrNotificationConfigUnreadable,
+	}
+	if err := worker.attemptDelivery(t.Context(), delivery, "webhook"); !errors.Is(err, store.ErrNotificationConfigUnreadable) {
+		t.Fatalf("attempt error = %v", err)
+	}
+	if called {
+		t.Fatal("provider called with unreadable configuration")
+	}
+}
+
 func TestDeliverSafelyRecoversProviderPanicWithoutLeakingValue(t *testing.T) {
 	t.Parallel()
 	worker := New(nil, "test", SMTPConfig{})

@@ -106,11 +106,7 @@ func (w *Worker) tick(ctx context.Context) int {
 	}
 	processDeliveries(ctx, deliveries, notificationConcurrency, func(delivery store.NotificationDelivery) {
 		provider := notificationProvider(delivery.Channel.Kind)
-		deliveryCtx, cancel := context.WithTimeout(ctx, notificationTimeout)
-		startedAt := time.Now()
-		deliverErr := w.deliverSafely(deliveryCtx, delivery.Channel, delivery.Event)
-		observability.NotificationDeliveryDuration.WithLabelValues(provider).Observe(time.Since(startedAt).Seconds())
-		cancel()
+		deliverErr := w.attemptDelivery(ctx, delivery, provider)
 		if deliverErr != nil {
 			if delivery.Attempts >= delivery.Channel.MaxAttempts {
 				if err := w.store.DeadLetterNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID, deliverErr.Error()); err != nil {
@@ -138,6 +134,18 @@ func (w *Worker) tick(ctx context.Context) int {
 		}
 	})
 	return len(deliveries)
+}
+
+func (w *Worker) attemptDelivery(ctx context.Context, delivery store.NotificationDelivery, provider string) error {
+	if delivery.LoadError != nil {
+		return delivery.LoadError
+	}
+	deliveryCtx, cancel := context.WithTimeout(ctx, notificationTimeout)
+	defer cancel()
+	startedAt := time.Now()
+	err := w.deliverSafely(deliveryCtx, delivery.Channel, delivery.Event)
+	observability.NotificationDeliveryDuration.WithLabelValues(provider).Observe(time.Since(startedAt).Seconds())
+	return err
 }
 
 func notificationProvider(kind string) string {

@@ -2,10 +2,44 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+type failingNotificationCipher struct{}
+
+func (failingNotificationCipher) Encrypt([]byte) ([]byte, int, error) {
+	return nil, 0, errors.New("not used")
+}
+func (failingNotificationCipher) Decrypt([]byte, int) ([]byte, error) {
+	return nil, errors.New("secret key details must not escape")
+}
+
+func TestLoadNotificationDeliveryConfigIsFailClosedAndRedacted(t *testing.T) {
+	t.Parallel()
+	version := 1
+	for _, test := range []struct {
+		name    string
+		cipher  HeaderCipher
+		version *int
+	}{
+		{name: "missing cipher", version: &version},
+		{name: "missing version", cipher: failingNotificationCipher{}},
+		{name: "decrypt failure", cipher: failingNotificationCipher{}, version: &version},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plain, err := loadNotificationDeliveryConfig(test.cipher, []byte("ciphertext"), test.version)
+			if !errors.Is(err, ErrNotificationConfigUnreadable) || plain != nil {
+				t.Fatalf("plain=%s error=%v", plain, err)
+			}
+			if strings.Contains(err.Error(), "secret key details") {
+				t.Fatal("decryption error leaked provider details")
+			}
+		})
+	}
+}
 
 func TestEncodeNotificationConfigRequiresCipher(t *testing.T) {
 	t.Parallel()

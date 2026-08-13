@@ -33,6 +33,7 @@ type NotificationDelivery struct {
 	Event       OutboxEvent
 	Channel     NotificationChannel
 	Attempts    int
+	LoadError   error
 }
 
 type NotificationHistoryEntry struct {
@@ -373,17 +374,22 @@ func (s *Store) ClaimNotificationDeliveries(ctx context.Context, owner string, l
 			return nil, err
 		}
 		if len(encrypted) > 0 {
-			if s.headerCipher == nil || version == nil {
-				return nil, fmt.Errorf("encrypted notification config requires store cipher")
-			}
-			d.Channel.Config, err = s.headerCipher.Decrypt(encrypted, *version)
-			if err != nil {
-				return nil, err
-			}
+			d.Channel.Config, d.LoadError = loadNotificationDeliveryConfig(s.headerCipher, encrypted, version)
 		}
 		deliveries = append(deliveries, d)
 	}
 	return deliveries, rows.Err()
+}
+
+func loadNotificationDeliveryConfig(cipher HeaderCipher, encrypted []byte, version *int) (json.RawMessage, error) {
+	if cipher == nil || version == nil {
+		return nil, ErrNotificationConfigUnreadable
+	}
+	plain, err := cipher.Decrypt(encrypted, *version)
+	if err != nil {
+		return nil, ErrNotificationConfigUnreadable
+	}
+	return plain, nil
 }
 
 func (s *Store) NotificationQueueStats(ctx context.Context) (NotificationQueueStats, error) {
