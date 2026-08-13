@@ -101,7 +101,7 @@ docker run --rm -p 9999:9999 \
 
 ## Docker Image Executor
 
-Docker Image 任务由独立 `docker-executor` 执行。任务定义使用 `script_language: "docker"`、`executor_handler: "__docker__"`，`script_source` 保存版本化 JSON 定义：
+Docker Image 任务与脚本任务使用同一个 `script-executor`。设置 `DOCKER_ENABLED=true` 后，执行器同时注册 `__script__` 和 `__docker__`；任务定义使用 `script_language: "docker"`、`executor_handler: "__docker__"`，`script_source` 保存版本化 JSON 定义：
 
 ```json
 {
@@ -122,17 +122,18 @@ Docker Image 任务由独立 `docker-executor` 执行。任务定义使用 `scri
 私有仓库认证使用 Docker 标准 `config.json`，凭据只部署在 Docker Executor，不写入任务、PostgreSQL、gRPC 消息或日志：
 
 ```bash
-docker build -f deploy/docker-executor/Dockerfile -t go-scheduler-docker-executor .
+docker build -f deploy/script-executor/Dockerfile -t go-scheduler-executor .
 docker run --rm -p 9999:9999 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$HOME/.docker:/docker-auth:ro" \
   -e DOCKER_CONFIG=/docker-auth \
+  -e DOCKER_ENABLED=true \
   -e SCHEDULER_URL=http://scheduler-server:8080 \
   -e SCHEDULER_TOKEN="$SCHEDULER_TOKEN" \
   -e EXECUTOR_GROUP_ID="$GROUP_ID" \
-  -e EXECUTOR_NODE_ID=docker-1 \
-  -e EXECUTOR_ADVERTISE_URL=http://docker-executor:9999 \
-  go-scheduler-docker-executor
+  -e EXECUTOR_NODE_ID=executor-1 \
+  -e EXECUTOR_ADVERTISE_URL=http://executor:9999 \
+  go-scheduler-executor
 ```
 
 Kubernetes 中应把仓库凭据以 Secret 挂载为 `/docker-auth/config.json`。挂载宿主 Docker Socket 等价于授予执行器宿主机高权限，生产环境建议使用隔离的专用 Worker 节点或远程受限 Docker Engine。

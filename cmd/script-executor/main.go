@@ -36,6 +36,13 @@ func run() error {
 	if err = server.Handle("__script__", executor.ScriptHandler(executor.ScriptOptions{Languages: languages})); err != nil {
 		return err
 	}
+	if dockerEnabled := envOr("DOCKER_ENABLED", "false"); dockerEnabled == "true" {
+		if err = server.Handle("__docker__", executor.DockerHandler(executor.DockerOptions{Binary: envOr("DOCKER_BINARY", "docker")})); err != nil {
+			return err
+		}
+	} else if dockerEnabled != "false" {
+		return errors.New("DOCKER_ENABLED must be true or false")
+	}
 	ttl, err := time.ParseDuration(envOr("EXECUTOR_TTL", "30s"))
 	if err != nil {
 		return fmt.Errorf("parse EXECUTOR_TTL: %w", err)

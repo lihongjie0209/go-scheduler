@@ -55,7 +55,7 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
-  docker-executor:
+  executor:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -72,7 +72,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/lihongjie0209/go-scheduler-docker-executor
+          images: ghcr.io/lihongjie0209/go-scheduler-executor
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -83,13 +83,13 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: deploy/docker-executor/Dockerfile
+          file: deploy/script-executor/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
-          cache-from: type=gha,scope=docker-executor
-          cache-to: type=gha,mode=max,scope=docker-executor
+          cache-from: type=gha,scope=executor
+          cache-to: type=gha,mode=max,scope=executor
           provenance: mode=max
           sbom: true

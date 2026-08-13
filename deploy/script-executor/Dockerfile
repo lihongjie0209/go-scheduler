@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/script-executor ./
 FROM alpine:3.22
 ARG POWERSHELL_VERSION=7.6.4
 ARG POWERSHELL_SHA256=2c7c18870b1ad0c107b1665b5f8733b656eb67260f6a6970aba4e7773287d8fd
-RUN apk add --no-cache ca-certificates icu-libs krb5-libs libgcc libintl libssl3 libstdc++ nodejs php83-cli python3 tini userspace-rcu zlib \
+RUN apk add --no-cache ca-certificates docker-cli icu-libs krb5-libs libgcc libintl libssl3 libstdc++ nodejs php83-cli python3 tini userspace-rcu zlib \
     && apk add --no-cache --virtual .powershell-download curl \
     && curl --fail --location --silent --show-error \
        "https://github.com/PowerShell/PowerShell/releases/download/v${POWERSHELL_VERSION}/powershell-${POWERSHELL_VERSION}-linux-musl-x64.tar.gz" \

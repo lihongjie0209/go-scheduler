@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: true
           cache-dependency-path: go.sum
       - name: Verify module files
         run: go mod tidy && git diff --exit-code -- go.mod go.sum
@@ -42,6 +43,24 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: true
           cache-dependency-path: go.sum
+      - name: Restore Testcontainers images
+        id: test-images
+        uses: actions/cache@v5
+        with:
+          path: /tmp/go-scheduler-test-images
+          key: testcontainers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deploy/postgres/Dockerfile', 'deploy/script-executor/Dockerfile') }}
+      - name: Load cached Testcontainers images
+        if: steps.test-images.outputs.cache-hit == 'true'
+        run: docker load --input /tmp/go-scheduler-test-images/images.tar
       - name: Testcontainers module, cross-module, and use-case tests
         run: make integration
+      - name: Save Testcontainers images
+        if: always() && steps.test-images.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/go-scheduler-test-images
+          mapfile -t images < <(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^go-scheduler-.*-test:' || true)
+          if ((${#images[@]})); then
+            docker save --output /tmp/go-scheduler-test-images/images.tar "${images[@]}"
+          fi

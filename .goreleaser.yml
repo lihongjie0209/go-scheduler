@@ -38,13 +38,6 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags: [-s, -w]
-  - id: docker-executor
-    main: ./cmd/docker-executor
-    binary: docker-executor
-    env: [CGO_ENABLED=0]
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    ldflags: [-s, -w]
   - id: migrate
     main: ./cmd/migrate
     binary: migrate
@@ -73,11 +66,6 @@ archives:
     builds: [script-executor]
     name_template: >-
       script-executor_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    formats: [tar.gz]
-  - id: docker-executor
-    builds: [docker-executor]
-    name_template: >-
-      docker-executor_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats: [tar.gz]
 
 checksum:
