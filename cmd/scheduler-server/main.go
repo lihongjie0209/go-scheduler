@@ -110,7 +110,13 @@ func registerDatabasePoolMetrics(api *apiStore, core *coreStore) error {
 	if err := prometheus.Register(observability.NewDatabasePoolCollector("api", api.PoolStats)); err != nil {
 		return err
 	}
-	return prometheus.Register(observability.NewDatabasePoolCollector("core", core.PoolStats))
+	if err := prometheus.Register(observability.NewDatabasePoolCollector("core", core.PoolStats)); err != nil {
+		return err
+	}
+	return prometheus.Register(observability.NewNotificationQueueCollector(func(ctx context.Context) (observability.NotificationQueueSnapshot, error) {
+		stats, err := core.NotificationQueueStats(ctx)
+		return observability.NotificationQueueSnapshot{Pending: stats.Pending, OldestPendingAge: stats.OldestPendingAge}, err
+	}))
 }
 
 func newInProcessScheduler(lc fx.Lifecycle, c config.Config, service *core.Service) (*rpc.InProcessScheduler, error) {

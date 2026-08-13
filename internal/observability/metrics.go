@@ -16,8 +16,21 @@ var (
 		Name: "scheduler_worker_saturation_ticks_total",
 		Help: "Scheduler ticks that could not claim work because every execution worker was occupied.",
 	})
+	// Delivery success rate:
+	// sum by (provider, outcome) (rate(scheduler_notification_deliveries_total[5m]))
+	NotificationDeliveries = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "scheduler_notification_deliveries_total",
+		Help: "Notification delivery state transitions by provider and outcome.",
+	}, []string{"provider", "outcome"})
+	// P99 provider latency:
+	// histogram_quantile(0.99, sum by (le, provider) (rate(scheduler_notification_delivery_duration_seconds_bucket[5m])))
+	NotificationDeliveryDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "scheduler_notification_delivery_duration_seconds",
+		Help:    "Time spent calling notification providers.",
+		Buckets: []float64{.01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+	}, []string{"provider"})
 )
 
 func init() {
-	prometheus.MustRegister(HTTPRequests, HTTPDuration, Runs, RunDuration, DispatchDelay, WorkerSaturationTicks)
+	prometheus.MustRegister(HTTPRequests, HTTPDuration, Runs, RunDuration, DispatchDelay, WorkerSaturationTicks, NotificationDeliveries, NotificationDeliveryDuration)
 }

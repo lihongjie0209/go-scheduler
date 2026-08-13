@@ -43,6 +43,11 @@ type NotificationHistoryEntry struct {
 	DeliveredAt, DeadAt                                      *time.Time
 }
 
+type NotificationQueueStats struct {
+	Pending          int64
+	OldestPendingAge time.Duration
+}
+
 const maxNotificationErrorBytes = 4096
 
 const runLifecycleEventSQL = `INSERT INTO outbox_events(id,tenant_id,topic,payload)
@@ -379,6 +384,17 @@ func (s *Store) ClaimNotificationDeliveries(ctx context.Context, owner string, l
 		deliveries = append(deliveries, d)
 	}
 	return deliveries, rows.Err()
+}
+
+func (s *Store) NotificationQueueStats(ctx context.Context) (NotificationQueueStats, error) {
+	var stats NotificationQueueStats
+	var oldestPendingAgeSeconds float64
+	err := s.pool.QueryRow(ctx, `SELECT count(*),COALESCE(GREATEST(EXTRACT(EPOCH FROM now()-min(created_at)),0),0) FROM notification_deliveries WHERE status='pending'`).Scan(&stats.Pending, &oldestPendingAgeSeconds)
+	if err != nil {
+		return NotificationQueueStats{}, fmt.Errorf("notification queue stats: %w", err)
+	}
+	stats.OldestPendingAge = time.Duration(oldestPendingAgeSeconds * float64(time.Second))
+	return stats, nil
 }
 
 func (s *Store) CompleteNotificationDelivery(ctx context.Context, owner, deliveryID, eventID string) error {

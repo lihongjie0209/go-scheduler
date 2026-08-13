@@ -22,6 +22,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/lihongjie0209/go-scheduler/internal/observability"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
 
@@ -104,27 +105,48 @@ func (w *Worker) tick(ctx context.Context) int {
 		return 0
 	}
 	processDeliveries(ctx, deliveries, notificationConcurrency, func(delivery store.NotificationDelivery) {
+		provider := notificationProvider(delivery.Channel.Kind)
 		deliveryCtx, cancel := context.WithTimeout(ctx, notificationTimeout)
+		startedAt := time.Now()
 		deliverErr := w.deliverSafely(deliveryCtx, delivery.Channel, delivery.Event)
+		observability.NotificationDeliveryDuration.WithLabelValues(provider).Observe(time.Since(startedAt).Seconds())
 		cancel()
 		if deliverErr != nil {
 			if delivery.Attempts >= delivery.Channel.MaxAttempts {
 				if err := w.store.DeadLetterNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID, deliverErr.Error()); err != nil {
 					slog.Error("dead-letter notification delivery", "delivery_id", delivery.ID, "error", err)
+					observability.NotificationDeliveries.WithLabelValues(provider, "state_error").Inc()
+				} else {
+					observability.NotificationDeliveries.WithLabelValues(provider, "dead").Inc()
 				}
 				return
 			}
 			delay := retryDelay(delivery.Attempts, time.Duration(delivery.Channel.BackoffInitialSeconds)*time.Second, time.Duration(delivery.Channel.BackoffMaxSeconds)*time.Second)
 			if err := w.store.RetryNotificationDelivery(ctx, w.owner, delivery.ID, deliverErr.Error(), delay); err != nil {
 				slog.Error("retry notification delivery", "delivery_id", delivery.ID, "error", err)
+				observability.NotificationDeliveries.WithLabelValues(provider, "state_error").Inc()
+			} else {
+				observability.NotificationDeliveries.WithLabelValues(provider, "retry").Inc()
 			}
 			return
 		}
 		if err := w.store.CompleteNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID); err != nil {
 			slog.Error("complete notification delivery", "delivery_id", delivery.ID, "error", err)
+			observability.NotificationDeliveries.WithLabelValues(provider, "state_error").Inc()
+		} else {
+			observability.NotificationDeliveries.WithLabelValues(provider, "delivered").Inc()
 		}
 	})
 	return len(deliveries)
+}
+
+func notificationProvider(kind string) string {
+	switch kind {
+	case "webhook", "email", "dingtalk":
+		return kind
+	default:
+		return "unknown"
+	}
 }
 
 func processDeliveries(ctx context.Context, deliveries []store.NotificationDelivery, concurrency int, process func(store.NotificationDelivery)) {

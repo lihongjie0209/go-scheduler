@@ -181,6 +181,23 @@ func TestNotificationHTTPErrorRedactsEndpointSecrets(t *testing.T) {
 	}
 }
 
+func TestNotificationProviderBoundsMetricLabels(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		kind string
+		want string
+	}{
+		{kind: "webhook", want: "webhook"},
+		{kind: "email", want: "email"},
+		{kind: "dingtalk", want: "dingtalk"},
+		{kind: "tenant-controlled-value", want: "unknown"},
+	} {
+		if got := notificationProvider(test.kind); got != test.want {
+			t.Errorf("notificationProvider(%q) = %q, want %q", test.kind, got, test.want)
+		}
+	}
+}
+
 func TestDeliverSafelyRecoversProviderPanicWithoutLeakingValue(t *testing.T) {
 	t.Parallel()
 	worker := New(nil, "test", SMTPConfig{})

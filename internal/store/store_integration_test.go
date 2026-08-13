@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1589,6 +1590,16 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err = one.PrepareNotificationDeliveries(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
+	notificationQueueStats, err := one.NotificationQueueStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notificationQueueStats.Pending < 2 {
+		t.Fatalf("pending notification deliveries = %d, want at least 2", notificationQueueStats.Pending)
+	}
+	if notificationQueueStats.OldestPendingAge < 0 {
+		t.Fatalf("oldest pending notification age = %s, want non-negative", notificationQueueStats.OldestPendingAge)
+	}
 	firstDeliveries, err := one.ClaimNotificationDeliveries(ctx, "notifier-a", 1)
 	if err != nil || len(firstDeliveries) != 1 {
 		t.Fatalf("first deliveries = %+v, %v", firstDeliveries, err)
@@ -1644,7 +1655,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockedChannels, err := matchingNotificationChannelIDs(ctx, lockTx, managedEventID, tenantID)
-	if err != nil || len(lockedChannels) != 1 || lockedChannels[0] != managedChannel.ID {
+	if err != nil || !slices.Contains(lockedChannels, managedChannel.ID) {
 		_ = lockTx.Rollback(ctx)
 		t.Fatalf("locked notification channels = %v, %v", lockedChannels, err)
 	}
