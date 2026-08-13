@@ -34,7 +34,10 @@ func planBroadcastShards(nodes []ExecutorNode) []BroadcastShard {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].NodeID < sorted[j].NodeID })
 	shards := make([]BroadcastShard, 0, len(sorted))
 	for index, node := range sorted {
-		shards = append(shards, BroadcastShard{NodeID: node.NodeID, Address: node.Address, Index: int32(index), Total: int32(len(sorted))})
+		shards = append(shards, BroadcastShard{
+			NodeID: node.NodeID, Address: node.Address,
+			Index: int32(index), Total: int32(len(sorted)), // #nosec G115 -- executor groups are bounded to 100 nodes.
+		})
 	}
 	return shards
 }

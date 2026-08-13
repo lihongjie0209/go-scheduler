@@ -10,7 +10,7 @@ func TestPlanBroadcastShardsUsesStableNodeOrder(t *testing.T) {
 		t.Fatalf("shards = %+v", shards)
 	}
 	for index, want := range []string{"node-a", "node-b", "node-c"} {
-		if shards[index].NodeID != want || shards[index].Index != int32(index) || shards[index].Total != 3 {
+		if shards[index].NodeID != want || shards[index].Index != int32(index) || shards[index].Total != 3 { // #nosec G115 -- fixed three-element fixture.
 			t.Fatalf("shard %d = %+v", index, shards[index])
 		}
 	}

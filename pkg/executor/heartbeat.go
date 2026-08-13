@@ -75,7 +75,7 @@ func (r *Registrar) unregister(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("executor unregistration returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
@@ -97,7 +97,7 @@ func (r *Registrar) heartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("executor registration returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))

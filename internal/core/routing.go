@@ -33,7 +33,7 @@ func selectExecutorNode(nodes []executorCandidate, strategy string, cursor int64
 		}
 		return sorted[int(cursor%int64(len(sorted)))], nil
 	case "random":
-		return sorted[int(random%uint64(len(sorted)))], nil
+		return sorted[int(random%uint64(len(sorted)))], nil // #nosec G115 -- modulo result is strictly less than len(sorted).
 	case "hash":
 		return consistentHashExecutor(sorted, routeKey), nil
 	case "lfu":

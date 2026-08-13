@@ -515,7 +515,7 @@ func (s *Store) TriggerJobWithOptions(ctx context.Context, tenantID, jobID, key,
 			}
 		}
 		r.ShardIndex = 0
-		r.ShardTotal = int32(len(shards))
+		r.ShardTotal = int32(len(shards)) // #nosec G115 -- executor addresses are validated to at most 100 entries.
 		r.ExecutorNodeID = shards[0].NodeID
 		r.ExecutorAddress = shards[0].Address
 	} else {

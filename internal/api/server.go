@@ -769,7 +769,7 @@ func (s *Server) listRunLogs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "limit must be between 1 and 500")
 		return
 	}
-	out, rpcErr := s.client.ListRunLogs(r.Context(), &schedulerv1.ListRunLogsRequest{TenantId: tenantID(r.Context()), RunId: chi.URLParam(r, "id"), AfterCursor: after, Limit: int32(limit)})
+	out, rpcErr := s.client.ListRunLogs(r.Context(), &schedulerv1.ListRunLogsRequest{TenantId: tenantID(r.Context()), RunId: chi.URLParam(r, "id"), AfterCursor: after, Limit: int32(limit)}) // #nosec G115 -- limit is validated to 1..500 above.
 	respond(w, out, rpcErr, http.StatusOK)
 }
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {

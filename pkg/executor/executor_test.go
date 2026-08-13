@@ -43,6 +43,7 @@ func TestServerRunsHandlerAndReportsBusyState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusConflict {
 		t.Fatalf("busy status=%d", response.StatusCode)
 	}

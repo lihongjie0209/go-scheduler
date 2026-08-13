@@ -40,7 +40,7 @@ func ScriptHandler(options ScriptOptions) Handler {
 			return err
 		}
 		scriptName := script.Name()
-		defer os.Remove(scriptName)
+		defer func() { _ = os.Remove(scriptName) }()
 		if err = script.Chmod(0o700); err == nil {
 			_, err = io.WriteString(script, task.ScriptSource)
 		}
