@@ -116,7 +116,7 @@ func validateManagedDockerInspection(raw []byte, task Task) error {
 	}
 	labels := inspected[0].Config.Labels
 	if labels["go-scheduler.managed-by"] != "lihongjie0209" || labels["go-scheduler.run-id"] != task.RunID || labels["go-scheduler.job-id"] != task.JobID {
-		return errors.New("Docker container name is occupied by an unmanaged or different execution")
+		return errors.New("docker container name is occupied by an unmanaged or different execution")
 	}
 	return nil
 }
