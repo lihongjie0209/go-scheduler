@@ -159,6 +159,8 @@ docker run --rm -p 9999:9999 \
   go-scheduler-executor
 ```
 
+执行器容器目前只发布 `linux/amd64`：其 Alpine 运行时包含 PowerShell，而上游仅提供 x64 的 musl 归档。独立 Go 二进制仍同时发布 amd64 和 arm64；在 PowerShell 上游提供 arm64 musl 构建前，不发布功能残缺的 arm64 执行器镜像。
+
 Kubernetes 中也可以把共享仓库凭据以 Secret 挂载为 `/docker-auth/config.json`。挂载宿主 Docker Socket 等价于授予执行器宿主机高权限，生产环境建议使用隔离的专用 Worker 节点或远程受限 Docker Engine。
 
 ## Kubernetes Job Executor
