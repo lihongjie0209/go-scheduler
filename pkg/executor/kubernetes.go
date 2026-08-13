@@ -46,6 +46,12 @@ type KubernetesOptions struct {
 	PollInterval  time.Duration
 }
 
+const (
+	kubernetesManagedByLabel   = "app.kubernetes.io/managed-by"
+	kubernetesManagedByValue   = "go-scheduler"
+	kubernetesExecutionIDLabel = "go-scheduler/execution-id"
+)
+
 func KubernetesHandler(options KubernetesOptions) Handler {
 	if options.ClientFactory == nil {
 		options.ClientFactory = func(config *rest.Config) (kubernetes.Interface, error) { return kubernetes.NewForConfig(config) }
@@ -100,20 +106,33 @@ func KubernetesHandler(options KubernetesOptions) Handler {
 		if ttl <= 0 {
 			ttl = 86400
 		}
-		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"app.kubernetes.io/managed-by": "go-scheduler", "go-scheduler/execution-id": executionID}}, Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"job-name": name, "go-scheduler/execution-id": executionID}}, Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: definition.ServiceAccount, ImagePullSecrets: pullSecrets, Containers: []corev1.Container{{Name: "task", Image: definition.Image, Command: definition.Command, Args: definition.Args, Env: env}}}}}}
-		if _, getErr := client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(getErr) {
+		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{kubernetesManagedByLabel: kubernetesManagedByValue, kubernetesExecutionIDLabel: executionID}}, Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"job-name": name, kubernetesExecutionIDLabel: executionID}}, Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: definition.ServiceAccount, ImagePullSecrets: pullSecrets, Containers: []corev1.Container{{Name: "task", Image: definition.Image, Command: definition.Command, Args: definition.Args, Env: env}}}}}}
+		existing, getErr := client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(getErr) {
 			if _, err = client.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 				if !apierrors.IsAlreadyExists(err) {
 					return fmt.Errorf("create kubernetes job: %w", err)
 				}
+				existing, getErr = client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+				if getErr != nil {
+					return fmt.Errorf("get concurrently created kubernetes job: %w", getErr)
+				}
+				if err = validateManagedKubernetesJob(existing, executionID); err != nil {
+					return err
+				}
 			}
 		} else if getErr != nil {
 			return fmt.Errorf("get kubernetes job: %w", getErr)
+		} else if err = validateManagedKubernetesJob(existing, executionID); err != nil {
+			return err
 		}
 		err = wait.PollUntilContextCancel(ctx, options.PollInterval, true, func(pollCtx context.Context) (bool, error) {
 			current, getErr := client.BatchV1().Jobs(namespace).Get(pollCtx, name, metav1.GetOptions{})
 			if getErr != nil {
 				return false, getErr
+			}
+			if validateErr := validateManagedKubernetesJob(current, executionID); validateErr != nil {
+				return false, validateErr
 			}
 			for _, condition := range current.Status.Conditions {
 				if condition.Status != corev1.ConditionTrue {
@@ -134,6 +153,13 @@ func KubernetesHandler(options KubernetesOptions) Handler {
 		}
 		return logErr
 	}
+}
+
+func validateManagedKubernetesJob(job *batchv1.Job, executionID string) error {
+	if job == nil || job.Labels[kubernetesManagedByLabel] != kubernetesManagedByValue || job.Labels[kubernetesExecutionIDLabel] != executionID {
+		return fmt.Errorf("kubernetes job name collision for execution %q", executionID)
+	}
+	return nil
 }
 
 func kubernetesRESTConfig(cluster KubernetesClusterConfig) (*rest.Config, error) {

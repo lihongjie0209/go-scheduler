@@ -26,7 +26,7 @@ func TestKubernetesRESTConfigServiceAccount(t *testing.T) {
 func TestKubernetesHandlerResumesExistingJob(t *testing.T) {
 	executionID := "11111111-2222-3333-4444-555555555555"
 	name := "scheduler-" + strings.ReplaceAll(executionID, "-", "")
-	client := fake.NewSimpleClientset(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "work"}, Status: batchv1.JobStatus{Succeeded: 1, Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: "True"}}}})
+	client := fake.NewSimpleClientset(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "work", Labels: map[string]string{kubernetesManagedByLabel: kubernetesManagedByValue, kubernetesExecutionIDLabel: executionID}}, Status: batchv1.JobStatus{Succeeded: 1, Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: "True"}}}})
 	handler := KubernetesHandler(KubernetesOptions{PollInterval: time.Millisecond, ClientFactory: func(*rest.Config) (kubernetes.Interface, error) { return client, nil }})
 	err := handler(t.Context(), Task{RunID: "retry-run", ExternalExecutionID: executionID, ScriptLanguage: "kubernetes", ScriptSource: `{"image":"alpine:3.22"}`, KubernetesCluster: &KubernetesClusterConfig{AuthMode: "service_account", APIServer: "https://k8s.example", Token: "token", Namespace: "work"}})
 	if err != nil {
@@ -37,6 +37,30 @@ func TestKubernetesHandlerResumesExistingJob(t *testing.T) {
 		if action.GetVerb() == "create" {
 			t.Fatalf("existing external execution was recreated: %+v", actions)
 		}
+	}
+}
+
+func TestKubernetesHandlerRejectsJobNameCollision(t *testing.T) {
+	t.Parallel()
+	executionID := "11111111-2222-3333-4444-555555555555"
+	name := "scheduler-" + strings.ReplaceAll(executionID, "-", "")
+	tests := []struct {
+		name   string
+		labels map[string]string
+	}{
+		{name: "unmanaged job", labels: nil},
+		{name: "different execution", labels: map[string]string{kubernetesManagedByLabel: kubernetesManagedByValue, kubernetesExecutionIDLabel: "different"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client := fake.NewSimpleClientset(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "work", Labels: tt.labels}})
+			handler := KubernetesHandler(KubernetesOptions{PollInterval: time.Millisecond, ClientFactory: func(*rest.Config) (kubernetes.Interface, error) { return client, nil }})
+			err := handler(t.Context(), Task{RunID: executionID, ExternalExecutionID: executionID, ScriptLanguage: "kubernetes", ScriptSource: `{"image":"alpine:3.22"}`, KubernetesCluster: &KubernetesClusterConfig{AuthMode: "service_account", APIServer: "https://k8s.example", Token: "token", Namespace: "work"}})
+			if err == nil || !strings.Contains(err.Error(), "name collision") {
+				t.Fatalf("error = %v, want name collision", err)
+			}
+		})
 	}
 }
 
