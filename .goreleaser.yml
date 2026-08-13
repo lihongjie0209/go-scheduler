@@ -54,10 +54,15 @@ builds:
     ldflags: [-s, -w]
 
 archives:
-  - formats: [tar.gz]
+  - id: tools
+    builds: [scheduler-server, schedulerctl, api-server, scheduler-core, migrate, bootstrap]
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]
+  - id: script-executor
+    builds: [script-executor]
+    formats: [tar.gz]
 
 checksum:
   name_template: checksums.txt
