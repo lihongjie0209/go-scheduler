@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"net/url"
 	"strconv"
@@ -24,7 +25,7 @@ import (
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
 
-type SMTPConfig struct{ Address, Username, Password, From string }
+type SMTPConfig struct{ Address, Username, Password, From, TLSMode string }
 
 const (
 	notificationBatchSize   = 20
@@ -311,16 +312,47 @@ func (w *Worker) email(ctx context.Context, channel store.NotificationChannel, e
 		return fmt.Errorf("SMTP is not configured")
 	}
 	var config struct {
-		To []string `json:"to"`
+		To       []string `json:"to"`
+		Subject  string   `json:"subject"`
+		Template string   `json:"template"`
 	}
 	if err := json.Unmarshal(channel.Config, &config); err != nil {
 		return err
 	}
-	host, _, found := strings.Cut(w.smtp.Address, ":")
-	if !found {
+	from, err := mail.ParseAddress(w.smtp.From)
+	if err != nil {
+		return fmt.Errorf("invalid SMTP from address")
+	}
+	recipients := make([]*mail.Address, 0, len(config.To))
+	for _, raw := range config.To {
+		recipient, parseErr := mail.ParseAddress(raw)
+		if parseErr != nil || recipient.Address != raw || strings.ContainsAny(raw, "\r\n") {
+			return fmt.Errorf("invalid email recipient")
+		}
+		recipients = append(recipients, recipient)
+	}
+	subject, content, contentType, err := emailContent(config.Subject, config.Template, event)
+	if err != nil {
+		return err
+	}
+	host, _, err := net.SplitHostPort(w.smtp.Address)
+	if err != nil || host == "" {
 		return fmt.Errorf("invalid SMTP address")
 	}
-	networkConnection, err := (&net.Dialer{Timeout: notificationTimeout}).DialContext(ctx, "tcp", w.smtp.Address)
+	tlsMode := strings.ToLower(strings.TrimSpace(w.smtp.TLSMode))
+	if tlsMode == "" {
+		tlsMode = "starttls"
+	}
+	if tlsMode != "starttls" && tlsMode != "tls" && tlsMode != "none" {
+		return fmt.Errorf("invalid SMTP TLS mode")
+	}
+	tlsConfig := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+	var networkConnection net.Conn
+	if tlsMode == "tls" {
+		networkConnection, err = (&tls.Dialer{NetDialer: &net.Dialer{Timeout: notificationTimeout}, Config: tlsConfig}).DialContext(ctx, "tcp", w.smtp.Address)
+	} else {
+		networkConnection, err = (&net.Dialer{Timeout: notificationTimeout}).DialContext(ctx, "tcp", w.smtp.Address)
+	}
 	if err != nil {
 		return err
 	}
@@ -336,8 +368,11 @@ func (w *Worker) email(ctx context.Context, channel store.NotificationChannel, e
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	if ok, _ := conn.Extension("STARTTLS"); ok {
-		if err = conn.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+	if tlsMode == "starttls" {
+		if ok, _ := conn.Extension("STARTTLS"); !ok {
+			return fmt.Errorf("SMTP server does not support STARTTLS")
+		}
+		if err = conn.StartTLS(tlsConfig); err != nil {
 			return err
 		}
 	}
@@ -346,11 +381,11 @@ func (w *Worker) email(ctx context.Context, channel store.NotificationChannel, e
 			return err
 		}
 	}
-	if err = conn.Mail(w.smtp.From); err != nil {
+	if err = conn.Mail(from.Address); err != nil {
 		return err
 	}
-	for _, to := range config.To {
-		if err = conn.Rcpt(to); err != nil {
+	for _, recipient := range recipients {
+		if err = conn.Rcpt(recipient.Address); err != nil {
 			return err
 		}
 	}
@@ -358,11 +393,37 @@ func (w *Worker) email(ctx context.Context, channel store.NotificationChannel, e
 	if err != nil {
 		return err
 	}
-	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: Scheduler event %s\r\nContent-Type: application/json\r\n\r\n%s", w.smtp.From, strings.Join(config.To, ","), event.Topic, event.Payload)
+	toHeader := make([]string, 0, len(recipients))
+	for _, recipient := range recipients {
+		toHeader = append(toHeader, recipient.String())
+	}
+	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: %s\r\n\r\n%s", from.String(), strings.Join(toHeader, ","), subject, contentType, content)
 	if _, err = writer.Write([]byte(message)); err != nil {
 		return err
 	}
 	return writer.Close()
+}
+
+func emailContent(subjectTemplate, bodyTemplate string, event store.OutboxEvent) (string, string, string, error) {
+	subject := "Scheduler event " + event.Topic
+	if subjectTemplate != "" {
+		rendered, err := renderNotificationTemplate(subjectTemplate, event)
+		if err != nil {
+			return "", "", "", err
+		}
+		subject = rendered
+	}
+	if subject == "" || len(subject) > 998 || strings.ContainsAny(subject, "\r\n") {
+		return "", "", "", fmt.Errorf("rendered email subject is invalid")
+	}
+	if bodyTemplate == "" {
+		return subject, string(event.Payload), "application/json; charset=utf-8", nil
+	}
+	content, err := renderNotificationTemplate(bodyTemplate, event)
+	if err != nil {
+		return "", "", "", err
+	}
+	return subject, content, "text/plain; charset=utf-8", nil
 }
 func retryDelay(attempt int, initial, maximum time.Duration) time.Duration {
 	if attempt < 1 {

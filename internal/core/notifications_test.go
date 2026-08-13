@@ -75,6 +75,10 @@ func TestNotificationConfigResourceLimits(t *testing.T) {
 		{name: "oversized webhook template", kind: "webhook", raw: json.RawMessage(`{"url":"https://example.com","template":"` + strings.Repeat("x", maxNotificationTemplateBytes+1) + `"}`)},
 		{name: "invalid webhook header", kind: "webhook", raw: json.RawMessage(`{"url":"https://example.com","headers":{"X-Test":"safe\r\nInjected: true"}}`)},
 		{name: "too many email recipients", kind: "email", raw: mustJSON(t, map[string]any{"to": make([]string, maxNotificationRecipients+1)})},
+		{name: "email recipient header injection", kind: "email", raw: json.RawMessage(`{"to":["ops@example.com\r\nBcc: attacker@example.com"]}`)},
+		{name: "email display name", kind: "email", raw: json.RawMessage(`{"to":["Operations <ops@example.com>"]}`)},
+		{name: "email subject header injection", kind: "email", raw: json.RawMessage(`{"to":["ops@example.com"],"subject":"alert\r\nBcc: attacker@example.com"}`)},
+		{name: "oversized email template", kind: "email", raw: mustJSON(t, map[string]any{"to": []string{"ops@example.com"}, "template": strings.Repeat("x", maxNotificationTemplateBytes+1)})},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -83,6 +87,14 @@ func TestNotificationConfigResourceLimits(t *testing.T) {
 				t.Fatal("resource limit was not enforced")
 			}
 		})
+	}
+}
+
+func TestValidateEmailNotificationConfigWithTemplates(t *testing.T) {
+	t.Parallel()
+	raw := json.RawMessage(`{"to":["ops@example.com"],"subject":"Job {{.Payload.job_id}} {{.Payload.status}}","template":"run={{.Payload.run_id}}"}`)
+	if err := validateNotificationConfig("email", raw); err != nil {
+		t.Fatalf("valid email notification config: %v", err)
 	}
 }
 

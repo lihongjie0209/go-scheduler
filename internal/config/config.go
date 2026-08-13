@@ -37,6 +37,7 @@ type Config struct {
 	SMTPUsername              string
 	SMTPPassword              string
 	SMTPFrom                  string
+	SMTPTLSMode               string
 	GRPCTLSCert               string
 	GRPCTLSKey                string
 	GRPCTLSCA                 string
@@ -88,6 +89,7 @@ func Load(serviceName string) (Config, error) {
 		SMTPUsername:              os.Getenv("SMTP_USERNAME"),
 		SMTPPassword:              os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:                  os.Getenv("SMTP_FROM"),
+		SMTPTLSMode:               strings.ToLower(env("SMTP_TLS_MODE", "starttls")),
 		GRPCTLSCert:               os.Getenv("GRPC_TLS_CERT"),
 		GRPCTLSKey:                os.Getenv("GRPC_TLS_KEY"),
 		GRPCTLSCA:                 os.Getenv("GRPC_TLS_CA"),
@@ -124,6 +126,9 @@ func Load(serviceName string) (Config, error) {
 	}
 	if c.Workers <= 0 {
 		return Config{}, fmt.Errorf("WORKERS must be positive")
+	}
+	if c.SMTPTLSMode != "starttls" && c.SMTPTLSMode != "tls" && c.SMTPTLSMode != "none" {
+		return Config{}, fmt.Errorf("SMTP_TLS_MODE must be starttls, tls, or none")
 	}
 	if err := validatePoolSize("API", c.APIDatabaseMinConns, c.APIDatabaseMaxConns); err != nil {
 		return Config{}, err

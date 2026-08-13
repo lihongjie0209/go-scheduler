@@ -154,7 +154,7 @@ func newEngine(c config.Config, s *coreStore) (*core.Engine, error) {
 
 func newNotifier(c config.Config, s *coreStore) *notifier.Worker {
 	return notifier.New(s.Store, c.InstanceID, notifier.SMTPConfig{
-		Address: c.SMTPAddress, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.SMTPFrom,
+		Address: c.SMTPAddress, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.SMTPFrom, TLSMode: c.SMTPTLSMode,
 	})
 }
 

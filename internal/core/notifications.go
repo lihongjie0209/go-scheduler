@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/mail"
 	"net/url"
 	"strings"
 	"text/template"
@@ -103,7 +104,9 @@ func validateNotificationConfig(kind string, raw json.RawMessage) error {
 		}
 	case "email":
 		var config struct {
-			To []string `json:"to"`
+			To       []string `json:"to"`
+			Subject  string   `json:"subject"`
+			Template string   `json:"template"`
 		}
 		if err := json.Unmarshal(raw, &config); err != nil || len(config.To) == 0 {
 			return fmt.Errorf("email config requires at least one recipient")
@@ -112,8 +115,22 @@ func validateNotificationConfig(kind string, raw json.RawMessage) error {
 			return fmt.Errorf("email config supports at most 100 recipients")
 		}
 		for _, recipient := range config.To {
-			if !strings.Contains(recipient, "@") {
+			address, parseErr := mail.ParseAddress(recipient)
+			if parseErr != nil || address.Address != recipient || len(recipient) > 320 || strings.ContainsAny(recipient, "\r\n") {
 				return fmt.Errorf("invalid email recipient")
+			}
+		}
+		if len(config.Subject) > 998 || strings.ContainsAny(config.Subject, "\r\n") {
+			return fmt.Errorf("invalid email subject")
+		}
+		if len(config.Template) > maxNotificationTemplateBytes {
+			return fmt.Errorf("email template exceeds 64 KiB")
+		}
+		for name, source := range map[string]string{"subject": config.Subject, "template": config.Template} {
+			if source != "" {
+				if _, err := template.New("email_" + name).Option("missingkey=error").Parse(source); err != nil {
+					return fmt.Errorf("invalid email %s", name)
+				}
 			}
 		}
 	default:

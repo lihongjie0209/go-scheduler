@@ -64,6 +64,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `HISTORY_RETENTION` | `2160h` | 历史记录和运行分区保留期，必须不超过 90 天 |
 | `SMTP_ADDRESS` | 空 | 邮件告警 SMTP 地址，例如 `smtp.example.com:587` |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | 空 | SMTP 凭据和发件人 |
+| `SMTP_TLS_MODE` | `starttls` | SMTP 传输模式：强制 STARTTLS、`tls` 隐式 TLS，或显式选择 `none` 明文兼容模式 |
 
 生产环境应为 PostgreSQL、公开 HTTP API 和跨主机内部 gRPC 配置 TLS。HTTP、脚本和容器任务的网络访问不做目标地址限制。
 
@@ -282,6 +283,8 @@ Cron 使用包含秒字段的 6 字段表达式，并按任务配置的 IANA 时
 通知采用多订阅模型，支持 `webhook`、`email` 和 `dingtalk` provider。每个订阅可通过 `--events pending,running,waiting_callback,succeeded,failed,timed_out,cancelled,skipped,exhausted` 监听完整运行生命周期；`--all-jobs=false --job-ids ID1,ID2` 可绑定指定任务，默认订阅全部任务。每个渠道可配置 `--max-attempts`、`--backoff-initial-seconds` 和 `--backoff-max-seconds`，投递耗尽后进入 `dead`，不会永久阻塞 Outbox。
 
 通用 Webhook 配置支持地址、自定义 Header 和 JSON Go 模板，例如 `schedulerctl notifications create --kind webhook --name ops --events succeeded,exhausted --config '{"url":"https://hooks.example.com/job","template":"{\"run\":\"{{.Payload.run_id}}\",\"status\":\"{{.Payload.status}}\"}"}'`。钉钉机器人支持 `none`、`access_token` 和 `hmac_sha256` 认证，例如 `--kind dingtalk --config '{"url":"https://oapi.dingtalk.com/robot/send","auth_type":"hmac_sha256","access_token":"...","secret":"...","template":"任务 {{.Payload.job_id}} 状态 {{.Payload.status}}"}'`。敏感配置随渠道配置整体加密落库。
+
+Email 渠道使用严格邮箱地址列表，并支持主题和正文模板，例如 `--kind email --config '{"to":["ops@example.com"],"subject":"任务 {{.Payload.job_id}} {{.Payload.status}}","template":"run={{.Payload.run_id}} error={{.Payload.error}}"}'`。模板渲染后的主题禁止换行，避免邮件头注入；省略模板时保持原有 JSON 生命周期事件正文。
 
 使用 `schedulerctl notifications history` 查询投递历史，可用 `--channel-id`、`--job-id`、`--status pending|delivered|dead` 和 `--limit` 过滤。响应包含更多记录时会返回 `next_cursor`，通过 `--cursor <next_cursor>` 稳定读取下一页。投递语义为 at-least-once；通用 Webhook 会携带 `Idempotency-Key` 和 `X-Go-Scheduler-Event-ID`，接收方应按事件 ID 幂等。
 

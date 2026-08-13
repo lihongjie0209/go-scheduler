@@ -98,6 +98,29 @@ func TestLoadDatabasePoolConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadSMTPTransportMode(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("SERVICE_TOKEN", "service-token")
+	t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
+	config, err := Load("scheduler-server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SMTPTLSMode != "starttls" {
+		t.Fatalf("default SMTP TLS mode = %q", config.SMTPTLSMode)
+	}
+	t.Setenv("SMTP_TLS_MODE", "TLS")
+	config, err = Load("scheduler-server")
+	if err != nil || config.SMTPTLSMode != "tls" {
+		t.Fatalf("SMTP TLS mode = %q, %v", config.SMTPTLSMode, err)
+	}
+	t.Setenv("SMTP_TLS_MODE", "opportunistic")
+	if _, err = Load("scheduler-server"); err == nil {
+		t.Fatal("invalid SMTP TLS mode was accepted")
+	}
+}
+
 func TestLoadRejectsInvalidDatabasePoolConfiguration(t *testing.T) {
 	tests := []struct {
 		name, variable, value string

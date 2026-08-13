@@ -90,7 +90,7 @@ func newEngine(c config.Config, s *store.Store) (*core.Engine, error) {
 	return core.NewEngine(s, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorGRPCTransport(c.ServiceToken, transport)), nil
 }
 func newNotifier(c config.Config, s *store.Store) *notifier.Worker {
-	return notifier.New(s, c.InstanceID, notifier.SMTPConfig{Address: c.SMTPAddress, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.SMTPFrom})
+	return notifier.New(s, c.InstanceID, notifier.SMTPConfig{Address: c.SMTPAddress, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.SMTPFrom, TLSMode: c.SMTPTLSMode})
 }
 func newCoreHTTPServer(c config.Config, s *store.Store) *http.Server {
 	mux := http.NewServeMux()

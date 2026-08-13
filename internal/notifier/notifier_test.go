@@ -1,9 +1,11 @@
 package notifier
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,6 +42,62 @@ func TestWebhookTemplateRendersLifecyclePayload(t *testing.T) {
 	}
 	if got := string(body); got != `{"id":"event-1","run":"run-1","status":"succeeded"}` {
 		t.Fatalf("rendered body = %s", got)
+	}
+}
+
+func TestEmailContentRendersLifecyclePayload(t *testing.T) {
+	t.Parallel()
+	event := store.OutboxEvent{ID: "event-1", Topic: "job.run.failed", Payload: []byte(`{"job_id":"job-1","status":"failed"}`)}
+	subject, body, contentType, err := emailContent(`Job {{.Payload.job_id}} {{.Payload.status}}`, `event={{.EventID}} topic={{.Topic}}`, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject != "Job job-1 failed" || body != "event=event-1 topic=job.run.failed" || contentType != "text/plain; charset=utf-8" {
+		t.Fatalf("email content = subject %q body %q type %q", subject, body, contentType)
+	}
+}
+
+func TestEmailContentRejectsRenderedSubjectInjection(t *testing.T) {
+	t.Parallel()
+	event := store.OutboxEvent{Topic: "job.run.failed", Payload: []byte(`{"subject":"safe\r\nBcc: attacker@example.com"}`)}
+	if _, _, _, err := emailContent(`{{.Payload.subject}}`, "", event); err == nil {
+		t.Fatal("rendered email subject containing a newline was accepted")
+	}
+}
+
+func TestEmailRequiresSTARTTLSByDefault(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer connection.Close()
+		_, _ = connection.Write([]byte("220 smtp.example.test ESMTP\r\n"))
+		reader := bufio.NewReader(connection)
+		if _, readErr := reader.ReadString('\n'); readErr != nil {
+			return
+		}
+		_, _ = connection.Write([]byte("250 smtp.example.test\r\n"))
+		_, _ = reader.ReadString('\n')
+	}()
+	worker := New(nil, "test", SMTPConfig{Address: listener.Addr().String(), From: "scheduler@example.com"})
+	channel := store.NotificationChannel{Config: json.RawMessage(`{"to":["ops@example.com"]}`)}
+	event := store.OutboxEvent{Topic: "job.run.failed", Payload: []byte(`{"run_id":"run-1"}`)}
+	if err = worker.email(t.Context(), channel, event); err == nil || !strings.Contains(err.Error(), "STARTTLS") {
+		t.Fatalf("email error = %v, want STARTTLS requirement", err)
+	}
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("fake SMTP server did not stop")
 	}
 }
 

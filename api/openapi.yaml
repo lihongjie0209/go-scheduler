@@ -346,7 +346,7 @@ components:
       properties:
         kind: {type: string, enum: [webhook, email, dingtalk]}
         name: {type: string, minLength: 1}
-        config: {type: object, writeOnly: true, description: "Webhook requires url and optional headers; email requires a non-empty to array; DingTalk supports none, access_token, or hmac_sha256 authentication. Omit on update to preserve the existing encrypted configuration."}
+        config: {type: object, writeOnly: true, description: "Webhook requires url and optional headers; email requires a non-empty to array and supports subject/template; DingTalk supports none, access_token, or hmac_sha256 authentication. Omit on update to preserve the existing encrypted configuration."}
         events: {type: array, uniqueItems: true, items: {type: string, enum: [pending, running, waiting_callback, succeeded, failed, timed_out, cancelled, skipped, exhausted]}}
         all_jobs: {type: boolean}
         job_ids: {type: array, uniqueItems: true, maxItems: 10000, items: {type: string, format: uuid}}
