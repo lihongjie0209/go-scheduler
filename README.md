@@ -77,7 +77,7 @@ Executor 连接 Core/standalone 时可设置 `SCHEDULER_GRPC_TLS_CA` 和 `SCHEDU
 
 ## Go Executor SDK
 
-`pkg/executor` 可将 Go 函数注册为命名 handler。Core 通过 gRPC `Dispatch` 下发并立即释放调度 worker；Executor 异步运行 handler，通过 Scheduler gRPC 回报 Rolling 日志和最终状态，并提供幂等下发、取消、状态查询和 TTL 注册。外部系统的 HTTP 异步 callback 统一由 API Server 接收，再通过 gRPC 转交 Core 状态机。
+`pkg/executor` 可将 Go 函数注册为命名 handler。Core 通过 gRPC `Dispatch` 下发并立即释放调度 worker；Executor 异步运行 handler，通过 Scheduler gRPC 回报 Rolling 日志和最终状态，并提供幂等下发、取消、状态查询和 TTL 注册。最终状态遇到瞬时 gRPC 故障时会在 2 分钟总时限内指数退避重试；认证、权限、参数或已消费 token 等永久错误不会重试。执行器仅保留最近 24 小时、最多 10,000 条终态幂等记录，活跃任务不参与清理。外部系统的 HTTP 异步 callback 统一由 API Server 接收，再通过 gRPC 转交 Core 状态机。
 
 ```go
 server, _ := executor.NewServer(executor.Options{SchedulerURL: "http://scheduler.invalid"})

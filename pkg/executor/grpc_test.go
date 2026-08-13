@@ -9,13 +9,56 @@ import (
 
 	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
 type recordingReporter struct {
 	mu        sync.Mutex
 	completed chan bool
+}
+
+type scriptedReporter struct {
+	mu      sync.Mutex
+	results []error
+	calls   int
+}
+
+func (r *scriptedReporter) AppendLog(context.Context, string, string, string, string) error {
+	return nil
+}
+func (r *scriptedReporter) Complete(context.Context, string, string, bool, string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	index := r.calls
+	r.calls++
+	if index < len(r.results) {
+		return r.results[index]
+	}
+	return nil
+}
+func (r *scriptedReporter) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+type blockingReporter struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *blockingReporter) AppendLog(context.Context, string, string, string, string) error {
+	return nil
+}
+func (r *blockingReporter) Complete(ctx context.Context, _ string, _ string, _ bool, _ string) error {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (r *recordingReporter) AppendLog(context.Context, string, string, string, string) error {
@@ -161,6 +204,71 @@ func TestGRPCExecutionHistoryIsBounded(t *testing.T) {
 	}
 	if _, exists := service.runs["active"]; !exists {
 		t.Fatal("active execution was pruned")
+	}
+}
+
+func TestGRPCCompletionReportRetriesTransientErrors(t *testing.T) {
+	t.Parallel()
+	reporter := &scriptedReporter{results: []error{
+		status.Error(codes.Unavailable, "core unavailable"),
+		status.Error(codes.ResourceExhausted, "core overloaded"),
+		nil,
+	}}
+	service := completionRetryTestServer(reporter)
+	service.reportCompletion(&executorv1.DispatchRequest{RunId: "retry-run", CallbackToken: "token"}, true, "")
+	if calls := reporter.callCount(); calls != 3 {
+		t.Fatalf("completion report calls = %d, want 3", calls)
+	}
+}
+
+func TestGRPCCompletionReportStopsOnPermanentError(t *testing.T) {
+	t.Parallel()
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.NotFound} {
+		code := code
+		t.Run(code.String(), func(t *testing.T) {
+			t.Parallel()
+			reporter := &scriptedReporter{results: []error{status.Error(code, "permanent")}}
+			service := completionRetryTestServer(reporter)
+			service.reportCompletion(&executorv1.DispatchRequest{RunId: "permanent-run", CallbackToken: "token"}, false, "failed")
+			if calls := reporter.callCount(); calls != 1 {
+				t.Fatalf("completion report calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestGRPCCompletionReportHasAttemptLimit(t *testing.T) {
+	t.Parallel()
+	reporter := &scriptedReporter{results: []error{
+		status.Error(codes.Unavailable, "one"), status.Error(codes.Unavailable, "two"),
+		status.Error(codes.Unavailable, "three"), status.Error(codes.Unavailable, "four"),
+		status.Error(codes.Unavailable, "five"), status.Error(codes.Unavailable, "six"),
+	}}
+	service := completionRetryTestServer(reporter)
+	service.reportCompletion(&executorv1.DispatchRequest{RunId: "exhausted-run", CallbackToken: "token"}, true, "")
+	if calls := reporter.callCount(); calls != service.completionMaxAttempts {
+		t.Fatalf("completion report calls = %d, want %d", calls, service.completionMaxAttempts)
+	}
+}
+
+func TestGRPCCompletionReportHasOverallDeadline(t *testing.T) {
+	t.Parallel()
+	reporter := &blockingReporter{}
+	service := completionRetryTestServer(reporter)
+	service.completionAttemptTimeout = time.Second
+	service.completionReportTimeout = 20 * time.Millisecond
+	started := time.Now()
+	service.reportCompletion(&executorv1.DispatchRequest{RunId: "deadline-run", CallbackToken: "token"}, true, "")
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("completion report exceeded overall deadline: %s", elapsed)
+	}
+}
+
+func completionRetryTestServer(reporter Reporter) *GRPCServer {
+	return &GRPCServer{
+		reporter: reporter, completionMaxAttempts: 5,
+		completionAttemptTimeout: 50 * time.Millisecond, completionReportTimeout: time.Second,
+		completionInitialBackoff: time.Millisecond, completionMaxBackoff: 2 * time.Millisecond,
 	}
 }
 

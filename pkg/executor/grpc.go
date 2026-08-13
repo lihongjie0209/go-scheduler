@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -36,6 +37,11 @@ type executionCompletion struct {
 const (
 	defaultExecutionHistoryLimit     = 10_000
 	defaultExecutionHistoryRetention = 24 * time.Hour
+	defaultCompletionMaxAttempts     = 6
+	defaultCompletionAttemptTimeout  = 10 * time.Second
+	defaultCompletionReportTimeout   = 2 * time.Minute
+	defaultCompletionInitialBackoff  = 200 * time.Millisecond
+	defaultCompletionMaxBackoff      = 5 * time.Second
 )
 
 // GRPCServer is the executor-facing control plane. Dispatch acknowledges after
@@ -43,20 +49,31 @@ const (
 // asynchronously so long-running work never occupies a Core dispatch worker.
 type GRPCServer struct {
 	executorv1.UnimplementedExecutorServiceServer
-	server           *Server
-	reporter         Reporter
-	mu               sync.RWMutex
-	runs             map[string]*execution
-	completed        []executionCompletion
-	historyLimit     int
-	historyRetention time.Duration
+	server                   *Server
+	reporter                 Reporter
+	mu                       sync.RWMutex
+	runs                     map[string]*execution
+	completed                []executionCompletion
+	historyLimit             int
+	historyRetention         time.Duration
+	completionMaxAttempts    int
+	completionAttemptTimeout time.Duration
+	completionReportTimeout  time.Duration
+	completionInitialBackoff time.Duration
+	completionMaxBackoff     time.Duration
 }
 
 func NewGRPCServer(server *Server, reporter Reporter) (*GRPCServer, error) {
 	if server == nil || reporter == nil {
 		return nil, errors.New("executor server and reporter are required")
 	}
-	return &GRPCServer{server: server, reporter: reporter, runs: make(map[string]*execution), historyLimit: defaultExecutionHistoryLimit, historyRetention: defaultExecutionHistoryRetention}, nil
+	return &GRPCServer{
+		server: server, reporter: reporter, runs: make(map[string]*execution),
+		historyLimit: defaultExecutionHistoryLimit, historyRetention: defaultExecutionHistoryRetention,
+		completionMaxAttempts: defaultCompletionMaxAttempts, completionAttemptTimeout: defaultCompletionAttemptTimeout,
+		completionReportTimeout: defaultCompletionReportTimeout, completionInitialBackoff: defaultCompletionInitialBackoff,
+		completionMaxBackoff: defaultCompletionMaxBackoff,
+	}, nil
 }
 
 func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchRequest) (*executorv1.DispatchResponse, error) {
@@ -129,9 +146,43 @@ func (s *GRPCServer) finish(request *executorv1.DispatchRequest, handlerErr erro
 	if !transitioned {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = s.reporter.Complete(ctx, request.GetRunId(), request.GetCallbackToken(), handlerErr == nil, message)
+	s.reportCompletion(request, handlerErr == nil, message)
+}
+
+func (s *GRPCServer) reportCompletion(request *executorv1.DispatchRequest, succeeded bool, message string) {
+	reportCtx, cancelReport := context.WithTimeout(context.Background(), s.completionReportTimeout)
+	defer cancelReport()
+	backoff := s.completionInitialBackoff
+	for attempt := 1; attempt <= s.completionMaxAttempts; attempt++ {
+		attemptCtx, cancelAttempt := context.WithTimeout(reportCtx, s.completionAttemptTimeout)
+		err := s.reporter.Complete(attemptCtx, request.GetRunId(), request.GetCallbackToken(), succeeded, message)
+		cancelAttempt()
+		if err == nil || isPermanentCompletionError(err) {
+			return
+		}
+		if attempt == s.completionMaxAttempts {
+			slog.Error("executor completion report exhausted", "run_id", request.GetRunId(), "attempts", attempt, "error", err)
+			return
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-reportCtx.Done():
+			timer.Stop()
+			slog.Error("executor completion report timed out", "run_id", request.GetRunId(), "attempts", attempt, "error", reportCtx.Err())
+			return
+		case <-timer.C:
+		}
+		backoff = min(backoff*2, s.completionMaxBackoff)
+	}
+}
+
+func isPermanentCompletionError(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.NotFound, codes.AlreadyExists, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *GRPCServer) pruneExecutionHistoryLocked(now time.Time) {
