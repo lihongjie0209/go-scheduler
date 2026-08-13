@@ -3437,6 +3437,7 @@ type ListNotificationHistoryRequest struct {
 	JobId         string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
 	Limit         int32                  `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
+	Cursor        string                 `protobuf:"bytes,6,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3506,9 +3507,17 @@ func (x *ListNotificationHistoryRequest) GetLimit() int32 {
 	return 0
 }
 
+func (x *ListNotificationHistoryRequest) GetCursor() string {
+	if x != nil {
+		return x.Cursor
+	}
+	return ""
+}
+
 type ListNotificationHistoryResponse struct {
 	state         protoimpl.MessageState      `protogen:"open.v1"`
 	Deliveries    []*NotificationHistoryEntry `protobuf:"bytes,1,rep,name=deliveries,proto3" json:"deliveries,omitempty"`
+	NextCursor    string                      `protobuf:"bytes,2,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3548,6 +3557,13 @@ func (x *ListNotificationHistoryResponse) GetDeliveries() []*NotificationHistory
 		return x.Deliveries
 	}
 	return nil
+}
+
+func (x *ListNotificationHistoryResponse) GetNextCursor() string {
+	if x != nil {
+		return x.NextCursor
+	}
+	return ""
 }
 
 type GetRunReportRequest struct {
@@ -4178,18 +4194,21 @@ const file_scheduler_v1_scheduler_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12=\n" +
 	"\fdelivered_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\vdeliveredAt\x123\n" +
-	"\adead_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\x06deadAt\"\xa1\x01\n" +
+	"\adead_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\x06deadAt\"\xb9\x01\n" +
 	"\x1eListNotificationHistoryRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x02 \x01(\tR\tchannelId\x12\x15\n" +
 	"\x06job_id\x18\x03 \x01(\tR\x05jobId\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x14\n" +
-	"\x05limit\x18\x05 \x01(\x05R\x05limit\"i\n" +
+	"\x05limit\x18\x05 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06cursor\x18\x06 \x01(\tR\x06cursor\"\x8a\x01\n" +
 	"\x1fListNotificationHistoryResponse\x12F\n" +
 	"\n" +
 	"deliveries\x18\x01 \x03(\v2&.scheduler.v1.NotificationHistoryEntryR\n" +
-	"deliveries\"\x84\x01\n" +
+	"deliveries\x12\x1f\n" +
+	"\vnext_cursor\x18\x02 \x01(\tR\n" +
+	"nextCursor\"\x84\x01\n" +
 	"\x13GetRunReportRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tfrom_date\x18\x02 \x01(\tR\bfromDate\x12\x17\n" +

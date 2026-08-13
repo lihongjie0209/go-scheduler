@@ -66,6 +66,9 @@ func emitRunEventTx(ctx context.Context, tx pgx.Tx, runID, expectedStatus, event
 }
 
 func (s *Store) CreateNotificationChannel(ctx context.Context, channel NotificationChannel) (NotificationChannel, error) {
+	if channel.AllJobs == (len(channel.JobIDs) > 0) {
+		return NotificationChannel{}, ErrInvalidNotificationScope
+	}
 	channel.ID = uuid.NewString()
 	storedConfig := channel.Config
 	var encrypted []byte
@@ -257,11 +260,12 @@ func (s *Store) finishNotificationDelivery(ctx context.Context, owner, deliveryI
 	return tx.Commit(ctx)
 }
 
-func (s *Store) NotificationHistory(ctx context.Context, tenantID, channelID, jobID, deliveryStatus string, limit int) ([]NotificationHistoryEntry, error) {
+func (s *Store) NotificationHistory(ctx context.Context, tenantID, channelID, jobID, deliveryStatus string, beforeCreatedAt *time.Time, beforeID *string, limit int) ([]NotificationHistoryEntry, error) {
 	rows, err := s.pool.Query(ctx, `SELECT d.id,d.event_id,n.id,n.name,n.kind,e.topic,COALESCE(e.payload->>'job_id',''),COALESCE(e.payload->>'run_id',''),d.status,d.attempts,COALESCE(d.last_error,''),d.created_at,d.delivered_at,d.dead_at
 		FROM notification_deliveries d JOIN outbox_events e ON e.id=d.event_id JOIN notification_channels n ON n.id=d.channel_id
 		WHERE e.tenant_id=$1 AND ($2='' OR n.id=$2::uuid) AND ($3='' OR e.payload->>'job_id'=$3) AND ($4='' OR d.status=$4)
-		ORDER BY d.created_at DESC,d.id DESC LIMIT $5`, tenantID, channelID, jobID, deliveryStatus, limit)
+		AND ($5::timestamptz IS NULL OR (d.created_at,d.id)<($5,$6::uuid))
+		ORDER BY d.created_at DESC,d.id DESC LIMIT $7`, tenantID, channelID, jobID, deliveryStatus, beforeCreatedAt, beforeID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list notification history: %w", err)
 	}

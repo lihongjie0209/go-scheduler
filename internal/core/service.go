@@ -642,6 +642,8 @@ func toStatus(err error) error {
 		return status.Error(codes.FailedPrecondition, "executor group is still referenced by a job")
 	case errors.Is(err, store.ErrOverrideRequiresExecutorGroup):
 		return status.Error(codes.FailedPrecondition, "executor address override requires an executor group job")
+	case errors.Is(err, store.ErrInvalidNotificationScope):
+		return status.Error(codes.InvalidArgument, "notification channel must target all jobs or one or more specific jobs")
 	default:
 		return status.Error(codes.Internal, fmt.Sprintf("operation failed: %v", err))
 	}

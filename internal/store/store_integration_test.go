@@ -1485,6 +1485,13 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if _, err = one.pool.Exec(ctx, `UPDATE outbox_events SET published_at=now() WHERE published_at IS NULL`); err != nil {
 		t.Fatal(err)
 	}
+	crossTenantNotificationJob, err := one.CreateJob(ctx, Job{TenantID: otherTenantID, Name: "notification-isolation", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: "https://example.com", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "webhook", Name: "invalid-cross-tenant-scope", Config: json.RawMessage(`{"url":"https://alerts.example.com"}`), Events: []string{"job.run.exhausted"}, AllJobs: true, JobIDs: []string{crossTenantNotificationJob.ID}, MaxAttempts: 1, BackoffInitialSeconds: 1, BackoffMaxSeconds: 1}); err != ErrInvalidNotificationScope {
+		t.Fatalf("ambiguous cross-tenant notification scope error = %v, want ErrInvalidNotificationScope", err)
+	}
 	if _, err = one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "webhook", Name: "primary-alerts", Config: json.RawMessage(`{"url":"https://alerts.example.com/primary"}`), Events: []string{"job.run.exhausted"}, AllJobs: true, MaxAttempts: 8, BackoffInitialSeconds: 2, BackoffMaxSeconds: 300}); err != nil {
 		t.Fatal(err)
 	}
@@ -1571,9 +1578,18 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err = one.DeadLetterNotificationDelivery(ctx, "notifier-dead", deadDeliveries[0].ID, matchingEventID, "attempts exhausted"); err != nil {
 		t.Fatal(err)
 	}
-	history, err := one.NotificationHistory(ctx, tenantID, scoped.ID, queueLimited.ID, "dead", 10)
+	history, err := one.NotificationHistory(ctx, tenantID, scoped.ID, queueLimited.ID, "dead", nil, nil, 10)
 	if err != nil || len(history) != 1 || history[0].RunID != "matching" || history[0].Attempts != 1 || history[0].LastError != "attempts exhausted" || history[0].DeadAt == nil {
 		t.Fatalf("notification history = %+v, %v", history, err)
+	}
+	firstHistoryPage, err := one.NotificationHistory(ctx, tenantID, "", "", "", nil, nil, 2)
+	if err != nil || len(firstHistoryPage) != 2 {
+		t.Fatalf("first notification history page = %+v, %v", firstHistoryPage, err)
+	}
+	beforeCreatedAt, beforeID := firstHistoryPage[1].CreatedAt, firstHistoryPage[1].DeliveryID
+	secondHistoryPage, err := one.NotificationHistory(ctx, tenantID, "", "", "", &beforeCreatedAt, &beforeID, 10)
+	if err != nil || len(secondHistoryPage) != 1 || secondHistoryPage[0].DeliveryID == firstHistoryPage[0].DeliveryID || secondHistoryPage[0].DeliveryID == firstHistoryPage[1].DeliveryID {
+		t.Fatalf("second notification history page = %+v, %v", secondHistoryPage, err)
 	}
 	var reportTenantID string
 	if err = one.pool.QueryRow(ctx, `INSERT INTO tenants(name) VALUES('report-isolation') RETURNING id`).Scan(&reportTenantID); err != nil {

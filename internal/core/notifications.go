@@ -2,15 +2,18 @@ package core
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/google/uuid"
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
+	"golang.org/x/net/http/httpguts"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -21,12 +24,23 @@ var notificationEventTypes = map[string]struct{}{
 	"failed": {}, "timed_out": {}, "cancelled": {}, "skipped": {}, "exhausted": {},
 }
 
+const (
+	maxNotificationConfigBytes   = 256 << 10
+	maxNotificationTemplateBytes = 64 << 10
+	maxNotificationRecipients    = 100
+	maxNotificationHeaders       = 100
+)
+
 func validateNotificationConfig(kind string, raw json.RawMessage) error {
+	if len(raw) == 0 || len(raw) > maxNotificationConfigBytes {
+		return fmt.Errorf("notification config must be between 1 byte and 256 KiB")
+	}
 	switch kind {
 	case "webhook":
 		var config struct {
-			URL      string `json:"url"`
-			Template string `json:"template"`
+			URL      string            `json:"url"`
+			Headers  map[string]string `json:"headers"`
+			Template string            `json:"template"`
 		}
 		if err := json.Unmarshal(raw, &config); err != nil {
 			return fmt.Errorf("invalid webhook config")
@@ -34,6 +48,17 @@ func validateNotificationConfig(kind string, raw json.RawMessage) error {
 		parsed, err := url.ParseRequestURI(config.URL)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
 			return fmt.Errorf("webhook url must be an absolute HTTP or HTTPS URL without userinfo")
+		}
+		if len(config.Headers) > maxNotificationHeaders {
+			return fmt.Errorf("webhook config supports at most 100 headers")
+		}
+		for key, value := range config.Headers {
+			if len(key) > 256 || len(value) > 8192 || !httpguts.ValidHeaderFieldName(key) || !httpguts.ValidHeaderFieldValue(value) {
+				return fmt.Errorf("invalid webhook header size")
+			}
+		}
+		if len(config.Template) > maxNotificationTemplateBytes {
+			return fmt.Errorf("webhook template exceeds 64 KiB")
 		}
 		if config.Template != "" {
 			if _, err = template.New("webhook").Option("missingkey=error").Parse(config.Template); err != nil {
@@ -68,6 +93,9 @@ func validateNotificationConfig(kind string, raw json.RawMessage) error {
 		default:
 			return fmt.Errorf("dingtalk auth_type must be none, access_token, or hmac_sha256")
 		}
+		if len(config.Template) > maxNotificationTemplateBytes {
+			return fmt.Errorf("dingtalk template exceeds 64 KiB")
+		}
 		if config.Template != "" {
 			if _, err = template.New("dingtalk").Option("missingkey=error").Parse(config.Template); err != nil {
 				return fmt.Errorf("invalid dingtalk template")
@@ -79,6 +107,9 @@ func validateNotificationConfig(kind string, raw json.RawMessage) error {
 		}
 		if err := json.Unmarshal(raw, &config); err != nil || len(config.To) == 0 {
 			return fmt.Errorf("email config requires at least one recipient")
+		}
+		if len(config.To) > maxNotificationRecipients {
+			return fmt.Errorf("email config supports at most 100 recipients")
 		}
 		for _, recipient := range config.To {
 			if !strings.Contains(recipient, "@") {
@@ -95,6 +126,9 @@ func (s *Service) CreateNotificationChannel(ctx context.Context, req *schedulerv
 	if req.GetTenantId() == "" || strings.TrimSpace(req.GetName()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and name are required")
 	}
+	if len(strings.TrimSpace(req.GetName())) > 200 {
+		return nil, status.Error(codes.InvalidArgument, "name must not exceed 200 bytes")
+	}
 	if err := validateNotificationConfig(req.GetKind(), req.GetConfigJson()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -105,6 +139,9 @@ func (s *Service) CreateNotificationChannel(ctx context.Context, req *schedulerv
 	jobIDs, err := normalizeNotificationJobIDs(req.GetJobIds())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req.GetAllJobs() && len(jobIDs) > 0 {
+		return nil, status.Error(codes.InvalidArgument, "all_jobs cannot be combined with job_ids")
 	}
 	allJobs := req.GetAllJobs() || len(jobIDs) == 0
 	maxAttempts := int(req.GetMaxAttempts())
@@ -159,6 +196,9 @@ func boundedInt32(value int) int32 {
 }
 
 func normalizeNotificationEvents(events []string) ([]string, error) {
+	if len(events) > 100 {
+		return nil, fmt.Errorf("at most 100 notification events are allowed")
+	}
 	if len(events) == 0 {
 		events = []string{"exhausted"}
 	}
@@ -187,6 +227,9 @@ func trimEventPrefixes(events []string) []string {
 }
 
 func normalizeNotificationJobIDs(ids []string) ([]string, error) {
+	if len(ids) > 10000 {
+		return nil, fmt.Errorf("at most 10000 notification job IDs are allowed")
+	}
 	seen := make(map[string]struct{}, len(ids))
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -223,9 +266,17 @@ func (s *Service) ListNotificationHistory(ctx context.Context, req *schedulerv1.
 	if limit < 1 || limit > 500 {
 		return nil, status.Error(codes.InvalidArgument, "limit must be between 1 and 500")
 	}
-	entries, err := s.store.NotificationHistory(ctx, req.GetTenantId(), req.GetChannelId(), req.GetJobId(), req.GetStatus(), limit)
+	cursor, err := decodeNotificationHistoryCursor(req.GetCursor())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid notification history cursor")
+	}
+	entries, err := s.store.NotificationHistory(ctx, req.GetTenantId(), req.GetChannelId(), req.GetJobId(), req.GetStatus(), cursor.createdAt, cursor.id, limit+1)
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	hasMore := len(entries) > limit
+	if hasMore {
+		entries = entries[:limit]
 	}
 	out := &schedulerv1.ListNotificationHistoryResponse{Deliveries: make([]*schedulerv1.NotificationHistoryEntry, 0, len(entries))}
 	for _, entry := range entries {
@@ -238,5 +289,47 @@ func (s *Service) ListNotificationHistory(ctx context.Context, req *schedulerv1.
 		}
 		out.Deliveries = append(out.Deliveries, item)
 	}
+	if hasMore {
+		last := entries[len(entries)-1]
+		out.NextCursor = encodeNotificationHistoryCursor(last.CreatedAt, last.DeliveryID)
+	}
 	return out, nil
+}
+
+type notificationHistoryCursor struct {
+	createdAt *time.Time
+	id        *string
+}
+
+type notificationHistoryCursorPayload struct {
+	Version   int    `json:"v"`
+	CreatedAt string `json:"created_at"`
+	ID        string `json:"id"`
+}
+
+func encodeNotificationHistoryCursor(createdAt time.Time, id string) string {
+	payload, _ := json.Marshal(notificationHistoryCursorPayload{Version: 1, CreatedAt: createdAt.UTC().Format(time.RFC3339Nano), ID: id})
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeNotificationHistoryCursor(raw string) (notificationHistoryCursor, error) {
+	if raw == "" {
+		return notificationHistoryCursor{}, nil
+	}
+	if len(raw) > 512 {
+		return notificationHistoryCursor{}, fmt.Errorf("cursor is too long")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return notificationHistoryCursor{}, fmt.Errorf("decode cursor: %w", err)
+	}
+	var payload notificationHistoryCursorPayload
+	if err = json.Unmarshal(payloadBytes, &payload); err != nil || payload.Version != 1 || uuid.Validate(payload.ID) != nil {
+		return notificationHistoryCursor{}, fmt.Errorf("decode cursor payload")
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, payload.CreatedAt)
+	if err != nil || createdAt.IsZero() {
+		return notificationHistoryCursor{}, fmt.Errorf("decode cursor timestamp")
+	}
+	return notificationHistoryCursor{createdAt: &createdAt, id: &payload.ID}, nil
 }

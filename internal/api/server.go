@@ -351,7 +351,7 @@ func (s *Server) listNotificationHistory(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "limit must be between 1 and 500")
 		return
 	}
-	out, callErr := s.client.ListNotificationHistory(r.Context(), &schedulerv1.ListNotificationHistoryRequest{TenantId: tenantID(r.Context()), ChannelId: r.URL.Query().Get("channel_id"), JobId: r.URL.Query().Get("job_id"), Status: r.URL.Query().Get("status"), Limit: parsedInt32(limit)})
+	out, callErr := s.client.ListNotificationHistory(r.Context(), &schedulerv1.ListNotificationHistoryRequest{TenantId: tenantID(r.Context()), ChannelId: r.URL.Query().Get("channel_id"), JobId: r.URL.Query().Get("job_id"), Status: r.URL.Query().Get("status"), Limit: parsedInt32(limit), Cursor: r.URL.Query().Get("cursor")})
 	respond(w, out, callErr, http.StatusOK)
 }
 

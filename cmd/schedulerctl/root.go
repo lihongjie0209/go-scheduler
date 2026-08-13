@@ -639,7 +639,7 @@ func notificationsCommand(c *cliConfig) *cobra.Command {
 	_ = create.MarkFlagRequired("name")
 	_ = create.MarkFlagRequired("config")
 	cmd.AddCommand(create)
-	var historyChannelID, historyJobID, historyStatus string
+	var historyChannelID, historyJobID, historyStatus, historyCursor string
 	var historyLimit int
 	history := &cobra.Command{Use: "history", Short: "Query notification delivery history", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
 		query := url.Values{}
@@ -653,11 +653,15 @@ func notificationsCommand(c *cliConfig) *cobra.Command {
 		if historyStatus != "" {
 			query.Set("status", historyStatus)
 		}
+		if historyCursor != "" {
+			query.Set("cursor", historyCursor)
+		}
 		return runAuthenticated(c, http.MethodGet, "/api/v1/notification-history?"+query.Encode(), nil)(command, nil)
 	}}
 	history.Flags().StringVar(&historyChannelID, "channel-id", "", "filter by channel ID")
 	history.Flags().StringVar(&historyJobID, "job-id", "", "filter by job ID")
 	history.Flags().StringVar(&historyStatus, "status", "", "filter by pending, delivered, or dead")
+	history.Flags().StringVar(&historyCursor, "cursor", "", "continue from a previous next_cursor")
 	history.Flags().IntVar(&historyLimit, "limit", 100, "maximum rows (1-500)")
 	cmd.AddCommand(history)
 	return cmd
