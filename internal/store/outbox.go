@@ -46,11 +46,7 @@ const runLifecycleEventSQL = `INSERT INTO outbox_events(id,tenant_id,topic,paylo
 			'status',status,'attempt',attempt,'trigger_type',trigger_type,
 			'scheduled_at',scheduled_at,'started_at',started_at,'finished_at',finished_at,
 			'response_status',response_status,'error',COALESCE(error_message,''),'occurred_at',now())
-		FROM job_runs r WHERE r.id=$1 AND r.status=$2 AND EXISTS (
-			SELECT 1 FROM notification_channels n
-			WHERE n.tenant_id=r.tenant_id AND n.enabled AND ('job.run.'||$3)=ANY(n.event_types)
-			AND (n.all_jobs OR EXISTS(SELECT 1 FROM notification_channel_jobs j WHERE j.channel_id=n.id AND j.job_id=r.job_id))
-		)`
+		FROM job_runs r WHERE r.id=$1 AND r.status=$2`
 
 func emitRunLifecycleEventTx(ctx context.Context, tx pgx.Tx, runID, runStatus string) error {
 	return emitRunEventTx(ctx, tx, runID, runStatus, runStatus)
@@ -61,7 +57,8 @@ func emitRunEventTx(ctx context.Context, tx pgx.Tx, runID, expectedStatus, event
 	if err != nil {
 		return fmt.Errorf("emit run %s event: %w", eventType, err)
 	}
-	// Zero rows means that no enabled subscription matches this transition.
+	// The event is persisted independently of current subscribers so lifecycle
+	// history remains auditable and delivery matching can happen asynchronously.
 	return nil
 }
 

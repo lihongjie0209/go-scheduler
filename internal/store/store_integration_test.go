@@ -821,7 +821,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatalf("first attempt = %+v, %v", storedFirst, err)
 	}
 	var alarmCount int
-	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE payload->>'run_id'=$1`, firstAttempt.ID).Scan(&alarmCount); err != nil || alarmCount != 0 {
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE topic='job.run.exhausted' AND payload->>'run_id'=$1`, firstAttempt.ID).Scan(&alarmCount); err != nil || alarmCount != 0 {
 		t.Fatalf("intermediate alarm count = %d, %v", alarmCount, err)
 	}
 	claims, err = two.ClaimRuns(ctx, "retry-core-2", 10, time.Minute)
@@ -835,7 +835,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if _, err = two.FailRun(ctx, retryClaim.Run, "failed", http.StatusInternalServerError, "still failing", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE payload->>'run_id'=$1`, retry.ID).Scan(&alarmCount); err != nil || alarmCount != 1 {
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE topic='job.run.exhausted' AND payload->>'run_id'=$1`, retry.ID).Scan(&alarmCount); err != nil || alarmCount != 1 {
 		t.Fatalf("final alarm count = %d, %v", alarmCount, err)
 	}
 	parentJob := newPolicyJob("dependency-parent", "serial")
@@ -1335,7 +1335,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if callbackRetry == nil || callbackRetry.Attempt != 2 || callbackRetry.RuntimeInput != "payload" {
 		t.Fatalf("callback retry = %+v; runs=%+v", callbackRetry, callbackRuns)
 	}
-	if err = direct.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE payload->>'run_id'=$1`, failureCallbackClaim.Run.ID).Scan(&count); err != nil {
+	if err = direct.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE topic='job.run.exhausted' AND payload->>'run_id'=$1`, failureCallbackClaim.Run.ID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -1366,7 +1366,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if len(callbackRuns) != 2 || callbackRuns[0].Status != "failed" {
 		t.Fatalf("final callback runs = %+v", callbackRuns)
 	}
-	if err = direct.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE payload->>'run_id'=$1`, finalCallbackClaim.Run.ID).Scan(&count); err != nil {
+	if err = direct.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE topic='job.run.exhausted' AND payload->>'run_id'=$1`, finalCallbackClaim.Run.ID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -1412,7 +1412,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if timeoutRetry == nil || timeoutRetry.Attempt != 2 || timeoutRetry.RuntimeInput != "timeout-payload" {
 		t.Fatalf("callback timeout retry = %+v; runs=%+v", timeoutRetry, timeoutRuns)
 	}
-	if err = direct.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE payload->>'run_id'=$1`, timeoutClaim.Run.ID).Scan(&count); err != nil {
+	if err = direct.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE topic='job.run.exhausted' AND payload->>'run_id'=$1`, timeoutClaim.Run.ID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
