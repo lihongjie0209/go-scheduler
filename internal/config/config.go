@@ -44,10 +44,10 @@ type Config struct {
 	GRPCTLSServerName    string
 	SchedulerInterval    time.Duration
 	Workers              int
-	APIDatabaseMaxConns  int
-	APIDatabaseMinConns  int
-	CoreDatabaseMaxConns int
-	CoreDatabaseMinConns int
+	APIDatabaseMaxConns  int32
+	APIDatabaseMinConns  int32
+	CoreDatabaseMaxConns int32
+	CoreDatabaseMinConns int32
 	HistoryRetention     time.Duration
 }
 
@@ -91,10 +91,10 @@ func Load(serviceName string) (Config, error) {
 		GRPCTLSServerName:    os.Getenv("GRPC_TLS_SERVER_NAME"),
 		SchedulerInterval:    duration("SCHEDULER_INTERVAL", time.Second),
 		Workers:              integer("WORKERS", 16),
-		APIDatabaseMaxConns:  integer("API_DATABASE_MAX_CONNS", 8),
-		APIDatabaseMinConns:  integer("API_DATABASE_MIN_CONNS", 1),
-		CoreDatabaseMaxConns: integer("CORE_DATABASE_MAX_CONNS", 24),
-		CoreDatabaseMinConns: integer("CORE_DATABASE_MIN_CONNS", 2),
+		APIDatabaseMaxConns:  integer32("API_DATABASE_MAX_CONNS", 8),
+		APIDatabaseMinConns:  integer32("API_DATABASE_MIN_CONNS", 1),
+		CoreDatabaseMaxConns: integer32("CORE_DATABASE_MAX_CONNS", 24),
+		CoreDatabaseMinConns: integer32("CORE_DATABASE_MIN_CONNS", 2),
 		HistoryRetention:     duration("HISTORY_RETENTION", 90*24*time.Hour),
 	}
 	c.PublicBaseURL = appendContextPath(c.PublicBaseURL, c.APIContextPath)
@@ -135,7 +135,7 @@ func Load(serviceName string) (Config, error) {
 	return c, nil
 }
 
-func validatePoolSize(name string, minConns, maxConns int) error {
+func validatePoolSize(name string, minConns, maxConns int32) error {
 	if maxConns < 1 || maxConns > 10_000 || minConns < 0 || minConns > maxConns {
 		return fmt.Errorf("%s database pool requires 1 <= max <= 10000 and 0 <= min <= max", name)
 	}
@@ -212,4 +212,12 @@ func integer(key string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+func integer32(key string, fallback int32) int32 {
+	v, err := strconv.ParseInt(os.Getenv(key), 10, 32)
+	if err != nil {
+		return fallback
+	}
+	return int32(v) // #nosec G115 -- ParseInt with bitSize 32 guarantees the value is in range.
 }

@@ -41,7 +41,7 @@ func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring), store.WithPoolSize(int32(c.CoreDatabaseMaxConns), int32(c.CoreDatabaseMinConns)))
+	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring), store.WithPoolSize(c.CoreDatabaseMaxConns, c.CoreDatabaseMinConns))
 	if err != nil {
 		return nil, err
 	}

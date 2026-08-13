@@ -51,10 +51,10 @@ func newStoreCipher(c config.Config) (store.HeaderCipher, error) {
 	return cryptox.NewKeyring(c.MasterKeyVersion, c.MasterKey)
 }
 
-func openStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher, maxConns, minConns int) (*store.Store, error) {
+func openStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher, maxConns, minConns int32) (*store.Store, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(cipher), store.WithPoolSize(int32(maxConns), int32(minConns)))
+	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(cipher), store.WithPoolSize(maxConns, minConns))
 	if err != nil {
 		return nil, err
 	}

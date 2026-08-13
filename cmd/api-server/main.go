@@ -39,7 +39,7 @@ func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring), store.WithPoolSize(int32(c.APIDatabaseMaxConns), int32(c.APIDatabaseMinConns)))
+	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring), store.WithPoolSize(c.APIDatabaseMaxConns, c.APIDatabaseMinConns))
 	if err != nil {
 		return nil, err
 	}
