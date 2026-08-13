@@ -50,6 +50,7 @@ type lifecycleFixture struct {
 	client   schedulerv1.SchedulerServiceClient
 	tenantID string
 	dsn      string
+	cipher   store.HeaderCipher
 	close    func()
 }
 
@@ -83,9 +84,9 @@ func newEtcdFixture(t *testing.T) *clientv3.Client {
 	return client
 }
 
-func startHACore(t *testing.T, etcd *clientv3.Client, dsn, prefix, instanceID string) *haCoreNode {
+func startHACore(t *testing.T, etcd *clientv3.Client, dsn, prefix, instanceID string, cipher store.HeaderCipher) *haCoreNode {
 	t.Helper()
-	database, err := store.New(t.Context(), dsn)
+	database, err := store.New(t.Context(), dsn, store.WithHeaderCipher(cipher))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +205,7 @@ func newLifecycleFixtureWithEncryption(t *testing.T) lifecycleFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return lifecycleFixture{store: database, client: schedulerv1.NewSchedulerServiceClient(grpcConn), tenantID: tenantID, dsn: dsn, close: func() {
+	return lifecycleFixture{store: database, client: schedulerv1.NewSchedulerServiceClient(grpcConn), tenantID: tenantID, dsn: dsn, cipher: ring, close: func() {
 		_ = grpcConn.Close()
 		grpcServer.Stop()
 		database.Close()
@@ -249,8 +250,8 @@ func TestCrossModuleEtcdCoreFailoverThroughGRPC(t *testing.T) {
 	defer fixture.close()
 	etcd := newEtcdFixture(t)
 	prefix := "/ha-cross/services"
-	first := startHACore(t, etcd, fixture.dsn, prefix, "core-1")
-	second := startHACore(t, etcd, fixture.dsn, prefix, "core-2")
+	first := startHACore(t, etcd, fixture.dsn, prefix, "core-1", fixture.cipher)
+	second := startHACore(t, etcd, fixture.dsn, prefix, "core-2", fixture.cipher)
 	client, conn := newDiscoveredCoreClient(t, etcd, prefix)
 	defer conn.Close()
 	deadline := time.Now().Add(10 * time.Second)
@@ -1196,8 +1197,8 @@ func TestMultiCoreFailoverUseCaseThroughCLI(t *testing.T) {
 	defer fixture.close()
 	etcd := newEtcdFixture(t)
 	prefix := "/ha-usecase/services"
-	first := startHACore(t, etcd, fixture.dsn, prefix, "core-1")
-	second := startHACore(t, etcd, fixture.dsn, prefix, "core-2")
+	first := startHACore(t, etcd, fixture.dsn, prefix, "core-1", fixture.cipher)
+	second := startHACore(t, etcd, fixture.dsn, prefix, "core-2", fixture.cipher)
 	client, conn := newDiscoveredCoreClient(t, etcd, prefix)
 	defer conn.Close()
 	var executions atomic.Int32
