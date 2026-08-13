@@ -142,7 +142,8 @@ func load(args []string) error {
 	system := flags.String("system", "", "scheduler to load: go or xxl")
 	serverURL := flags.String("server", "", "scheduler API base URL")
 	sinkURL := flags.String("sink", "", "benchmark sink execution URL")
-	executorURL := flags.String("executor", "", "shared benchmark executor base URL; required for fair comparisons")
+	sinkControlURL := flags.String("sink-control", "", "benchmark sink control URL; defaults to sink")
+	executorURL := flags.String("executor", "", "optional benchmark executor base URL")
 	runID := flags.String("run-id", "", "unique benchmark run ID")
 	count := flags.Int("count", 100, "number of scheduled jobs")
 	concurrency := flags.Int("concurrency", 8, "parallel setup requests")
@@ -154,8 +155,11 @@ func load(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || *serverURL == "" || *sinkURL == "" || *executorURL == "" || *runID == "" || *scheduledAtText == "" {
-		return fmt.Errorf("system, server, sink, executor, run-id, and scheduled-at are required")
+	if flags.NArg() != 0 || *serverURL == "" || *sinkURL == "" || *runID == "" || *scheduledAtText == "" {
+		return fmt.Errorf("system, server, sink, run-id, and scheduled-at are required")
+	}
+	if *sinkControlURL == "" {
+		*sinkControlURL = *sinkURL
 	}
 	scheduledAt, err := time.Parse(time.RFC3339, *scheduledAtText)
 	if err != nil {
@@ -194,11 +198,14 @@ func load(args []string) error {
 	defer cancel()
 	ctx, timeoutCancel := context.WithTimeout(ctx, *timeout)
 	defer timeoutCancel()
-	if err = perfbench.RegisterExpectations(ctx, nil, *sinkURL, events); err != nil {
+	if err = perfbench.RegisterExpectations(ctx, nil, *sinkControlURL, events); err != nil {
 		return fmt.Errorf("register sink expectations: %w", err)
 	}
-	goTarget := strings.TrimRight(*executorURL, "/") + "/go"
-	loaded, err := perfbench.LoadScheduledJobs(ctx, loader, perfbench.LoadRequest{RunID: *runID, Count: *count, Concurrency: *concurrency, ScheduledAt: scheduledAt, SinkURL: goTarget})
+	targetURL := *sinkURL
+	if *executorURL != "" {
+		targetURL = strings.TrimRight(*executorURL, "/") + "/go"
+	}
+	loaded, err := perfbench.LoadScheduledJobs(ctx, loader, perfbench.LoadRequest{RunID: *runID, Count: *count, Concurrency: *concurrency, ScheduledAt: scheduledAt, SinkURL: targetURL})
 	if err != nil {
 		return err
 	}

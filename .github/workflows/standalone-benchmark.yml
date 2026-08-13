@@ -1,0 +1,134 @@
+name: Standalone benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: Jobs expiring at the same instant
+        required: true
+        default: "1000"
+        type: string
+      workers:
+        description: Scheduler execution workers
+        required: true
+        default: "16"
+        type: string
+      scheduler_interval:
+        description: Due-job scan interval
+        required: true
+        default: "1s"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-benchmark
+  cancel-in-progress: false
+
+jobs:
+  burst:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMPOSE_FILE: deploy/docker-compose.yml:deploy/docker-compose.benchmark.yml
+      BENCH_WORKERS: ${{ inputs.workers }}
+      BENCH_SCHEDULER_INTERVAL: ${{ inputs.scheduler_interval }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Record runner environment
+        run: |
+          mkdir -p benchmark-artifacts
+          uname -a > benchmark-artifacts/environment.txt
+          lscpu >> benchmark-artifacts/environment.txt
+          free -h >> benchmark-artifacts/environment.txt
+          docker version >> benchmark-artifacts/environment.txt
+          printf 'commit=%s\ncount=%s\nworkers=%s\nscheduler_interval=%s\n' \
+            "$GITHUB_SHA" '${{ inputs.count }}' "$BENCH_WORKERS" "$BENCH_SCHEDULER_INTERVAL" \
+            >> benchmark-artifacts/environment.txt
+      - name: Start isolated standalone stack
+        run: docker compose up --build --detach benchmark-sink scheduler-server
+      - name: Wait for services and read ephemeral credentials
+        run: |
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:18080/health >/dev/null && \
+               curl --fail --silent http://127.0.0.1:19090/health >/dev/null; then
+              break
+            fi
+            if [ "$attempt" = 90 ]; then
+              docker compose logs --no-color
+              exit 1
+            fi
+            sleep 1
+          done
+          bootstrap_log="$(docker compose logs --no-color bootstrap)"
+          api_key="$(sed -n 's/.*api_key=\(gsk_[^[:space:]]*\).*/\1/p' <<<"$bootstrap_log" | tail -1)"
+          tenant_id="$(sed -n 's/.*tenant_id=\([^[:space:]]*\).*/\1/p' <<<"$bootstrap_log" | tail -1)"
+          test -n "$api_key"
+          test -n "$tenant_id"
+          echo "::add-mask::$api_key"
+          printf 'BENCH_TOKEN=%s\nBENCH_TENANT_ID=%s\n' "$api_key" "$tenant_id" >> "$GITHUB_ENV"
+      - name: Load simultaneous jobs
+        run: |
+          scheduled_at="$(date --utc --date='+120 seconds' '+%Y-%m-%dT%H:%M:%SZ')"
+          printf 'BENCH_SCHEDULED_AT=%s\n' "$scheduled_at" >> "$GITHUB_ENV"
+          go run ./cmd/scheduler-bench load \
+            --system go \
+            --server http://127.0.0.1:18080 \
+            --sink http://benchmark-sink:19090/execute \
+            --sink-control http://127.0.0.1:19090/execute \
+            --run-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --count '${{ inputs.count }}' \
+            --concurrency 32 \
+            --scheduled-at "$scheduled_at" \
+            > benchmark-artifacts/manifest.json
+      - name: Observe burst until completion
+        run: |
+          while [ "$(date +%s)" -lt "$(date --date="$BENCH_SCHEDULED_AT" +%s)" ]; do
+            sleep 1
+          done
+          completed=false
+          for sample in $(seq 1 360); do
+            timestamp="$(date --utc '+%Y-%m-%dT%H:%M:%S.%3NZ')"
+            report="$(curl --fail --silent http://127.0.0.1:19090/api/v1/report)"
+            jq --compact-output --arg timestamp "$timestamp" '. + {sampled_at: $timestamp}' <<<"$report" \
+              >> benchmark-artifacts/report-series.jsonl
+            curl --fail --silent http://127.0.0.1:18080/metrics > benchmark-artifacts/metrics-latest.prom
+            docker stats --no-stream --format '{{json .}}' >> benchmark-artifacts/docker-stats.jsonl
+            if [ "$(jq -r '.missing' <<<"$report")" = 0 ]; then
+              printf '%s\n' "$report" | jq . > benchmark-artifacts/report.json
+              completed=true
+              break
+            fi
+            sleep 1
+          done
+          test "$completed" = true
+          jq -e '.missing == 0 and .duplicate_requests == 0 and .unexpected_requests == 0 and .invalid_requests == 0' \
+            benchmark-artifacts/report.json
+      - name: Capture database summary
+        if: always()
+        run: |
+          docker compose exec -T postgres psql -U scheduler -d scheduler -X --csv -c \
+            "SELECT status,count(*) FROM job_runs GROUP BY status ORDER BY status" \
+            > benchmark-artifacts/run-status.csv || true
+          docker compose exec -T postgres psql -U scheduler -d scheduler -X --csv -c \
+            "SELECT count(*) AS runs,round(extract(epoch FROM max(finished_at)-min(scheduled_at))::numeric,3) AS window_seconds,round(percentile_cont(0.50) WITHIN GROUP (ORDER BY extract(epoch FROM started_at-scheduled_at))::numeric,6) AS dispatch_p50_seconds,round(percentile_cont(0.99) WITHIN GROUP (ORDER BY extract(epoch FROM started_at-scheduled_at))::numeric,6) AS dispatch_p99_seconds,max(started_at-scheduled_at) AS dispatch_max FROM job_runs WHERE trigger_type='schedule'" \
+            > benchmark-artifacts/database-summary.csv || true
+          docker compose logs --no-color > benchmark-artifacts/compose.log || true
+      - name: Upload raw benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: standalone-burst-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark-artifacts
+          if-no-files-found: error
+          retention-days: 30
+      - name: Stop isolated stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+

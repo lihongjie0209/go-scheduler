@@ -1,15 +1,14 @@
-# 调度性能基准与 XXL-JOB 对比
+# 调度性能基准
 
-本文定义项目功能完成后的性能验收口径。正式数据只能来自固定、独占且可重复创建的压测环境；GitHub Actions 只运行短时 smoke test，不作为性能结论。
+本文定义单节点和集群模式的性能验收口径。正式容量数据只能来自固定、独占且可重复创建的压测环境；GitHub Actions 用于发现明显瓶颈和保存可复现证据，不作为生产容量承诺。
 
 ## 比较原则
 
-- 固定本项目提交 SHA、XXL-JOB 版本、镜像摘要和压测工具版本。
-- 两套系统使用相同规格、相同宿主机类型和相同容器 CPU/内存限制，分开运行，避免相互争抢资源。
-- 数据库使用各自官方支持的默认实现（本项目 PostgreSQL，XXL-JOB MySQL），但数据库容器使用相同 CPU、内存和磁盘等级；报告必须明确该差异。
-- 使用同一个无业务耗时的 HTTP sink，保持连接、响应体、超时和网络路径一致。预热完成后再采样。
+- 固定项目提交 SHA、镜像摘要、压测工具版本和配置。
+- 每轮记录宿主机、容器 CPU/内存限制以及 PostgreSQL 版本和配置。
+- 使用无业务耗时的 HTTP sink，端到端延迟统一按计划时刻到 sink 首次收到请求计算。
 - 调度器、数据库、执行器和压测机分开采集 CPU、RSS、磁盘 IOPS、网络以及数据库连接数。
-- 每个场景至少独立运行 5 次，报告中位数、离散程度和原始结果；不从单次运行得出优劣结论。
+- 正式容量测试每个场景至少独立运行 5 次，报告中位数、离散程度和原始结果；单次 CI 结果只用于定位数量级问题。
 - 认证、任务创建等控制面性能单独测试，不能与调度和派发数据混合。
 
 ## 核心场景
@@ -24,11 +23,11 @@
 
 ### 积压恢复（catch-up）
 
-暂停执行目标 60 秒后恢复，测量积压峰值、恢复吞吐和清空耗时。两套系统采用等价的 misfire/阻塞策略。
+暂停执行目标 60 秒后恢复，测量积压峰值、恢复吞吐和清空耗时，并固定每轮使用的 misfire/阻塞策略。
 
-### 高可用扰动（recovery）
+### 恢复能力（recovery）
 
-稳定负载期间分别重启调度节点、执行节点和数据库连接，记录恢复时间、重复执行和丢失数量。外部 Kubernetes Job 另测执行器重启后的重新接管延迟，不把 Kubernetes 创建耗时归因于调度器。
+稳定负载期间分别重启调度进程、执行节点和数据库连接，记录恢复时间、重复执行和丢失数量。外部 Kubernetes Job 另测执行器重启后的重新接管延迟，不把 Kubernetes 创建耗时归因于调度器。
 
 ## 指标定义
 
@@ -45,11 +44,11 @@
 | 积压 | 到期但尚未开始处理的运行数量及其最大年龄 |
 | 单位成本 | 每 1,000 次执行的调度器/数据库 CPU 秒、峰值 RSS 和数据库写入量 |
 
-延迟必须使用压测控制端生成的计划时间和唯一触发 ID 计算。Prometheus 指标用于定位本项目内部瓶颈，不能代替两套系统共同的 sink 端到端数据。
+延迟必须使用压测控制端生成的计划时间和唯一触发 ID 计算。Prometheus 指标用于定位内部瓶颈，不能代替 sink 端到端数据。
 
 ## 验收输出
 
-每次正式对比保存以下产物：
+每次正式测试保存以下产物：
 
 - 环境清单、容器限制、内核和硬件信息；
 - 配置文件、任务定义、随机种子和执行命令；
@@ -58,11 +57,11 @@
 - 火焰图或数据库慢查询证据，以及基于证据提出的优化项；
 - 优化前后至少 5 轮结果的统计比较。
 
-正式报告不使用“更快”这类结论，除非差异在重复实验中稳定出现，并且没有错误率、资源消耗或语义正确性的退化。
+优化结论必须来自同环境下至少 5 轮前后对照，并且不能以错误率、资源消耗或语义正确性退化换取吞吐。
 
 ## 共享 HTTP sink
 
-`scheduler-bench` 提供两套系统共用的黑盒执行目标：
+`scheduler-bench` 提供独立于调度器的黑盒执行目标：
 
 ```bash
 go run ./cmd/scheduler-bench serve --listen :19090
@@ -79,42 +78,33 @@ curl -X POST 'http://127.0.0.1:19090/execute?id=run-0001'
 curl http://127.0.0.1:19090/api/v1/report
 ```
 
-sink 对每个 ID 只使用首次到达时间计算延迟，并单独统计重复、未知和非法请求。`POST /api/v1/reset` 清空上一轮数据。正式压测时 sink 必须部署在独立节点，并与两套调度器保持相同网络路径。
+sink 对每个 ID 只使用首次到达时间计算延迟，并单独统计重复、未知和非法请求。`POST /api/v1/reset` 清空上一轮数据。正式压测时 sink 应部署在独立节点，避免与调度器争用资源。
 
-## 任务装载器
+## 单节点 CI 基准
 
-`scheduler-bench load` 为两套系统生成相同的事件 ID、UTC Quartz Cron 表达式和计划时刻。凭据只从环境变量读取，不放入命令历史：
+`.github/workflows/standalone-benchmark.yml` 通过 `workflow_dispatch` 创建全新的 PostgreSQL 数据卷和单进程 `scheduler-server`，运行同时到期场景并上传以下原始证据：
 
-先启动两套系统共用的双协议执行器。Go Scheduler 调用 `/go`，XXL-JOB 调用 `/trigger`，两条路径都会同步转发到同一个 sink：
+- sink 端到端分位数、吞吐和逐秒报告；
+- 调度器 Prometheus 指标；
+- 容器 CPU、内存和网络快照；
+- PostgreSQL 中的运行状态和派发延迟；
+- 完整容器日志、提交 SHA 和 runner 环境。
 
-```bash
-BENCH_XXL_ACCESS_TOKEN=executor-token BENCH_XXL_APPNAME=scheduler-benchmark \
-  scheduler-bench executor --listen :19100 \
-  --address http://benchmark-executor:19100 \
-  --sink http://sink:19090/execute \
-  --xxl-admin http://xxl-admin:8080/xxl-job-admin
-```
+工作流要求 missing、duplicate、unexpected 和 invalid 全部为零，否则失败。默认参数为 1,000 个任务、16 个执行 worker 和 1 秒调度间隔，可从 Actions 页面调整。
 
-XXL-JOB 中需预先创建 appname 为 `scheduler-benchmark`、access token 相同的自动注册执行器组。执行器每 30 秒注册，退出时注销。Go Scheduler 不需要注册该基准执行器，因为基准任务使用同一个 HTTP target 地址。
+## 本地等价命令
+
+`scheduler-bench load` 生成稳定的事件 ID、UTC Quartz Cron 表达式和统一计划时刻。控制面地址与任务实际访问的 sink 地址可以分开，以支持 Docker 网络：
 
 ```bash
 # Go Scheduler；API key 自带租户时可省略 BENCH_TENANT_ID
 BENCH_TOKEN=gsk_xxx BENCH_TENANT_ID=tenant-id \
   scheduler-bench load --system go \
-  --server http://scheduler:8080 --sink http://sink:19090/execute \
-  --executor http://benchmark-executor:19100 \
+  --server http://127.0.0.1:18080 \
+  --sink http://benchmark-sink:19090/execute \
+  --sink-control http://127.0.0.1:19090/execute \
   --run-id burst-go-001 --count 1000 --concurrency 16 \
   --scheduled-at 2026-08-14T02:00:00Z > burst-go-001.json
-
-# XXL-JOB 3.4.x 管理端装载；执行器组必须预先创建
-BENCH_XXL_USERNAME=admin BENCH_XXL_PASSWORD=secret \
-BENCH_XXL_EXECUTOR_GROUP=2 \
-  scheduler-bench load --system xxl \
-  --server http://xxl-admin:8080/xxl-job-admin \
-  --sink http://sink:19090/execute --executor http://benchmark-executor:19100 \
-  --run-id burst-xxl-001 \
-  --count 1000 --concurrency 16 \
-  --scheduled-at 2026-08-14T02:00:00Z > burst-xxl-001.json
 ```
 
-XXL-JOB OpenAPI 的任务管理实现带有 100 token/30 秒限流，批量初始化会耗费数十分钟并可能错过统一计划时刻。因此基准装载器使用其登录保护的管理端 `jobinfo/insert` 和 `jobinfo/start`，该兼容层当前以 XXL-JOB 3.4.x 为目标；正式报告必须记录精确 Git SHA。两套服务进程都必须使用 UTC 时区。装载结束时间晚于计划时刻时整轮实验作废。
+`--executor` 仅在需要把目标请求经过共享执行器转发时使用；单节点调度器基准直接请求 sink，避免额外代理影响结果。服务进程必须使用 UTC 时区，装载结束时间晚于计划时刻时整轮实验作废。
