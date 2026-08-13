@@ -2,6 +2,7 @@ package notifier
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -126,6 +127,52 @@ func TestDingTalkHMACAuthenticationAndTemplate(t *testing.T) {
 	}
 	if gotToken != "robot-token" || gotTimestamp == "" || gotSignature == "" || gotContent != "run=run-1 status=failed" {
 		t.Fatalf("dingtalk token=%q timestamp=%q signature=%q content=%q", gotToken, gotTimestamp, gotSignature, gotContent)
+	}
+}
+
+func TestValidateDingTalkResponseRequiresExplicitSuccess(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		body string
+		ok   bool
+	}{
+		{name: "success", body: `{"errcode":0,"errmsg":"ok"}`, ok: true},
+		{name: "empty"},
+		{name: "invalid JSON", body: `<html>ok</html>`},
+		{name: "truncated JSON", body: `{"errcode":`},
+		{name: "missing error code", body: `{"errmsg":"ok"}`},
+		{name: "provider error", body: `{"errcode":310000,"errmsg":"secret-token"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateDingTalkResponse([]byte(test.body))
+			if test.ok && err != nil {
+				t.Fatalf("valid response error = %v", err)
+			}
+			if !test.ok && err == nil {
+				t.Fatal("invalid response accepted")
+			}
+			if err != nil && strings.Contains(err.Error(), "secret-token") {
+				t.Fatal("provider response secret leaked into error")
+			}
+		})
+	}
+}
+
+func TestDingTalkRejectsOversizedResponse(t *testing.T) {
+	t.Parallel()
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxProviderResponseSize+1))
+	}))
+	t.Cleanup(target.Close)
+	config, err := json.Marshal(map[string]string{"url": target.URL, "auth_type": "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := New(nil, "test", SMTPConfig{})
+	event := store.OutboxEvent{ID: "event-1", Topic: "job.run.failed", Payload: []byte(`{"run_id":"run-1"}`)}
+	if err = worker.dingtalk(t.Context(), store.NotificationChannel{Config: config}, event); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized response error = %v", err)
 	}
 }
 

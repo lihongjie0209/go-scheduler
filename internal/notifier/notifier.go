@@ -33,6 +33,7 @@ const (
 	notificationConcurrency = 10
 	notificationTimeout     = 10 * time.Second
 	notificationIdlePoll    = 2 * time.Second
+	maxProviderResponseSize = 64 << 10
 )
 
 type Worker struct {
@@ -289,16 +290,30 @@ func (w *Worker) dingtalk(ctx context.Context, channel store.NotificationChannel
 		return redactedHTTPRequestError("dingtalk", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponseSize+1))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("dingtalk status %d", resp.StatusCode)
 	}
-	var result struct {
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
+	if readErr != nil {
+		return fmt.Errorf("dingtalk response read failed")
 	}
-	if len(responseBody) > 0 && json.Unmarshal(responseBody, &result) == nil && result.ErrCode != 0 {
-		return fmt.Errorf("dingtalk error %d: %s", result.ErrCode, result.ErrMsg)
+	if len(responseBody) > maxProviderResponseSize {
+		return fmt.Errorf("dingtalk response exceeds 64 KiB")
+	}
+	return validateDingTalkResponse(responseBody)
+}
+
+func validateDingTalkResponse(responseBody []byte) error {
+	var result struct {
+		ErrCode *int `json:"errcode"`
+	}
+	if len(responseBody) == 0 || json.Unmarshal(responseBody, &result) != nil || result.ErrCode == nil {
+		return fmt.Errorf("dingtalk returned an invalid response")
+	}
+	if *result.ErrCode != 0 {
+		// Do not persist the remote errmsg. Notification endpoints are configurable
+		// and an untrusted endpoint could reflect credentials into delivery history.
+		return fmt.Errorf("dingtalk error %d", *result.ErrCode)
 	}
 	return nil
 }
