@@ -158,6 +158,34 @@ func TestServerRejectsUnknownHandlerAndForeignSchedulerURLs(t *testing.T) {
 	}
 }
 
+func TestServerRejectsTrailingRunDocument(t *testing.T) {
+	t.Parallel()
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err = server.Handle("demo", func(context.Context, Task) error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(runRequest{RunID: "run", JobID: "job", Handler: "demo", CallbackURL: "http://scheduler.test/callback", LogURL: "http://scheduler.test/log", CallbackToken: "token", TimeoutSeconds: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, []byte(`{"run_id":"second"}`)...)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(raw)))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if called {
+		t.Fatal("handler ran for a request with a trailing JSON document")
+	}
+}
+
 func TestServerRecoversHandlerPanic(t *testing.T) {
 	t.Parallel()
 	server, err := NewServer(Options{SchedulerURL: "http://scheduler.test"})

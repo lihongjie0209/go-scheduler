@@ -64,3 +64,18 @@ func TestDecodeProtobufJSONRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("status = %d, want 400", response.Code)
 	}
 }
+
+func TestDecodeStandardJSONRejectsTrailingDocument(t *testing.T) {
+	t.Parallel()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/example", strings.NewReader(`{"name":"first"}{"name":"second"}`))
+	response := httptest.NewRecorder()
+	var body struct {
+		Name string `json:"name"`
+	}
+	if decode(response, request, &body) {
+		t.Fatal("decode unexpectedly accepted a trailing JSON document")
+	}
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}

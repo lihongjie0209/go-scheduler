@@ -3956,6 +3956,23 @@ func TestFailureNotificationUseCaseThroughCLI(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
 	defer httpServer.Close()
+	malformedRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/notification-channels", strings.NewReader(`{"kind":"webhook","name":"must-not-exist","config":{"url":"https://alerts.invalid"},"events":["exhausted"],"all_jobs":true,"max_attempts":1,"backoff_initial_seconds":1,"backoff_max_seconds":1}{"name":"trailing"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformedRequest.Header.Set("Authorization", "Bearer "+token)
+	malformedRequest.Header.Set("Content-Type", "application/json")
+	malformedResponse, err := httpServer.Client().Do(malformedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = malformedResponse.Body.Close()
+	if malformedResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("trailing notification request status = %d, want %d", malformedResponse.StatusCode, http.StatusBadRequest)
+	}
+	if channels, listErr := fixture.store.NotificationChannels(t.Context(), fixture.tenantID); listErr != nil || len(channels) != 0 {
+		t.Fatalf("trailing notification request mutated channels: %+v, %v", channels, listErr)
+	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)

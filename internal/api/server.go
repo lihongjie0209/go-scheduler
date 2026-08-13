@@ -1135,6 +1135,10 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return false
 	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, 400, "invalid JSON: request body must contain exactly one JSON value")
+		return false
+	}
 	return true
 }
 func respond(w http.ResponseWriter, v any, err error, code int) {

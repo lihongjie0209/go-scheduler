@@ -171,6 +171,10 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid run request", http.StatusBadRequest)
 		return
 	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid run request", http.StatusBadRequest)
+		return
+	}
 	if request.RunID == "" || request.JobID == "" || request.Handler == "" || request.CallbackToken == "" || request.TimeoutSeconds < 1 || request.TimeoutSeconds > 86400 || !s.schedulerURL(request.CallbackURL) || !s.schedulerURL(request.LogURL) {
 		http.Error(w, "invalid run request", http.StatusBadRequest)
 		return
