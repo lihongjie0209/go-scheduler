@@ -67,7 +67,7 @@ func TestEmailContentRejectsRenderedSubjectInjection(t *testing.T) {
 
 func TestEmailRequiresSTARTTLSByDefault(t *testing.T) {
 	t.Parallel()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestEmailRequiresSTARTTLSByDefault(t *testing.T) {
 		if acceptErr != nil {
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		_, _ = connection.Write([]byte("220 smtp.example.test ESMTP\r\n"))
 		reader := bufio.NewReader(connection)
 		if _, readErr := reader.ReadString('\n'); readErr != nil {
