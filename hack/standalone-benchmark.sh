@@ -40,7 +40,7 @@ if [[ "$BENCH_KEEP_STACK" != true && "$BENCH_KEEP_STACK" != false ]] || [[ "$BEN
 fi
 
 mkdir -p "$BENCH_ARTIFACT_DIR"
-BENCH_COMPOSE=(docker compose --project-name "$BENCH_COMPOSE_PROJECT" --file deploy/docker-compose.yml --file deploy/docker-compose.benchmark.yml)
+BENCH_COMPOSE=(docker compose --project-name "$BENCH_COMPOSE_PROJECT" --profile executor --file deploy/docker-compose.yml --file deploy/docker-compose.benchmark.yml)
 if [[ "$BENCH_PG_STATS" == true ]]; then
   BENCH_COMPOSE+=(--file deploy/docker-compose.benchmark-profile.yml)
 fi

@@ -631,6 +631,44 @@ func jobRunQueueState(ctx context.Context, tx pgx.Tx, jobID string) (int, bool, 
 	return queued, hasActive, nil
 }
 
+func executorRouteStrategies(ctx context.Context, tx pgx.Tx, jobs []Job) (map[string]string, error) {
+	groupIDs := make([]string, 0, len(jobs))
+	seen := make(map[string]struct{}, len(jobs))
+	for _, job := range jobs {
+		if job.ExecutorGroupID == "" {
+			continue
+		}
+		if _, ok := seen[job.ExecutorGroupID]; ok {
+			continue
+		}
+		seen[job.ExecutorGroupID] = struct{}{}
+		groupIDs = append(groupIDs, job.ExecutorGroupID)
+	}
+	strategies := make(map[string]string, len(groupIDs))
+	if len(groupIDs) == 0 {
+		return strategies, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id::text,route_strategy FROM executor_groups WHERE id=ANY($1::uuid[])`, groupIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query executor route strategies: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, strategy string
+		if err = rows.Scan(&id, &strategy); err != nil {
+			return nil, err
+		}
+		strategies[id] = strategy
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(strategies) != len(groupIDs) {
+		return nil, ErrNotFound
+	}
+	return strategies, nil
+}
+
 func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -654,6 +692,11 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	routeStrategies, err := executorRouteStrategies(ctx, tx, jobs)
+	if err != nil {
+		return err
+	}
+	var fastBatch pgx.Batch
 	for _, j := range jobs {
 		if j.NextRunAt == nil {
 			continue
@@ -663,13 +706,13 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 		if e != nil {
 			return e
 		}
-		var routeStrategy string
-		if j.ExecutorGroupID != "" {
-			if err = tx.QueryRow(ctx, `SELECT route_strategy FROM executor_groups WHERE id=$1 AND tenant_id=$2`, j.ExecutorGroupID, j.TenantID).Scan(&routeStrategy); err != nil {
-				return err
-			}
-		}
+		routeStrategy := routeStrategies[j.ExecutorGroupID]
+		fastPath := j.OverlapPolicy == "parallel" && routeStrategy != "sharding_broadcast"
 		for _, scheduledAt := range due {
+			if fastPath {
+				fastBatch.Queue(`INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,reschedule_on_terminal) VALUES($1,$2,$3,'schedule','pending',$4,$5)`, uuid.NewString(), j.TenantID, j.ID, scheduledAt, j.ScheduleType == "fixed_delay")
+				continue
+			}
 			queued, hasActive, stateErr := jobRunQueueState(ctx, tx, j.ID)
 			if stateErr != nil {
 				return stateErr
@@ -723,9 +766,25 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 		if !next.IsZero() {
 			arg = next
 		}
-		_, err = tx.Exec(ctx, `UPDATE jobs SET last_run_at=next_run_at,next_run_at=$2,enabled=CASE WHEN $2::timestamptz IS NULL AND schedule_type='once' THEN false ELSE enabled END,updated_at=now() WHERE id=$1`, j.ID, arg)
-		if err != nil {
-			return err
+		if fastPath {
+			fastBatch.Queue(`UPDATE jobs SET last_run_at=next_run_at,next_run_at=$2,enabled=CASE WHEN $2::timestamptz IS NULL AND schedule_type='once' THEN false ELSE enabled END,updated_at=now() WHERE id=$1`, j.ID, arg)
+		} else {
+			_, err = tx.Exec(ctx, `UPDATE jobs SET last_run_at=next_run_at,next_run_at=$2,enabled=CASE WHEN $2::timestamptz IS NULL AND schedule_type='once' THEN false ELSE enabled END,updated_at=now() WHERE id=$1`, j.ID, arg)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if fastBatch.Len() > 0 {
+		results := tx.SendBatch(ctx, &fastBatch)
+		for index := 0; index < fastBatch.Len(); index++ {
+			if _, err = results.Exec(); err != nil {
+				_ = results.Close()
+				return fmt.Errorf("execute due-run batch: %w", err)
+			}
+		}
+		if err = results.Close(); err != nil {
+			return fmt.Errorf("close due-run batch: %w", err)
 		}
 	}
 	return tx.Commit(ctx)
@@ -737,10 +796,12 @@ type ClaimedRun struct {
 }
 
 func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease time.Duration) ([]ClaimedRun, error) {
-	rows, err := s.pool.Query(ctx, `WITH active_job AS (
-	 SELECT job_id,count(*) AS n FROM job_runs WHERE (status='running' AND lease_until>=now()) OR status='waiting_callback' GROUP BY job_id
+	rows, err := s.pool.Query(ctx, `WITH active AS MATERIALIZED (
+	 SELECT job_id,tenant_id FROM job_runs WHERE (status='running' AND lease_until>=now()) OR status='waiting_callback'
+	), active_job AS (
+	 SELECT job_id,count(*) AS n FROM active GROUP BY job_id
 	), active_tenant AS (
-	 SELECT tenant_id,count(*) AS n FROM job_runs WHERE (status='running' AND lease_until>=now()) OR status='waiting_callback' GROUP BY tenant_id
+	 SELECT tenant_id,count(*) AS n FROM active GROUP BY tenant_id
 	), candidates AS (
 	 SELECT r.id,r.job_id,r.tenant_id,
 	 row_number() OVER(PARTITION BY r.job_id ORDER BY r.available_at,r.id) AS job_rank,

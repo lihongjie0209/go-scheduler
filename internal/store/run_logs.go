@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type RunLogInput struct {
@@ -28,6 +31,21 @@ func (s *Store) ActivateRunToken(ctx context.Context, runID string, tokenHash []
 }
 
 func (s *Store) AppendRunLogs(ctx context.Context, runID string, tokenHash []byte, entries []RunLogInput) (int64, error) {
+	if len(entries) == 1 {
+		entry := entries[0]
+		var cursor int64
+		err := s.pool.QueryRow(ctx, `INSERT INTO job_run_logs(tenant_id,run_id,entry_id,stream,content)
+			SELECT tenant_id,id,$3,$4,$5 FROM job_runs
+			WHERE id=$1 AND status IN ('running','waiting_callback') AND callback_deadline>now() AND callback_token_hash=$2
+			ON CONFLICT(run_id,entry_id) DO UPDATE SET entry_id=EXCLUDED.entry_id RETURNING id`, runID, tokenHash, entry.EntryID, entry.Stream, entry.Content).Scan(&cursor)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return 0, ErrNotFound
+			}
+			return 0, fmt.Errorf("append run log: %w", err)
+		}
+		return cursor, nil
+	}
 	entryIDs := make([]string, len(entries))
 	streams := make([]string, len(entries))
 	contents := make([]string, len(entries))

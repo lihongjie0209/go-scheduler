@@ -316,7 +316,14 @@ func (s *Store) ListExecutorNodes(ctx context.Context, tenantID, groupID string,
 }
 
 func (s *Store) ExecutorRouteCandidates(ctx context.Context, tenantID, groupID, jobID string) (string, []ExecutorNode, error) {
-	rows, err := s.pool.Query(ctx, `SELECT g.route_strategy,n.group_id,n.node_id,n.address,n.expires_at,n.updated_at,n.is_static,n.labels FROM executor_groups g JOIN jobs j ON j.executor_group_id=g.id JOIN executor_nodes n ON n.group_id=g.id WHERE g.tenant_id=$1 AND g.id=$2 AND j.id=$3 AND (n.is_static OR n.expires_at>now()) ORDER BY CASE WHEN n.is_static THEN n.address ELSE n.node_id END`, tenantID, groupID, jobID)
+	rows, err := s.pool.Query(ctx, `SELECT g.route_strategy,n.group_id,n.node_id,n.address,n.expires_at,n.updated_at,n.is_static,n.labels
+		FROM executor_groups g JOIN jobs j ON j.executor_group_id=g.id JOIN executor_nodes n ON n.group_id=g.id
+		WHERE g.tenant_id=$1 AND g.id=$2 AND j.id=$3 AND (n.is_static OR n.expires_at>now())
+		AND NOT EXISTS (
+			SELECT 1 FROM job_executor_labels l WHERE l.job_id=j.id
+			AND ((NOT l.excluded AND NOT (l.label=ANY(n.labels))) OR (l.excluded AND l.label=ANY(n.labels)))
+		)
+		ORDER BY CASE WHEN n.is_static THEN n.address ELSE n.node_id END`, tenantID, groupID, jobID)
 	if err != nil {
 		return "", nil, err
 	}

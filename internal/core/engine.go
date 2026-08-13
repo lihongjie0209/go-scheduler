@@ -189,11 +189,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 	method := c.Job.HTTPMethod
 	body := strings.ReplaceAll(c.Job.BodyTemplate, "{{input}}", c.Run.RuntimeInput)
 	if c.Job.ExecutorGroupID != "" {
-		requiredLabels, excludedLabels, labelErr := e.store.JobExecutorLabels(parent, c.Job.ID)
-		if labelErr != nil {
-			e.fail(parent, c, fmt.Errorf("load executor labels: %w", labelErr))
-			return
-		}
+		var requiredLabels, excludedLabels []string
 		var node store.ExecutorNode
 		var routeErr error
 		strategy := ""
@@ -205,6 +201,12 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 				node = store.ExecutorNode{NodeID: c.Run.ExecutorNodeID, Address: c.Run.ExecutorAddress}
 			}
 		} else if len(c.Run.OverrideAddresses) > 0 {
+			var labelErr error
+			requiredLabels, excludedLabels, labelErr = e.store.JobExecutorLabels(parent, c.Job.ID)
+			if labelErr != nil {
+				e.fail(parent, c, fmt.Errorf("load executor labels: %w", labelErr))
+				return
+			}
 			strategy, routeErr = e.store.ExecutorRouteStrategy(parent, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID)
 			activeNodes = store.OverrideExecutorNodes(c.Run.OverrideAddresses)
 		} else {
@@ -230,6 +232,17 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		} else if c.Run.BroadcastGroupID == "" && routeErr == nil && len(activeNodes) == 1 {
 			node = activeNodes[0]
 		} else if c.Run.BroadcastGroupID == "" && routeErr == nil {
+			if len(c.Run.OverrideAddresses) == 0 {
+				var labelErr error
+				requiredLabels, excludedLabels, labelErr = e.store.JobExecutorLabels(parent, c.Job.ID)
+				if labelErr != nil {
+					routeErr = fmt.Errorf("load executor labels: %w", labelErr)
+				}
+			}
+			if routeErr != nil {
+				e.fail(parent, c, routeErr)
+				return
+			}
 			reserve := e.store.ReserveExecutorRoute
 			if len(c.Run.OverrideAddresses) > 0 {
 				reserve = func(ctx context.Context, tenantID, groupID, jobID string, selector store.ExecutorSelector) (store.ExecutorNode, error) {
