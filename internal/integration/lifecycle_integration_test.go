@@ -2734,6 +2734,78 @@ func TestExecutorRoutingStrategiesUseCaseThroughCLI(t *testing.T) {
 	}
 }
 
+func TestExecutorRoutingDatabaseWaitHonorsRunTimeout(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{
+		TenantID:         fixture.tenantID,
+		Name:             "timeout-workers",
+		RouteStrategy:    "round",
+		RegistrationMode: "manual",
+		ManualAddresses:  []string{"http://worker-a.invalid", "http://worker-b.invalid"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{
+		TenantID: fixture.tenantID, Name: "routing-timeout", ScheduleType: "fixed_interval",
+		ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: http.MethodPost,
+		Headers: map[string]string{}, TimeoutSeconds: 1, OverlapPolicy: "serial",
+		MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, ExecutorGroupID: group.ID,
+		ExecutorHandler: "timeout", Enabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "routing-timeout", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	connection, err := pgx.Connect(t.Context(), fixture.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close(context.Background())
+	if _, err = connection.Exec(t.Context(), `INSERT INTO executor_job_route_counters(job_id,route_count) VALUES($1,0)`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := connection.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Rollback(context.Background())
+	if _, err = lock.Exec(t.Context(), `SELECT 1 FROM executor_job_route_counters WHERE job_id=$1 FOR UPDATE`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	engineCtx, cancelEngine := context.WithCancel(t.Context())
+	engine := core.NewEngine(fixture.store, "routing-timeout-core", 20*time.Millisecond, 1, "http://api.invalid", 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine.Run(engineCtx)
+	defer func() {
+		cancelEngine()
+		engine.Wait()
+	}()
+
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		current, getErr := fixture.store.GetRun(t.Context(), fixture.tenantID, run.ID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if current.Status == "timed_out" {
+			break
+		}
+		if current.Status != "pending" && current.Status != "running" {
+			t.Fatalf("run ended as %s, want timed_out: %+v", current.Status, current)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("routing database wait ignored run timeout: %+v", current)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func TestTriggerAddressOverrideUseCaseThroughCLI(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()

@@ -205,7 +205,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 	logURL := e.publicBaseURL + "/api/v1/runs/" + c.Run.ID + "/logs"
 	callbackDeadline := time.Now().Add(time.Duration(c.Job.CallbackTimeoutSeconds) * time.Second)
 	if e.executorGRPC == nil {
-		if err = e.store.ActivateRunToken(parent, c.Run.ID, tokenHash, callbackDeadline); err != nil {
+		if err = e.store.ActivateRunToken(ctx, c.Run.ID, tokenHash, callbackDeadline); err != nil {
 			e.fail(parent, c, fmt.Errorf("activate run token: %w", err))
 			return
 		}
@@ -227,15 +227,15 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			}
 		} else if len(c.Run.OverrideAddresses) > 0 {
 			var labelErr error
-			requiredLabels, excludedLabels, labelErr = e.store.JobExecutorLabels(parent, c.Job.ID)
+			requiredLabels, excludedLabels, labelErr = e.store.JobExecutorLabels(ctx, c.Job.ID)
 			if labelErr != nil {
 				e.fail(parent, c, fmt.Errorf("load executor labels: %w", labelErr))
 				return
 			}
-			strategy, routeErr = e.store.ExecutorRouteStrategy(parent, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID)
+			strategy, routeErr = e.store.ExecutorRouteStrategy(ctx, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID)
 			activeNodes = store.OverrideExecutorNodes(c.Run.OverrideAddresses)
 		} else {
-			strategy, activeNodes, routeErr = e.store.ExecutorRouteCandidates(parent, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID)
+			strategy, activeNodes, routeErr = e.store.ExecutorRouteCandidates(ctx, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID)
 			activeNodes = store.FilterExecutorNodes(activeNodes, requiredLabels, excludedLabels)
 		}
 		if c.Run.BroadcastGroupID == "" && routeErr == nil && (strategy == "failover" || strategy == "busyover") {
@@ -259,7 +259,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		} else if c.Run.BroadcastGroupID == "" && routeErr == nil {
 			if len(c.Run.OverrideAddresses) == 0 {
 				var labelErr error
-				requiredLabels, excludedLabels, labelErr = e.store.JobExecutorLabels(parent, c.Job.ID)
+				requiredLabels, excludedLabels, labelErr = e.store.JobExecutorLabels(ctx, c.Job.ID)
 				if labelErr != nil {
 					routeErr = fmt.Errorf("load executor labels: %w", labelErr)
 				}
@@ -274,7 +274,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 					return e.store.ReserveExecutorOverrideRoute(ctx, tenantID, groupID, jobID, c.Run.OverrideAddresses, selector)
 				}
 			}
-			node, routeErr = reserve(parent, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID, func(snapshot store.ExecutorRoutingSnapshot) (store.ExecutorNode, error) {
+			node, routeErr = reserve(ctx, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID, func(snapshot store.ExecutorRoutingSnapshot) (store.ExecutorNode, error) {
 				if len(c.Run.OverrideAddresses) == 0 {
 					snapshot.Nodes = store.FilterExecutorNodes(snapshot.Nodes, requiredLabels, excludedLabels)
 				}
@@ -304,12 +304,12 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 				dispatchRequest.Http = &executorv1.HttpExecution{Url: c.Job.TargetURL, Method: c.Job.HTTPMethod, Headers: c.Job.Headers, Body: body}
 			}
 			if c.Job.KubernetesClusterID != "" {
-				cluster, clusterErr := e.store.GetKubernetesCluster(parent, c.Job.TenantID, c.Job.KubernetesClusterID)
+				cluster, clusterErr := e.store.GetKubernetesCluster(ctx, c.Job.TenantID, c.Job.KubernetesClusterID)
 				if clusterErr != nil {
 					e.fail(parent, c, fmt.Errorf("load kubernetes cluster: %w", clusterErr))
 					return
 				}
-				executionID, executionErr := e.store.RootRunID(parent, c.Job.TenantID, c.Run.ID)
+				executionID, executionErr := e.store.RootRunID(ctx, c.Job.TenantID, c.Run.ID)
 				if executionErr != nil {
 					e.fail(parent, c, fmt.Errorf("resolve external execution identity: %w", executionErr))
 					return
@@ -317,7 +317,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 				dispatchRequest.ExternalExecutionId = executionID
 				dispatchRequest.KubernetesCluster = &executorv1.KubernetesCluster{AuthMode: cluster.AuthMode, ApiServer: cluster.APIServer, Namespace: cluster.Namespace, Kubeconfig: cluster.Credentials.Kubeconfig, Token: cluster.Credentials.Token, CaData: cluster.Credentials.CAData, InsecureSkipTlsVerify: cluster.InsecureSkipTLSVerify}
 			}
-			if err := e.store.PrepareExecutorDispatch(parent, c.Run.ID, node.NodeID, node.Address, tokenHash, callbackDeadline); err != nil {
+			if err := e.store.PrepareExecutorDispatch(ctx, c.Run.ID, node.NodeID, node.Address, tokenHash, callbackDeadline); err != nil {
 				e.fail(parent, c, err)
 				return
 			}
@@ -328,7 +328,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			}
 			return
 		}
-		if routeErr = e.store.AssignRunExecutor(parent, c.Run.ID, node.NodeID, node.Address); routeErr != nil {
+		if routeErr = e.store.AssignRunExecutor(ctx, c.Run.ID, node.NodeID, node.Address); routeErr != nil {
 			e.fail(parent, c, fmt.Errorf("assign executor: %w", routeErr))
 			return
 		}
@@ -336,12 +336,12 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		method = http.MethodPost
 		runPayload := map[string]any{"run_id": c.Run.ID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource}
 		if c.Job.KubernetesClusterID != "" {
-			cluster, clusterErr := e.store.GetKubernetesCluster(parent, c.Job.TenantID, c.Job.KubernetesClusterID)
+			cluster, clusterErr := e.store.GetKubernetesCluster(ctx, c.Job.TenantID, c.Job.KubernetesClusterID)
 			if clusterErr != nil {
 				e.fail(parent, c, fmt.Errorf("load kubernetes cluster: %w", clusterErr))
 				return
 			}
-			executionID, executionErr := e.store.RootRunID(parent, c.Job.TenantID, c.Run.ID)
+			executionID, executionErr := e.store.RootRunID(ctx, c.Job.TenantID, c.Run.ID)
 			if executionErr != nil {
 				e.fail(parent, c, fmt.Errorf("resolve external execution identity: %w", executionErr))
 				return
