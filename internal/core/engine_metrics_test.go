@@ -67,3 +67,23 @@ func TestReleaseWorkerWakesDispatcher(t *testing.T) {
 		t.Fatal("dispatcher was not notified")
 	}
 }
+
+func TestShouldWakeDispatcher(t *testing.T) {
+	tests := []struct {
+		name             string
+		active, capacity int
+		want             bool
+	}{
+		{name: "below refill threshold", active: 49, capacity: 64},
+		{name: "at refill threshold", active: 48, capacity: 64, want: true},
+		{name: "all workers idle", active: 0, capacity: 64, want: true},
+		{name: "small pool frees one", active: 2, capacity: 3, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldWakeDispatcher(tt.active, tt.capacity); got != tt.want {
+				t.Fatalf("shouldWakeDispatcher(%d, %d) = %v, want %v", tt.active, tt.capacity, got, tt.want)
+			}
+		})
+	}
+}

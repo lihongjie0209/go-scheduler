@@ -148,10 +148,21 @@ func (e *Engine) dispatch(ctx context.Context, sem chan struct{}) error {
 
 func (e *Engine) releaseWorker(sem chan struct{}) {
 	<-sem
+	if !shouldWakeDispatcher(len(sem), cap(sem)) {
+		return
+	}
 	select {
 	case e.dispatchWake <- struct{}{}:
 	default:
 	}
+}
+
+func shouldWakeDispatcher(active, capacity int) bool {
+	if active == 0 {
+		return true
+	}
+	threshold := max(capacity/4, 1)
+	return capacity-active >= threshold
 }
 
 func availableWorkerSlots(sem chan struct{}) int {
