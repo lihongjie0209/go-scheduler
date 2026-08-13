@@ -3770,4 +3770,39 @@ func TestFailureNotificationUseCaseThroughCLI(t *testing.T) {
 	if stableCalls.Load() != 1 || flakyCalls.Load() != 2 {
 		t.Fatalf("duplicate notification calls stable=%d flaky=%d", stableCalls.Load(), flakyCalls.Load())
 	}
+	type notificationHistoryPage struct {
+		Deliveries []struct {
+			ChannelName string `json:"channel_name"`
+			JobID       string `json:"job_id"`
+			Status      string `json:"status"`
+		} `json:"deliveries"`
+		NextCursor string `json:"next_cursor"`
+	}
+	readHistoryPage := func(args ...string) notificationHistoryPage {
+		var page notificationHistoryPage
+		if unmarshalErr := json.Unmarshal(runCLI(args...), &page); unmarshalErr != nil {
+			t.Fatalf("decode schedulerctl notification history: %v", unmarshalErr)
+		}
+		return page
+	}
+	firstPage := readHistoryPage("notifications", "history", "--job-id", job.ID, "--status", "delivered", "--limit", "1")
+	if len(firstPage.Deliveries) != 1 || firstPage.NextCursor == "" {
+		t.Fatalf("first schedulerctl notification history page = %+v", firstPage)
+	}
+	secondPage := readHistoryPage("notifications", "history", "--job-id", job.ID, "--status", "delivered", "--limit", "1", "--cursor", firstPage.NextCursor)
+	if len(secondPage.Deliveries) != 1 {
+		t.Fatalf("second schedulerctl notification history page = %+v", secondPage)
+	}
+	channels := map[string]bool{
+		firstPage.Deliveries[0].ChannelName:  true,
+		secondPage.Deliveries[0].ChannelName: true,
+	}
+	for _, page := range []notificationHistoryPage{firstPage, secondPage} {
+		if page.Deliveries[0].JobID != job.ID || page.Deliveries[0].Status != "delivered" {
+			t.Fatalf("schedulerctl notification history entry = %+v", page.Deliveries[0])
+		}
+	}
+	if !channels["stable"] || !channels["flaky"] {
+		t.Fatalf("schedulerctl notification history channels = %+v", channels)
+	}
 }
