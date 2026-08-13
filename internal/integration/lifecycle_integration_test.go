@@ -2075,6 +2075,17 @@ func TestAsyncCallbackRetryUseCaseThroughCLI(t *testing.T) {
 			if dispatch.URL == "" || dispatch.Token == "" || dispatch.RunID == "" {
 				t.Fatalf("incomplete callback dispatch: %+v", dispatch)
 			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				run, loadErr := fixture.store.GetRun(t.Context(), fixture.tenantID, dispatch.RunID)
+				if loadErr == nil && run.Status == "waiting_callback" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("run did not enter waiting_callback: %+v, %v", run, loadErr)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 			return dispatch
 		case <-time.After(5 * time.Second):
 			t.Fatal("executor was not dispatched")
