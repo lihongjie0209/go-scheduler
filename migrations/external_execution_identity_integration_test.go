@@ -30,7 +30,10 @@ func TestExternalExecutionIdentityMigrationBackfillsExistingRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close(t.Context()) }()
-	for _, migration := range All[:len(All)-1] {
+	for _, migration := range All {
+		if migration.Version >= 30 {
+			break
+		}
 		if _, err = conn.Exec(t.Context(), migration.SQL); err != nil {
 			t.Fatalf("apply migration %d: %v", migration.Version, err)
 		}
