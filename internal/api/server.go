@@ -340,7 +340,7 @@ func (s *Server) listNotificationHistory(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "X-Tenant-ID is required")
 		return
 	}
-	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit, err := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 32)
 	if r.URL.Query().Get("limit") == "" {
 		limit = 100
 	} else if err != nil {
@@ -351,8 +351,12 @@ func (s *Server) listNotificationHistory(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "limit must be between 1 and 500")
 		return
 	}
-	out, callErr := s.client.ListNotificationHistory(r.Context(), &schedulerv1.ListNotificationHistoryRequest{TenantId: tenantID(r.Context()), ChannelId: r.URL.Query().Get("channel_id"), JobId: r.URL.Query().Get("job_id"), Status: r.URL.Query().Get("status"), Limit: int32(limit)}) // #nosec G115 -- limit is bounded to 500.
+	out, callErr := s.client.ListNotificationHistory(r.Context(), &schedulerv1.ListNotificationHistoryRequest{TenantId: tenantID(r.Context()), ChannelId: r.URL.Query().Get("channel_id"), JobId: r.URL.Query().Get("job_id"), Status: r.URL.Query().Get("status"), Limit: parsedInt32(limit)})
 	respond(w, out, callErr, http.StatusOK)
+}
+
+func parsedInt32(value int64) int32 {
+	return int32(value) // #nosec G115 -- callers parse with bitSize 32 before conversion.
 }
 func (s *Server) completeCallback(w http.ResponseWriter, r *http.Request) {
 	var body struct {
