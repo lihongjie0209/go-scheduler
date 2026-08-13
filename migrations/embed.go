@@ -71,9 +71,12 @@ var ExecutorLabelsUp string
 //go:embed 000022_kubernetes_jobs.up.sql
 var KubernetesJobsUp string
 
+//go:embed 000023_hot_path_indexes.up.sql
+var HotPathIndexesUp string
+
 type Migration struct {
 	Version int64
 	SQL     string
 }
 
-var All = []Migration{{Version: 1, SQL: Up}, {Version: 2, SQL: RuntimeFeaturesUp}, {Version: 3, SQL: ConsoleUp}, {Version: 4, SQL: BlockPoliciesUp}, {Version: 5, SQL: JobDependenciesUp}, {Version: 6, SQL: RetryLineageUp}, {Version: 7, SQL: ExecutorRoutingUp}, {Version: 8, SQL: AdvancedRoutingUp}, {Version: 9, SQL: ActiveRoutingUp}, {Version: 10, SQL: ShardingBroadcastUp}, {Version: 11, SQL: RunLogsUp}, {Version: 12, SQL: FixedDelayUp}, {Version: 13, SQL: ReliableNotificationsUp}, {Version: 14, SQL: ScriptJobsUp}, {Version: 15, SQL: ManualExecutorGroupsUp}, {Version: 16, SQL: TriggerAddressOverridesUp}, {Version: 17, SQL: ScriptVersionsUp}, {Version: 18, SQL: NodeJSPHPScriptsUp}, {Version: 19, SQL: PowerShellScriptsUp}, {Version: 20, SQL: DockerImageJobsUp}, {Version: 21, SQL: ExecutorLabelsUp}, {Version: 22, SQL: KubernetesJobsUp}}
+var All = []Migration{{Version: 1, SQL: Up}, {Version: 2, SQL: RuntimeFeaturesUp}, {Version: 3, SQL: ConsoleUp}, {Version: 4, SQL: BlockPoliciesUp}, {Version: 5, SQL: JobDependenciesUp}, {Version: 6, SQL: RetryLineageUp}, {Version: 7, SQL: ExecutorRoutingUp}, {Version: 8, SQL: AdvancedRoutingUp}, {Version: 9, SQL: ActiveRoutingUp}, {Version: 10, SQL: ShardingBroadcastUp}, {Version: 11, SQL: RunLogsUp}, {Version: 12, SQL: FixedDelayUp}, {Version: 13, SQL: ReliableNotificationsUp}, {Version: 14, SQL: ScriptJobsUp}, {Version: 15, SQL: ManualExecutorGroupsUp}, {Version: 16, SQL: TriggerAddressOverridesUp}, {Version: 17, SQL: ScriptVersionsUp}, {Version: 18, SQL: NodeJSPHPScriptsUp}, {Version: 19, SQL: PowerShellScriptsUp}, {Version: 20, SQL: DockerImageJobsUp}, {Version: 21, SQL: ExecutorLabelsUp}, {Version: 22, SQL: KubernetesJobsUp}, {Version: 23, SQL: HotPathIndexesUp}}

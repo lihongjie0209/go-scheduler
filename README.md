@@ -4,12 +4,11 @@
 
 ## 组件
 
-- `scheduler server`：默认部署入口；REST API 与调度 Core 位于同一进程，通过内存 gRPC 通信，不需要 etcd，也不开放 Core gRPC 端口。
+- `scheduler server`：默认部署入口；REST API 与调度 Core 位于同一进程，通过内存 gRPC 通信，不需要 etcd；同时监听内部 gRPC 端口供 Executor 注册和回报。
 - `scheduler api-server` / `scheduler core`：分布式部署入口，需要 etcd 服务发现。
 - `scheduler executor`：脚本、HTTP、Docker 与 Kubernetes Job 执行器。
 - `scheduler migrate` / `scheduler bootstrap`：数据库迁移和首次初始化。
-- `schedulerctl`：独立的 API 运维客户端。发行包只包含 `scheduler` 与 `schedulerctl` 两个二进制。
-- `schedulerctl`：面向开发和运维的 API 命令行客户端，支持账号密码、JWT 和 API Key 认证。
+- `schedulerctl`：独立的 API 运维客户端，支持账号密码、JWT 和 API Key 认证。发行包只包含 `scheduler` 与 `schedulerctl` 两个二进制。
 - PostgreSQL：任务和运行状态的唯一事实来源。
 - etcd：仅在选择分布式入口时用于服务注册与发现。
 
@@ -29,7 +28,7 @@ TENANT_NAME=demo ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='replace-with-stro
 HTTP_ADDRESS=:8080 go run ./cmd/scheduler server
 ```
 
-项目不包含 Web UI，根路径返回 404；管理和运维使用 `schedulerctl` 或 `/api/v1` REST API。`make build` 会同时构建单进程服务、可选分布式服务、CLI 和 Script Executor。
+项目不包含 Web UI，根路径返回 404；管理和运维使用 `schedulerctl` 或 `/api/v1` REST API。`make build` 构建统一的 `scheduler`、独立的 `schedulerctl` 和压测工具。
 
 `bootstrap` 只显示一次 API Key。调用 REST API 时使用 `Authorization: Bearer <api_key>`。
 
@@ -122,7 +121,7 @@ Docker Image 任务与脚本任务使用同一个 `script-executor`。设置 `DO
 }
 ```
 
-默认禁止容器网络、启用只读根文件系统、丢弃全部 Linux capabilities、禁止提权并限制为 256 个进程；如任务确实需要网络，只允许显式配置 `bridge`。不支持 privileged、host network、宿主目录挂载或 Docker socket 透传。
+默认不附加网络、只读根文件系统、capability、PID、CPU 或内存策略，容器继承 Docker Runtime 的默认行为。可以通过 `network` 指定 `bridge`、`host` 或自定义 Docker network，通过 `read_only_root`、`memory_mb` 和 `cpus` 显式收窄单个任务。任务定义仍不提供 privileged、宿主目录挂载或 Docker socket 透传字段；Executor 本身属于可信高权限组件，应在基础设施层隔离。
 
 私有仓库认证使用 Docker 标准 `config.json`，凭据只部署在 Docker Executor，不写入任务、PostgreSQL、gRPC 消息或日志：
 
@@ -162,7 +161,7 @@ Kubernetes Job 名称使用整条重试链稳定不变的首个 run ID。执行�
 
 ## 命令行客户端
 
-调度性能与 XXL-JOB 的固定对比口径见 [调度性能基准与 XXL-JOB 对比](docs/performance-benchmark.md)。`/metrics` 提供 `scheduler_dispatch_delay_seconds` 和 `scheduler_worker_saturation_ticks_total`，用于观察运行从计划时间到 worker 开始处理的延迟以及执行槽位饱和情况；正式对比仍以共同 HTTP sink 记录的端到端数据为准。worker 全部占用时，引擎不会提前 claim 更多运行或阻塞调度循环，到期任务入队、异步 callback 超时和维护工作仍按调度 tick 继续运行。
+调度性能验收口径见 [调度性能基准](docs/performance-benchmark.md)，架构、性能和安全风险记录见 [代码库审计](docs/code-audit.md)。`/metrics` 提供 `scheduler_dispatch_delay_seconds` 和 `scheduler_worker_saturation_ticks_total`，用于观察运行从计划时间到 worker 开始处理的延迟以及执行槽位饱和情况；正式结论仍以 HTTP sink 记录的端到端数据为准。worker 全部占用时，引擎不会提前 claim 更多运行或阻塞调度循环，到期任务入队、异步 callback 超时和维护工作仍按调度 tick 继续运行。
 
 单进程模式内部使用两个独立 PostgreSQL 连接池：API 池处理认证、查询和控制面请求，Core 池处理调度 claim、运行状态和通知，API 流量无法耗尽 Core 的连接配额。`scheduler_database_pool_connections`、`scheduler_database_pool_empty_acquires_total` 和 `scheduler_database_pool_acquire_duration_seconds_total` 按 `pool=api|core` 输出池状态与等待压力。
 

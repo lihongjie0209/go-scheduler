@@ -78,7 +78,7 @@ func VerifyPassword(encoded, password string) bool {
 	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || e5 != nil {
 		return false
 	}
-	if len(expected) != 32 {
+	if memory < 8*1024 || memory > 256*1024 || iterations < 1 || iterations > 10 || parallelism < 1 || parallelism > 16 || len(salt) < 8 || len(salt) > 64 || len(expected) != 32 {
 		return false
 	}
 	actual := argon2.IDKey([]byte(password), salt, uint32(iterations), uint32(memory), uint8(parallelism), 32)

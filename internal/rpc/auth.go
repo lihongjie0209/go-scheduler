@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -21,11 +22,16 @@ func UnaryServerAuth(current, previous string) grpc.UnaryServerInterceptor {
 			return handler(ctx, req)
 		}
 		values := metadata.ValueFromIncomingContext(ctx, authorization)
-		if len(values) != 1 || (values[0] != "Bearer "+current && (previous == "" || values[0] != "Bearer "+previous)) {
+		if len(values) != 1 || (!matchesBearerToken(values[0], current) && (previous == "" || !matchesBearerToken(values[0], previous))) {
 			return nil, status.Error(codes.Unauthenticated, "invalid service token")
 		}
 		return handler(ctx, req)
 	}
+}
+
+func matchesBearerToken(header, token string) bool {
+	expected := "Bearer " + token
+	return subtle.ConstantTimeCompare([]byte(header), []byte(expected)) == 1
 }
 func UnaryRecovery() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {

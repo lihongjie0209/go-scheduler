@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -87,6 +88,55 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer limitedCore.Close()
+	ownerOne, err := one.CreateUser(ctx, "owner-one@example.com", "hash", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerTwo, err := one.CreateUser(ctx, "owner-two@example.com", "hash", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = one.AddMembership(ctx, tenantID, ownerOne.ID, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.AddMembership(ctx, tenantID, ownerTwo.ID, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	deleteStart := make(chan struct{})
+	deleteResults := make(chan error, 2)
+	for _, candidate := range []struct {
+		store  *Store
+		userID string
+	}{{one, ownerOne.ID}, {two, ownerTwo.ID}} {
+		go func(candidate struct {
+			store  *Store
+			userID string
+		}) {
+			<-deleteStart
+			deleteResults <- candidate.store.DeleteMembership(ctx, tenantID, candidate.userID)
+		}(candidate)
+	}
+	close(deleteStart)
+	var ownerDeleted, ownerRejected int
+	for range 2 {
+		if deleteErr := <-deleteResults; deleteErr == nil {
+			ownerDeleted++
+		} else if errors.Is(deleteErr, ErrConflict) {
+			ownerRejected++
+		} else {
+			t.Fatalf("concurrent owner deletion: %v", deleteErr)
+		}
+	}
+	if ownerDeleted != 1 || ownerRejected != 1 {
+		t.Fatalf("concurrent owner deletions: deleted=%d rejected=%d", ownerDeleted, ownerRejected)
+	}
+	var remainingOwners int
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FROM tenant_memberships WHERE tenant_id=$1 AND role='owner'`, tenantID).Scan(&remainingOwners); err != nil {
+		t.Fatal(err)
+	}
+	if remainingOwners != 1 {
+		t.Fatalf("remaining owners = %d, want 1", remainingOwners)
+	}
 	if stats := limitedAPI.PoolStats(); stats.MaxConnections != 1 {
 		t.Fatalf("limited API max connections = %d, want 1", stats.MaxConnections)
 	}

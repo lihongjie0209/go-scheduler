@@ -95,11 +95,8 @@ func parseDockerDefinition(source string) (DockerDefinition, error) {
 	if definition.PullPolicy != "always" && definition.PullPolicy != "if_not_present" && definition.PullPolicy != "never" {
 		return DockerDefinition{}, errors.New("pull_policy must be always, if_not_present, or never")
 	}
-	if definition.Network == "" {
-		definition.Network = "none"
-	}
-	if definition.Network != "none" && definition.Network != "bridge" {
-		return DockerDefinition{}, errors.New("network must be none or bridge")
+	if len(definition.Network) > 256 || strings.ContainsAny(definition.Network, " \t\r\n") {
+		return DockerDefinition{}, errors.New("network must be a Docker network name without whitespace")
 	}
 	if definition.MemoryMB < 0 || definition.MemoryMB > 1048576 || definition.CPUs < 0 || definition.CPUs > 1024 {
 		return DockerDefinition{}, errors.New("invalid Docker resource limit")
@@ -111,12 +108,11 @@ func parseDockerDefinition(source string) (DockerDefinition, error) {
 }
 
 func dockerRunArguments(name string, task Task, definition DockerDefinition) []string {
-	arguments := []string{"run", "--rm", "--name", name, "--network", definition.Network, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256"}
-	readOnly := true
-	if definition.ReadOnlyRoot != nil {
-		readOnly = *definition.ReadOnlyRoot
+	arguments := []string{"run", "--rm", "--name", name}
+	if definition.Network != "" {
+		arguments = append(arguments, "--network", definition.Network)
 	}
-	if readOnly {
+	if definition.ReadOnlyRoot != nil && *definition.ReadOnlyRoot {
 		arguments = append(arguments, "--read-only")
 	}
 	if definition.MemoryMB > 0 {

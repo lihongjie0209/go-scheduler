@@ -40,3 +40,17 @@ func TestJWT(t *testing.T) {
 		t.Fatalf("unexpected claims: %+v", claims)
 	}
 }
+
+func TestVerifyPasswordRejectsUnsafeParameters(t *testing.T) {
+	t.Parallel()
+	unsafe := []string{
+		"$argon2id$v=19$m=1073741824,t=3,p=2$c2FsdHNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"$argon2id$v=19$m=65536,t=1000000,p=2$c2FsdHNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"$argon2id$v=19$m=65536,t=3,p=0$c2FsdHNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	}
+	for _, encoded := range unsafe {
+		if VerifyPassword(encoded, "correct horse battery staple") {
+			t.Fatalf("unsafe parameters accepted: %s", encoded)
+		}
+	}
+}

@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type UserSummary struct {
@@ -119,19 +122,34 @@ func (s *Store) TenantMembers(ctx context.Context, tenantID string) ([]MemberSum
 	return out, rows.Err()
 }
 func (s *Store) DeleteMembership(ctx context.Context, tenantID, userID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var tenantExists bool
+	if err = tx.QueryRow(ctx, `SELECT true FROM tenants WHERE id=$1 FOR UPDATE`, tenantID).Scan(&tenantExists); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
 	var owners int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM tenant_memberships WHERE tenant_id=$1 AND role='owner'`, tenantID).Scan(&owners); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM tenant_memberships WHERE tenant_id=$1 AND role='owner'`, tenantID).Scan(&owners); err != nil {
 		return err
 	}
 	var role string
-	if err := s.pool.QueryRow(ctx, `SELECT role FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2`, tenantID, userID).Scan(&role); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT role FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2`, tenantID, userID).Scan(&role); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
 		return err
 	}
 	if role == "owner" && owners <= 1 {
 		return ErrConflict
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2`, tenantID, userID)
-	return err
+	if _, err = tx.Exec(ctx, `DELETE FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2`, tenantID, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 func (s *Store) Dashboard(ctx context.Context, tenantID string) (Dashboard, error) {
 	var d Dashboard

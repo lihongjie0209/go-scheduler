@@ -1,0 +1,119 @@
+# 代码库审计：架构、性能与安全
+
+审计基线：`v0.1.4` 之后的主分支，2026-08-13。本文记录可由代码、测试或基准证明的结论；未经过固定环境多轮对照的数据不作为容量承诺。
+
+## 总体结论
+
+项目已经形成清晰的控制面、调度核心和执行器边界，单进程与 etcd 集群模式复用同一套 Core/Store 逻辑。调度状态由 PostgreSQL 条件更新、事务和租约驱动，执行器通过 gRPC 接收任务，异步外部执行状态可在重启后恢复。主要剩余风险不在基本功能，而在长期运行资源边界、保留大量历史数据后的查询成本，以及可信执行器带来的高权限执行面。
+
+本轮已修复：
+
+- 配置类型错误不再静默回退，进程会 fail-fast；
+- Core 的 Executor gRPC 连接池增加 256 个连接上限、引用计数和空闲 LRU 淘汰；
+- 并发删除 tenant owner 通过事务和租户行锁串行化，保持至少一个 owner；
+- 服务令牌改为恒定时间比较；
+- Argon2 哈希参数在内存分配前验证上下限，阻止异常哈希触发资源耗尽；
+- Docker 执行器按产品约束默认继承 Docker 原生网络和权限策略，网络、只读根文件系统、CPU 和内存限制均改为显式可选；
+- migration 23 为 Claim 活跃集合、过期租约、幂等记录、Outbox 和依赖派发清理增加针对性索引。
+
+## 架构审计
+
+### 当前边界
+
+```text
+scheduler server ─┬─ HTTP API / auth
+                  ├─ in-process gRPC Core
+                  ├─ scheduler engine / notifier
+                  └─ PostgreSQL
+
+api-server ── gRPC + etcd discovery ── scheduler core ── gRPC ── executor
+     │                                      │                         │
+     └──────────── PostgreSQL ──────────────┘                 script/http/docker/k8s
+```
+
+- `internal/core` 持有调度状态机和派发逻辑；`internal/store` 持有 PostgreSQL 原子性和租约语义。
+- 单进程模式使用 bufconn 连接 API 与 Core，不依赖 etcd，也没有网络内跳。
+- 集群模式由 etcd 发现 Core 和 Executor，任务一致性仍以 PostgreSQL 为准；etcd 不是运行状态事实来源。
+- 外部 Kubernetes Job 使用确定性 execution ID 查询既有 Job，Executor 重启后可继续观察而不是重复创建。
+
+### 已确认问题
+
+| 严重度 | 问题 | 影响 | 状态 |
+| --- | --- | --- | --- |
+| 高 | 并发删除两个 owner 可同时通过预检查 | tenant 可能失去全部 owner | 已修复并增加 PostgreSQL 并发测试 |
+| 中 | Executor 地址连接永久缓存 | 节点滚动后连接和 goroutine 持续增长 | 已修复，连接池有界且不淘汰使用中的连接 |
+| 中 | 配置解析错误静默使用默认值 | 错误容量或 Cookie 策略仍能启动 | 已修复并增加表驱动测试 |
+| 低 | 多个运行入口仍位于可导入的 `cmd/*` package | 组合入口可用，但应用装配边界不够纯粹 | 待后续迁移到 `internal/app`，不影响运行正确性 |
+
+### 剩余架构风险
+
+- `api-server`、`scheduler-core` 和 standalone 的监听失败在部分入口中由后台 goroutine 记录，启动 hook 不能总是把错误反馈给进程管理器。应统一先 `net.Listen`，成功后再启动 Serve。
+- SMTP 发送是同步的，Notifier 单 worker 遇到慢 SMTP 时会降低通知吞吐；不影响调度主路径，但需要独立并发上限和发送超时。
+- Executor 连接池上限当前为编译期常量 256。超过该规模的集群应先通过容量测试，再决定是否开放配置。
+
+## 性能审计
+
+### 已有证据
+
+最新同机 1,000 任务 burst 三轮中位数为 514.27 次/秒，P99 为 1.943 秒，零丢失、零重复。低水位批量补充将 `ClaimRuns` 调用从 282 次降至 83 次，SQL 总执行时间约从 818 ms 降至 169 ms。详细环境和历史数据见 [performance-benchmark.md](performance-benchmark.md)。
+
+`pg_stat_statements` 证据表明主要成本是运行状态写入、Claim 和事务往返，而不是普通任务查询。已有批量到期入队、单活跃节点快路径、批量日志写入和原子回调终态更新。
+
+### 本轮数据库改进
+
+Migration 23 增加：
+
+- `job_runs_active_concurrency_idx`：Claim 的 job/tenant 活跃计数只扫描运行中集合，不随终态历史线性增长；
+- `job_runs_expired_lease_idx`：恢复过期 running 租约；
+- `job_run_idempotency_created_idx`、`job_run_idempotency_run_idx`：保留期和按 run 清理；
+- `outbox_published_idx`：已发布事件清理；
+- `job_dependency_dispatches_created_idx`、`job_dependency_dispatches_child_run_idx`：依赖历史清理。
+
+这些索引已在 PostgreSQL 16 Testcontainers 中应用并验证。它们主要改善大历史量和恢复场景，不应使用空数据库 burst 数字夸大收益。
+
+### 剩余性能工作
+
+- 构造包含大量终态历史、少量 active/pending 的数据集，对 migration 23 前后执行 `EXPLAIN (ANALYZE, BUFFERS)` 和至少五轮 Claim/cleanup 对照。
+- steady、catch-up 和 recovery 场景尚未达到文档要求的五轮正式容量验收。
+- migration 23 在已有大表上创建索引会占用 I/O 和锁资源，生产升级需维护窗口；后续可评估非事务 `CREATE INDEX CONCURRENTLY` 的独立迁移流程。
+
+## 安全审计
+
+### 已有防护
+
+- 用户密码使用 Argon2id；JWT 固定 HS256、issuer 和过期时间；refresh token 单次轮换并检测重放。
+- API key、refresh token 和回调 token 只在 PostgreSQL 保存 SHA-256 哈希。
+- Job headers、Kubernetes 凭据和通知配置使用 AES-GCM 加密后落库。
+- HTTP 请求体限制为 1 MiB；脚本、Docker 和 Kubernetes 日志限制为 1 MiB；API 错误不返回数据库内部信息。
+- SQL 使用参数绑定；脚本和 Docker 参数不经 shell 拼接。
+- 租户写操作执行角色检查，平台管理接口执行 platform-admin 检查。
+
+### 本轮修复
+
+| 严重度 | 问题 | 修复 |
+| --- | --- | --- |
+| 中 | gRPC Bearer token 普通字符串比较 | 使用 `crypto/subtle.ConstantTimeCompare` |
+| 中 | 数据库中的异常 Argon2 参数可触发超大分配 | 限制 memory、iterations、parallelism、salt 和 hash 长度 |
+| 高 | 并发 owner 删除破坏授权治理不变量 | PostgreSQL 事务和 tenant 行锁 |
+| 中 | 非法布尔/整数/Duration 环境变量静默回退 | 启动边界严格校验 |
+
+`govulncheck v1.6.0 ./...` 未发现可达漏洞。依赖图中存在 19 个模块级公告，但当前代码没有调用受影响符号；仍应由 CI 在每次依赖更新后复查。
+
+### 接受风险与待处理项
+
+- 按产品要求，脚本、HTTP 和 Docker 任务不做目标网络白名单；Docker 默认也不强制 drop capabilities、只读根文件系统或 PID 限制。Executor 因此属于可信高权限组件，必须部署在独立节点/namespace，并由基础设施实施宿主机和凭据隔离。
+- 分布式 gRPC 支持 API→Core TLS，但 Core→Executor 和 Executor→Core 当前默认明文。服务令牌能鉴权但不能防止同网段窃听，应补齐可选 TLS/mTLS，并在生产配置中强制启用。
+- `/metrics` 默认未鉴权，应只通过内网 Service 或网络策略暴露。
+- 登录接口尚无跨实例速率限制。Argon2 能提高暴力破解成本，也会放大匿名 CPU 消耗；应采用 PostgreSQL/Redis 共享限流或网关限流。
+- Kubernetes 配置允许 `insecure_skip_tls_verify`，这是显式运维选项；生产审计应检测并告警，而不是静默启用。
+
+## 验证记录
+
+- `go test ./...`：通过；
+- `go test -race ./...`：通过；
+- `go vet ./...`：通过；
+- PostgreSQL migration 23 Testcontainers：通过；
+- PostgreSQL 并发 owner 删除 Testcontainers：通过；
+- `govulncheck v1.6.0 ./...`：无可达漏洞。
+
+完整集成回归和镜像构建仍以 GitHub Actions 为最终门禁。

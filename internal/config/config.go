@@ -51,6 +51,9 @@ type Config struct {
 }
 
 func Load(serviceName string) (Config, error) {
+	if err := validateTypedEnvironment(); err != nil {
+		return Config{}, err
+	}
 	contextPath, err := normalizeContextPath(os.Getenv("API_CONTEXT_PATH"))
 	if err != nil {
 		return Config{}, err
@@ -128,6 +131,33 @@ func Load(serviceName string) (Config, error) {
 		return Config{}, fmt.Errorf("ETCD_CERT and ETCD_KEY must be configured together")
 	}
 	return c, nil
+}
+
+func validateTypedEnvironment() error {
+	for _, key := range []string{"MASTER_KEY_VERSION", "WORKERS", "API_DATABASE_MAX_CONNS", "API_DATABASE_MIN_CONNS", "CORE_DATABASE_MAX_CONNS", "CORE_DATABASE_MIN_CONNS"} {
+		value := os.Getenv(key)
+		if value == "" {
+			continue
+		}
+		if _, err := strconv.ParseInt(value, 10, 32); err != nil {
+			return fmt.Errorf("%s must be an integer: %w", key, err)
+		}
+	}
+	for _, key := range []string{"SCHEDULER_INTERVAL", "HISTORY_RETENTION"} {
+		value := os.Getenv(key)
+		if value == "" {
+			continue
+		}
+		if _, err := time.ParseDuration(value); err != nil {
+			return fmt.Errorf("%s must be a duration: %w", key, err)
+		}
+	}
+	if value := os.Getenv("COOKIE_SECURE"); value != "" {
+		if _, err := strconv.ParseBool(value); err != nil {
+			return fmt.Errorf("COOKIE_SECURE must be a boolean: %w", err)
+		}
+	}
+	return nil
 }
 
 func validatePoolSize(name string, minConns, maxConns int32) error {

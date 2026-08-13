@@ -41,3 +41,15 @@ func TestUnaryRecovery(t *testing.T) {
 		t.Fatalf("got %s", status.Code(err))
 	}
 }
+
+func TestMatchesBearerToken(t *testing.T) {
+	t.Parallel()
+	if !matchesBearerToken("Bearer service-token", "service-token") {
+		t.Fatal("valid service token rejected")
+	}
+	for _, header := range []string{"service-token", "Bearer service-token-extra", "Bearer service-toke", ""} {
+		if matchesBearerToken(header, "service-token") {
+			t.Fatalf("invalid service token accepted: %q", header)
+		}
+	}
+}

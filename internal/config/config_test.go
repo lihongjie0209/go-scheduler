@@ -121,3 +121,26 @@ func TestLoadRejectsInvalidDatabasePoolConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadRejectsMalformedTypedEnvironment(t *testing.T) {
+	tests := []struct {
+		name, variable, value string
+	}{
+		{name: "workers", variable: "WORKERS", value: "many"},
+		{name: "scheduler interval", variable: "SCHEDULER_INTERVAL", value: "often"},
+		{name: "cookie secure", variable: "COOKIE_SECURE", value: "sometimes"},
+		{name: "pool size", variable: "CORE_DATABASE_MAX_CONNS", value: "large"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "postgres://test")
+			t.Setenv("SERVICE_TOKEN", "service-token")
+			t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+			t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
+			t.Setenv(test.variable, test.value)
+			if _, err := Load("scheduler-server"); err == nil {
+				t.Fatalf("Load() silently accepted %s=%s", test.variable, test.value)
+			}
+		})
+	}
+}

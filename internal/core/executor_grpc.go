@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
 	"github.com/lihongjie0209/go-scheduler/internal/rpc"
@@ -16,36 +17,84 @@ import (
 type executorGRPCPool struct {
 	token string
 	mu    sync.Mutex
-	conns map[string]*grpc.ClientConn
+	conns map[string]*executorGRPCConnection
 }
+
+type executorGRPCConnection struct {
+	connection *grpc.ClientConn
+	lastUsed   time.Time
+	inUse      int
+}
+
+const maxExecutorGRPCConnections = 256
 
 func newExecutorGRPCPool(token string) *executorGRPCPool {
-	return &executorGRPCPool{token: token, conns: make(map[string]*grpc.ClientConn)}
+	return &executorGRPCPool{token: token, conns: make(map[string]*executorGRPCConnection)}
 }
 
-func (p *executorGRPCPool) client(address string) (executorv1.ExecutorServiceClient, error) {
+func (p *executorGRPCPool) acquire(address string) (executorv1.ExecutorServiceClient, func(), error) {
 	target, err := executorGRPCTarget(address)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if connection := p.conns[target]; connection != nil {
-		return executorv1.NewExecutorServiceClient(connection), nil
+	if entry := p.conns[target]; entry != nil {
+		entry.inUse++
+		entry.lastUsed = time.Now()
+		p.mu.Unlock()
+		return executorv1.NewExecutorServiceClient(entry.connection), p.releaseFunc(target, entry), nil
+	}
+	if len(p.conns) >= maxExecutorGRPCConnections && !p.evictIdleLocked() {
+		p.mu.Unlock()
+		return nil, nil, fmt.Errorf("executor gRPC connection pool is full")
 	}
 	connection, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithUnaryInterceptor(rpc.UnaryClientAuth(p.token)))
 	if err != nil {
-		return nil, fmt.Errorf("connect executor %q: %w", target, err)
+		p.mu.Unlock()
+		return nil, nil, fmt.Errorf("connect executor %q: %w", target, err)
 	}
-	p.conns[target] = connection
-	return executorv1.NewExecutorServiceClient(connection), nil
+	entry := &executorGRPCConnection{connection: connection, lastUsed: time.Now(), inUse: 1}
+	p.conns[target] = entry
+	p.mu.Unlock()
+	return executorv1.NewExecutorServiceClient(connection), p.releaseFunc(target, entry), nil
+}
+
+func (p *executorGRPCPool) releaseFunc(target string, expected *executorGRPCConnection) func() {
+	return func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		entry := p.conns[target]
+		if entry != expected || entry.inUse == 0 {
+			return
+		}
+		entry.inUse--
+		entry.lastUsed = time.Now()
+	}
+}
+
+func (p *executorGRPCPool) evictIdleLocked() bool {
+	var oldestTarget string
+	var oldest *executorGRPCConnection
+	for target, entry := range p.conns {
+		if entry.inUse != 0 || oldest != nil && !entry.lastUsed.Before(oldest.lastUsed) {
+			continue
+		}
+		oldestTarget, oldest = target, entry
+	}
+	if oldest == nil {
+		return false
+	}
+	delete(p.conns, oldestTarget)
+	_ = oldest.connection.Close()
+	return true
 }
 
 func (p *executorGRPCPool) dispatch(ctx context.Context, address string, request *executorv1.DispatchRequest) error {
-	client, err := p.client(address)
+	client, release, err := p.acquire(address)
 	if err != nil {
 		return err
 	}
+	defer release()
 	response, err := client.Dispatch(ctx, request)
 	if err != nil {
 		return fmt.Errorf("dispatch executor: %w", err)
@@ -59,8 +108,8 @@ func (p *executorGRPCPool) dispatch(ctx context.Context, address string, request
 func (p *executorGRPCPool) close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for target, connection := range p.conns {
-		_ = connection.Close()
+	for target, entry := range p.conns {
+		_ = entry.connection.Close()
 		delete(p.conns, target)
 	}
 }
