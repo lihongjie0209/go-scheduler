@@ -15,6 +15,7 @@
 - 服务令牌改为恒定时间比较；
 - Argon2 哈希参数在内存分配前验证上下限，阻止异常哈希触发资源耗尽；
 - 登录接口按来源 IP 和邮箱摘要执行有界本地限流，成功认证后重置窗口；
+- 不存在或禁用账号同样执行生产参数的 dummy Argon2 校验，降低邮箱时序枚举风险；
 - API→Core、Executor→Core/standalone 和 Core→Executor 均支持可选 TLS，并有真实 TLS gRPC 握手测试；
 - Docker 执行器按产品约束默认继承 Docker 原生网络和权限策略，网络、只读根文件系统、CPU 和内存限制均改为显式可选；
 - migration 23 为 Claim 活跃集合、过期租约、幂等记录、Outbox 和依赖派发清理增加针对性索引。

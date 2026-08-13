@@ -27,6 +27,9 @@ import (
 )
 
 type principalKey struct{}
+
+const dummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=2$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
 type principal struct {
 	TenantID, UserID, Role string
 	PlatformAdmin          bool
@@ -410,7 +413,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := s.store.GetUserByEmail(r.Context(), body.Email)
-	if err != nil || user.Disabled || !auth.VerifyPassword(user.PasswordHash, body.Password) {
+	passwordHash := user.PasswordHash
+	if err != nil {
+		passwordHash = dummyPasswordHash
+	}
+	passwordValid := auth.VerifyPassword(passwordHash, body.Password)
+	if err != nil || user.Disabled || !passwordValid {
 		writeError(w, 401, "invalid credentials")
 		return
 	}

@@ -3,6 +3,8 @@ package api
 import (
 	"testing"
 	"time"
+
+	"github.com/lihongjie0209/go-scheduler/internal/auth"
 )
 
 func TestLoginLimiterBoundsAttemptsAndResets(t *testing.T) {
@@ -25,6 +27,13 @@ func TestLoginLimiterBoundsAttemptsAndResets(t *testing.T) {
 	now = now.Add(loginWindow)
 	if !limiter.allow("192.0.2.1:1234", "user@example.com") {
 		t.Fatal("expired window did not restore allowance")
+	}
+}
+
+func TestDummyPasswordHashUsesProductionCost(t *testing.T) {
+	t.Parallel()
+	if auth.VerifyPassword(dummyPasswordHash, "not-the-dummy-password") {
+		t.Fatal("dummy password hash unexpectedly matched")
 	}
 }
 
