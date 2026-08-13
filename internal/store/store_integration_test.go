@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1570,6 +1569,10 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if bytes.Contains(legacyPlaintext, []byte("legacy-secret")) || bytes.Contains(legacyEncrypted, []byte("legacy-secret")) || len(legacyEncrypted) == 0 {
 		t.Fatal("legacy notification config was not encrypted during update")
 	}
+	legacyNotification, err = one.SetNotificationChannelEnabled(ctx, tenantID, legacyNotification.ID, false, legacyNotification.Version)
+	if err != nil || legacyNotification.Enabled {
+		t.Fatalf("disable legacy notification fixture = %+v, %v", legacyNotification, err)
+	}
 	crossTenantNotificationJob, err := one.CreateJob(ctx, Job{TenantID: otherTenantID, Name: "notification-isolation", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: "https://example.com", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
 	if err != nil {
 		t.Fatal(err)
@@ -1655,7 +1658,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockedChannels, err := matchingNotificationChannelIDs(ctx, lockTx, managedEventID, tenantID)
-	if err != nil || !slices.Contains(lockedChannels, managedChannel.ID) {
+	if err != nil || len(lockedChannels) != 1 || lockedChannels[0] != managedChannel.ID {
 		_ = lockTx.Rollback(ctx)
 		t.Fatalf("locked notification channels = %v, %v", lockedChannels, err)
 	}
