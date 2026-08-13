@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS notification_deliveries_pending_created_idx;

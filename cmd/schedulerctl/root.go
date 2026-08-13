@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -612,7 +613,7 @@ func kubernetesClustersCommand(c *cliConfig) *cobra.Command {
 
 func notificationsCommand(c *cliConfig) *cobra.Command {
 	cmd := &cobra.Command{Use: "notifications", Short: "Manage notification subscriptions and delivery history"}
-	cmd.AddCommand(&cobra.Command{Use: "list", Short: "List enabled notification channels", Args: cobra.NoArgs, RunE: runAuthenticated(c, http.MethodGet, "/api/v1/notification-channels", nil)})
+	cmd.AddCommand(&cobra.Command{Use: "list", Short: "List active and disabled notification channels", Args: cobra.NoArgs, RunE: runAuthenticated(c, http.MethodGet, "/api/v1/notification-channels", nil)})
 	var kind, name, config string
 	var events, jobIDs []string
 	var allJobs bool
@@ -702,6 +703,9 @@ func notificationsCommand(c *cliConfig) *cobra.Command {
 	var historyChannelID, historyJobID, historyStatus, historyCursor string
 	var historyLimit int
 	history := &cobra.Command{Use: "history", Short: "Query notification delivery history", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		if err := validateNotificationHistoryFilters(historyChannelID, historyJobID, historyStatus, historyLimit); err != nil {
+			return err
+		}
 		query := url.Values{}
 		query.Set("limit", strconv.Itoa(historyLimit))
 		if historyChannelID != "" {
@@ -726,6 +730,25 @@ func notificationsCommand(c *cliConfig) *cobra.Command {
 	cmd.AddCommand(history)
 	return cmd
 }
+
+func validateNotificationHistoryFilters(channelID, jobID, deliveryStatus string, limit int) error {
+	if channelID != "" && uuid.Validate(channelID) != nil {
+		return errors.New("channel-id must be a UUID")
+	}
+	if jobID != "" && uuid.Validate(jobID) != nil {
+		return errors.New("job-id must be a UUID")
+	}
+	switch deliveryStatus {
+	case "", "pending", "delivered", "dead":
+	default:
+		return errors.New("status must be pending, delivered, or dead")
+	}
+	if limit < 1 || limit > 500 {
+		return errors.New("limit must be between 1 and 500")
+	}
+	return nil
+}
+
 func versionCommand(value string) *cobra.Command {
 	return &cobra.Command{Use: "version", Short: "Print version", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), value)
