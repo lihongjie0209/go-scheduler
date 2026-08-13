@@ -150,14 +150,14 @@ func newDiscoveredCoreClient(t *testing.T, etcd *clientv3.Client, prefix string)
 }
 
 func newLifecycleFixture(t *testing.T) lifecycleFixture {
-	return newLifecycleFixtureWithEncryption(t, false)
+	return newLifecycleFixtureWithEncryption(t)
 }
 
 func newEncryptedLifecycleFixture(t *testing.T) lifecycleFixture {
-	return newLifecycleFixtureWithEncryption(t, true)
+	return newLifecycleFixtureWithEncryption(t)
 }
 
-func newLifecycleFixtureWithEncryption(t *testing.T, encrypted bool) lifecycleFixture {
+func newLifecycleFixtureWithEncryption(t *testing.T) lifecycleFixture {
 	t.Helper()
 	ctx := t.Context()
 	root, err := filepath.Abs("../..")
@@ -186,15 +186,12 @@ func newLifecycleFixtureWithEncryption(t *testing.T, encrypted bool) lifecycleFi
 		t.Fatal(err)
 	}
 	_ = conn.Close(ctx)
-	var options []store.Option
-	if encrypted {
-		key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
-		ring, ringErr := cryptox.NewKeyring(1, key)
-		if ringErr != nil {
-			t.Fatal(ringErr)
-		}
-		options = append(options, store.WithHeaderCipher(ring))
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	ring, ringErr := cryptox.NewKeyring(1, key)
+	if ringErr != nil {
+		t.Fatal(ringErr)
 	}
+	options := []store.Option{store.WithHeaderCipher(ring)}
 	database, err := store.New(ctx, dsn, options...)
 	if err != nil {
 		t.Fatal(err)

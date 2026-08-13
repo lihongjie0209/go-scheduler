@@ -1,10 +1,22 @@
 package store
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+func TestEncodeNotificationConfigRequiresCipher(t *testing.T) {
+	t.Parallel()
+	plaintext, encrypted, version, err := (&Store{}).encodeNotificationConfig(json.RawMessage(`{"url":"https://hooks.example.com?token=secret"}`))
+	if err == nil || !strings.Contains(err.Error(), "requires store cipher") {
+		t.Fatalf("encode error = %v", err)
+	}
+	if plaintext != nil || encrypted != nil || version != nil {
+		t.Fatalf("unencrypted notification config returned data: plaintext=%s encrypted=%x version=%v", plaintext, encrypted, version)
+	}
+}
 
 func TestBoundedNotificationError(t *testing.T) {
 	t.Parallel()

@@ -61,7 +61,12 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.Close(ctx)
-	one, err := New(ctx, dsn)
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
+	ring, err := cryptox.NewKeyring(1, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, err := New(ctx, dsn, WithHeaderCipher(ring))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +78,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if maintenance.Backend != "pg_partman" {
 		t.Fatalf("partition backend = %q, want pg_partman", maintenance.Backend)
 	}
-	two, err := New(ctx, dsn)
+	two, err := New(ctx, dsn, WithHeaderCipher(ring))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1213,11 +1218,6 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 			t.Fatalf("misfire %s did not advance next_run_at: %+v", policy, state)
 		}
 	}
-	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
-	ring, err := cryptox.NewKeyring(1, key)
-	if err != nil {
-		t.Fatal(err)
-	}
 	encryptedStore, err := New(ctx, dsn, WithHeaderCipher(ring))
 	if err != nil {
 		t.Fatal(err)
@@ -1256,7 +1256,12 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil || loadedDockerJob.DockerRegistryAuth.Password != "registry-secret" || !loadedDockerJob.DockerRegistryAuth.Configured {
 		t.Fatalf("Docker registry credentials = %+v, %v", loadedDockerJob.DockerRegistryAuth, err)
 	}
-	if _, err = one.CreateJob(ctx, Job{TenantID: tenantID, Name: "unencrypted-private-image", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 60, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", Enabled: false, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "__docker__", ScriptLanguage: "docker", ScriptSource: `{"image":"registry.example.com/team/image:latest"}`, DockerRegistryAuth: DockerRegistryAuth{Server: "registry.example.com", Username: "robot", Password: "registry-secret", Configured: true}}); err == nil {
+	unencryptedStore, err := New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unencryptedStore.Close()
+	if _, err = unencryptedStore.CreateJob(ctx, Job{TenantID: tenantID, Name: "unencrypted-private-image", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 60, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", Enabled: false, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "__docker__", ScriptLanguage: "docker", ScriptSource: `{"image":"registry.example.com/team/image:latest"}`, DockerRegistryAuth: DockerRegistryAuth{Server: "registry.example.com", Username: "robot", Password: "registry-secret", Configured: true}}); err == nil {
 		t.Fatal("store without an encryption key accepted Docker registry credentials")
 	}
 	kubernetesCluster, err := encryptedStore.CreateKubernetesCluster(ctx, KubernetesCluster{TenantID: tenantID, Name: "integration-k8s", AuthMode: "service_account", APIServer: "https://k8s.example", Namespace: "jobs", Credentials: KubernetesCredentials{Token: "service-account-secret", CAData: "test-ca"}})
@@ -1543,6 +1548,26 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	}
 	if _, err = one.pool.Exec(ctx, `UPDATE outbox_events SET published_at=now() WHERE published_at IS NULL`); err != nil {
 		t.Fatal(err)
+	}
+	var legacyNotificationID string
+	if err = one.pool.QueryRow(ctx, `INSERT INTO notification_channels(tenant_id,kind,name,config,event_types,all_jobs,max_attempts,backoff_initial_seconds,backoff_max_seconds) VALUES($1,'webhook','legacy-plaintext','{"url":"https://legacy.example.com?token=legacy-secret"}','{job.run.failed}',true,3,2,30) RETURNING id`, tenantID).Scan(&legacyNotificationID); err != nil {
+		t.Fatal(err)
+	}
+	legacyNotification, err := one.NotificationChannel(ctx, tenantID, legacyNotificationID)
+	if err != nil || !bytes.Contains(legacyNotification.Config, []byte("legacy-secret")) {
+		t.Fatalf("legacy notification config = %s, %v", legacyNotification.Config, err)
+	}
+	legacyNotification.Name = "legacy-encrypted"
+	legacyNotification, err = one.UpdateNotificationChannel(ctx, legacyNotification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyPlaintext, legacyEncrypted []byte
+	if err = one.pool.QueryRow(ctx, `SELECT config,encrypted_config FROM notification_channels WHERE id=$1`, legacyNotification.ID).Scan(&legacyPlaintext, &legacyEncrypted); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(legacyPlaintext, []byte("legacy-secret")) || bytes.Contains(legacyEncrypted, []byte("legacy-secret")) || len(legacyEncrypted) == 0 {
+		t.Fatal("legacy notification config was not encrypted during update")
 	}
 	crossTenantNotificationJob, err := one.CreateJob(ctx, Job{TenantID: otherTenantID, Name: "notification-isolation", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: "https://example.com", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
 	if err != nil {

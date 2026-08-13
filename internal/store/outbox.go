@@ -188,7 +188,7 @@ func (s *Store) DeleteNotificationChannel(ctx context.Context, tenantID, id stri
 
 func (s *Store) encodeNotificationConfig(config json.RawMessage) (json.RawMessage, []byte, *int, error) {
 	if s.headerCipher == nil {
-		return config, nil, nil, nil
+		return nil, nil, nil, errors.New("notification channel config requires store cipher")
 	}
 	ciphertext, keyVersion, err := s.headerCipher.Encrypt(config)
 	if err != nil {
