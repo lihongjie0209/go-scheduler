@@ -25,24 +25,38 @@ type execution struct {
 	executionID string
 	state       string
 	message     string
+	finishedAt  time.Time
 }
+
+type executionCompletion struct {
+	runID      string
+	finishedAt time.Time
+}
+
+const (
+	defaultExecutionHistoryLimit     = 10_000
+	defaultExecutionHistoryRetention = 24 * time.Hour
+)
 
 // GRPCServer is the executor-facing control plane. Dispatch acknowledges after
 // the task has been durably accepted into this process; completion is reported
 // asynchronously so long-running work never occupies a Core dispatch worker.
 type GRPCServer struct {
 	executorv1.UnimplementedExecutorServiceServer
-	server   *Server
-	reporter Reporter
-	mu       sync.RWMutex
-	runs     map[string]*execution
+	server           *Server
+	reporter         Reporter
+	mu               sync.RWMutex
+	runs             map[string]*execution
+	completed        []executionCompletion
+	historyLimit     int
+	historyRetention time.Duration
 }
 
 func NewGRPCServer(server *Server, reporter Reporter) (*GRPCServer, error) {
 	if server == nil || reporter == nil {
 		return nil, errors.New("executor server and reporter are required")
 	}
-	return &GRPCServer{server: server, reporter: reporter, runs: make(map[string]*execution)}, nil
+	return &GRPCServer{server: server, reporter: reporter, runs: make(map[string]*execution), historyLimit: defaultExecutionHistoryLimit, historyRetention: defaultExecutionHistoryRetention}, nil
 }
 
 func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchRequest) (*executorv1.DispatchResponse, error) {
@@ -56,6 +70,7 @@ func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchReq
 		return nil, status.Errorf(codes.NotFound, "handler %q not found", request.GetHandler())
 	}
 	s.mu.Lock()
+	s.pruneExecutionHistoryLocked(time.Now())
 	if current, ok := s.runs[request.GetRunId()]; ok {
 		response := &executorv1.DispatchResponse{Accepted: true, ExecutionId: current.executionID, State: current.state}
 		s.mu.Unlock()
@@ -101,17 +116,41 @@ func (s *GRPCServer) finish(request *executorv1.DispatchRequest, handlerErr erro
 	}
 	s.mu.Lock()
 	current, exists := s.runs[request.GetRunId()]
+	transitioned := false
 	if exists && current.state == "running" {
-		current.state, current.message = state, message
+		finishedAt := time.Now()
+		current.state, current.message, current.finishedAt = state, message, finishedAt
 		current.cancel()
+		s.completed = append(s.completed, executionCompletion{runID: request.GetRunId(), finishedAt: finishedAt})
+		s.pruneExecutionHistoryLocked(finishedAt)
+		transitioned = true
 	}
 	s.mu.Unlock()
-	if !exists {
+	if !transitioned {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = s.reporter.Complete(ctx, request.GetRunId(), request.GetCallbackToken(), handlerErr == nil, message)
+}
+
+func (s *GRPCServer) pruneExecutionHistoryLocked(now time.Time) {
+	for len(s.completed) > 0 {
+		oldest := s.completed[0]
+		overLimit := s.historyLimit >= 0 && len(s.completed) > s.historyLimit
+		expired := s.historyRetention > 0 && now.Sub(oldest.finishedAt) >= s.historyRetention
+		if !overLimit && !expired {
+			break
+		}
+		if current, exists := s.runs[oldest.runID]; exists && current.state != "running" && current.finishedAt.Equal(oldest.finishedAt) {
+			delete(s.runs, oldest.runID)
+		}
+		s.completed[0] = executionCompletion{}
+		s.completed = s.completed[1:]
+	}
+	if len(s.completed) == 0 {
+		s.completed = nil
+	}
 }
 
 func (s *GRPCServer) Cancel(_ context.Context, request *executorv1.CancelRequest) (*executorv1.CancelResponse, error) {
@@ -121,8 +160,11 @@ func (s *GRPCServer) Cancel(_ context.Context, request *executorv1.CancelRequest
 	if !exists || current.state != "running" {
 		return &executorv1.CancelResponse{Accepted: false}, nil
 	}
-	current.state, current.message = "cancelled", request.GetReason()
+	finishedAt := time.Now()
+	current.state, current.message, current.finishedAt = "cancelled", request.GetReason(), finishedAt
 	current.cancel()
+	s.completed = append(s.completed, executionCompletion{runID: request.GetRunId(), finishedAt: finishedAt})
+	s.pruneExecutionHistoryLocked(finishedAt)
 	return &executorv1.CancelResponse{Accepted: true}, nil
 }
 

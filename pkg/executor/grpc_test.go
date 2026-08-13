@@ -84,11 +84,16 @@ func TestGRPCDispatchIsAsyncAndIdempotent(t *testing.T) {
 
 func TestGRPCCancelStopsExecution(t *testing.T) {
 	t.Parallel()
+	stopped := make(chan struct{})
 	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = server.Handle("wait", func(ctx context.Context, _ Task) error { <-ctx.Done(); return ctx.Err() }); err != nil {
+	if err = server.Handle("wait", func(ctx context.Context, _ Task) error {
+		defer close(stopped)
+		<-ctx.Done()
+		return ctx.Err()
+	}); err != nil {
 		t.Fatal(err)
 	}
 	reporter := &recordingReporter{completed: make(chan bool, 1)}
@@ -107,6 +112,55 @@ func TestGRPCCancelStopsExecution(t *testing.T) {
 	state, err := client.Inspect(ctx, &executorv1.InspectRequest{RunId: request.GetRunId()})
 	if err != nil || state.GetState() != "cancelled" {
 		t.Fatalf("Inspect() state=%q err=%v", state.GetState(), err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled handler did not stop")
+	}
+	select {
+	case <-reporter.completed:
+		t.Fatal("cancelled execution reported a conflicting completion")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestGRPCExecutionHistoryIsBounded(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	service := &GRPCServer{
+		runs: map[string]*execution{
+			"expired": {state: "succeeded", finishedAt: now.Add(-2 * time.Hour)},
+			"older":   {state: "failed", finishedAt: now.Add(-2 * time.Minute)},
+			"newer":   {state: "succeeded", finishedAt: now.Add(-time.Minute)},
+			"active":  {state: "running"},
+		},
+		completed: []executionCompletion{
+			{runID: "expired", finishedAt: now.Add(-2 * time.Hour)},
+			{runID: "older", finishedAt: now.Add(-2 * time.Minute)},
+			{runID: "newer", finishedAt: now.Add(-time.Minute)},
+		},
+		historyLimit:     2,
+		historyRetention: time.Hour,
+	}
+	service.pruneExecutionHistoryLocked(now)
+	if _, exists := service.runs["expired"]; exists {
+		t.Fatal("expired execution was retained")
+	}
+	if len(service.completed) != 2 || service.runs["active"].state != "running" {
+		t.Fatalf("unexpected retained history: completed=%+v runs=%+v", service.completed, service.runs)
+	}
+	service.historyLimit = 1
+	service.pruneExecutionHistoryLocked(now)
+	if _, exists := service.runs["older"]; exists || len(service.completed) != 1 {
+		t.Fatalf("history limit was not enforced: completed=%+v runs=%+v", service.completed, service.runs)
+	}
+	service.pruneExecutionHistoryLocked(now.Add(2 * time.Hour))
+	if _, exists := service.runs["newer"]; exists || len(service.completed) != 0 {
+		t.Fatalf("history retention was not enforced: completed=%+v runs=%+v", service.completed, service.runs)
+	}
+	if _, exists := service.runs["active"]; !exists {
+		t.Fatal("active execution was pruned")
 	}
 }
 
