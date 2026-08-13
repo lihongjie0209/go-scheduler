@@ -93,13 +93,9 @@ func (s *Store) MaintainRunPartitions(ctx context.Context, now time.Time, retent
 			quoteTimestamp(partition.Start),
 			quoteTimestamp(partition.End),
 		)
-		tag, execErr := tx.Exec(ctx, statement)
+		_, execErr := tx.Exec(ctx, statement)
 		if execErr != nil {
 			return PartitionMaintenanceResult{}, fmt.Errorf("create run partition %s: %w", partition.Name, execErr)
-		}
-		if tag.RowsAffected() == 0 {
-			// PostgreSQL does not report a useful row count for CREATE TABLE.
-			// Count is populated below by comparing the pre-existing relation.
 		}
 	}
 

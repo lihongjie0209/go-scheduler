@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -84,11 +83,8 @@ func (r *Registrar) unregister(ctx context.Context) error {
 	return nil
 }
 func (r *Registrar) heartbeat(ctx context.Context) error {
-	ttlSeconds := r.options.TTL / time.Second
-	if ttlSeconds > time.Duration(math.MaxInt32) {
-		return fmt.Errorf("executor TTL exceeds maximum seconds")
-	}
-	payload, err := json.Marshal(map[string]any{"address": strings.TrimRight(r.options.Address, "/"), "ttl_seconds": int32(ttlSeconds)})
+	ttl := r.options.TTL / time.Second
+	payload, err := json.Marshal(map[string]any{"address": strings.TrimRight(r.options.Address, "/"), "ttl_seconds": ttl})
 	if err != nil {
 		return err
 	}
