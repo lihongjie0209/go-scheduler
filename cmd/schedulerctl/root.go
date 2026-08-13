@@ -562,12 +562,14 @@ func kubernetesClustersCommand(c *cliConfig) *cobra.Command {
 			var kubeconfig, caData []byte
 			var err error
 			if kubeconfigFile != "" {
+				// #nosec G304 -- the operator explicitly supplies this CLI input path.
 				kubeconfig, err = os.ReadFile(kubeconfigFile)
 				if err != nil {
 					return fmt.Errorf("read kubeconfig: %w", err)
 				}
 			}
 			if caFile != "" {
+				// #nosec G304 -- the operator explicitly supplies this CLI input path.
 				caData, err = os.ReadFile(caFile)
 				if err != nil {
 					return fmt.Errorf("read CA file: %w", err)

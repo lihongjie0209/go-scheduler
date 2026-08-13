@@ -142,9 +142,10 @@ func validateJob(j *schedulerv1.Job) error {
 	}
 	if j.ScriptLanguage != "" || j.ScriptSource != "" {
 		expectedHandler := "__script__"
-		if j.ScriptLanguage == "docker" {
+		switch j.ScriptLanguage {
+		case "docker":
 			expectedHandler = "__docker__"
-		} else if j.ScriptLanguage == "kubernetes" {
+		case "kubernetes":
 			expectedHandler = "__kubernetes__"
 		}
 		if j.ExecutorGroupId == "" || j.ExecutorHandler != expectedHandler {

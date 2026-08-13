@@ -149,6 +149,14 @@ func newDiscoveredCoreClient(t *testing.T, etcd *clientv3.Client, prefix string)
 }
 
 func newLifecycleFixture(t *testing.T) lifecycleFixture {
+	return newLifecycleFixtureWithEncryption(t, false)
+}
+
+func newEncryptedLifecycleFixture(t *testing.T) lifecycleFixture {
+	return newLifecycleFixtureWithEncryption(t, true)
+}
+
+func newLifecycleFixtureWithEncryption(t *testing.T, encrypted bool) lifecycleFixture {
 	t.Helper()
 	ctx := t.Context()
 	root, err := filepath.Abs("../..")
@@ -177,12 +185,16 @@ func newLifecycleFixture(t *testing.T) lifecycleFixture {
 		t.Fatal(err)
 	}
 	_ = conn.Close(ctx)
-	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
-	ring, err := cryptox.NewKeyring(1, key)
-	if err != nil {
-		t.Fatal(err)
+	var options []store.Option
+	if encrypted {
+		key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+		ring, ringErr := cryptox.NewKeyring(1, key)
+		if ringErr != nil {
+			t.Fatal(ringErr)
+		}
+		options = append(options, store.WithHeaderCipher(ring))
 	}
-	database, err := store.New(ctx, dsn, store.WithHeaderCipher(ring))
+	database, err := store.New(ctx, dsn, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2878,7 +2890,7 @@ func TestExecutorActiveRoutingUseCaseThroughCLI(t *testing.T) {
 }
 
 func TestKubernetesExecutorLabelRoutingUseCase(t *testing.T) {
-	fixture := newLifecycleFixture(t)
+	fixture := newEncryptedLifecycleFixture(t)
 	defer fixture.close()
 	var kubernetesCalls, excludedCalls atomic.Int32
 	var dispatched struct {
