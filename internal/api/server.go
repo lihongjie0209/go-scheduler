@@ -28,7 +28,9 @@ import (
 
 type principalKey struct{}
 
-const dummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=2$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+// dummyPasswordHash is public, deliberately non-matching Argon2 work used to
+// equalize unknown-account login timing; it is not an authentication secret.
+const dummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=2$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" //nolint:gosec
 
 type principal struct {
 	TenantID, UserID, Role string
