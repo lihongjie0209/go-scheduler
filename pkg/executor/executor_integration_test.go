@@ -149,7 +149,7 @@ func TestDockerHandlerRunsAndRemovesContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(logger.info, ""), "docker:payload") {
-		t.Fatalf("stdout = %#v", logger.info)
+	if !strings.Contains(strings.Join(logger.stdout, ""), "docker:payload") {
+		t.Fatalf("stdout = %#v", logger.stdout)
 	}
 }
