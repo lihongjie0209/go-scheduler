@@ -64,6 +64,10 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	shutdownTimeout, err := durationEnv("EXECUTOR_SHUTDOWN_TIMEOUT", 30*time.Second, time.Second, 24*time.Hour)
+	if err != nil {
+		return err
+	}
 	schedulerTransport, err := rpc.ClientTransportCredentials(os.Getenv("SCHEDULER_GRPC_TLS_CA"), os.Getenv("SCHEDULER_GRPC_TLS_SERVER_NAME"))
 	if err != nil {
 		return err
@@ -111,6 +115,7 @@ func Run() error {
 	}()
 	registrarErr := make(chan error, 1)
 	go func() { registrarErr <- registrar.Run(ctx) }()
+	registrarStopped := false
 	select {
 	case <-ctx.Done():
 	case err = <-serverErr:
@@ -118,14 +123,31 @@ func Run() error {
 			stop()
 		}
 	case err = <-registrarErr:
+		registrarStopped = true
 		if err != nil {
 			stop()
 		}
 	}
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+	stop()
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+	drainErr := executorService.Drain(shutdownCtx)
+	cancelShutdown()
 	grpcServer.GracefulStop()
 	if err != nil {
 		return err
+	}
+	if drainErr != nil && !errors.Is(drainErr, context.DeadlineExceeded) {
+		return drainErr
+	}
+	if !registrarStopped {
+		select {
+		case registrarErrValue := <-registrarErr:
+			if registrarErrValue != nil {
+				return registrarErrValue
+			}
+		case <-time.After(5 * time.Second):
+		}
 	}
 	return nil
 }
@@ -151,6 +173,15 @@ func positiveIntEnv(key string, fallback int) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1 {
 		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return parsed, nil
+}
+
+func durationEnv(key string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
+	value := envOr(key, fallback.String())
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, fmt.Errorf("%s must be a duration between %s and %s", key, minimum, maximum)
 	}
 	return parsed, nil
 }

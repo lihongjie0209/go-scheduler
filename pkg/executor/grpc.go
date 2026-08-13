@@ -58,6 +58,8 @@ type GRPCServer struct {
 	reporter                 Reporter
 	mu                       sync.RWMutex
 	runs                     map[string]*execution
+	draining                 bool
+	executionWG              sync.WaitGroup
 	completed                []executionCompletion
 	historyLimit             int
 	historyRetention         time.Duration
@@ -104,6 +106,10 @@ func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchReq
 		return nil, status.Errorf(codes.NotFound, "handler %q not found", request.GetHandler())
 	}
 	s.mu.Lock()
+	if s.draining {
+		s.mu.Unlock()
+		return nil, status.Error(codes.Unavailable, "executor is draining")
+	}
 	s.pruneExecutionHistoryLocked(time.Now())
 	if current, ok := s.runs[request.GetRunId()]; ok {
 		response := &executorv1.DispatchResponse{Accepted: true, ExecutionId: current.executionID, State: current.state}
@@ -122,6 +128,7 @@ func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchReq
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(request.GetTimeoutSeconds())*time.Second)
 	s.runs[request.GetRunId()] = &execution{cancel: cancel, executionID: executionID, state: "running"}
+	s.executionWG.Add(1)
 	s.mu.Unlock()
 
 	go s.execute(ctx, request, registered.handler)
@@ -129,6 +136,7 @@ func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchReq
 }
 
 func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRequest, handler Handler) {
+	defer s.executionWG.Done()
 	s.server.markActive(request.GetJobId(), 1)
 	released := false
 	release := func() {
@@ -159,6 +167,32 @@ func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRe
 	err := invokeHandler(ctx, handler, Task{RunID: request.GetRunId(), ExternalExecutionID: request.GetExternalExecutionId(), JobID: request.GetJobId(), Input: request.GetInput(), BroadcastGroupID: request.GetBroadcastGroupId(), BroadcastIndex: request.GetBroadcastIndex(), BroadcastTotal: request.GetBroadcastTotal(), ScriptLanguage: request.GetScriptLanguage(), ScriptSource: request.GetScriptSource(), KubernetesCluster: kubernetes, HTTP: httpExecution, Logger: logger})
 	release()
 	s.finish(request, err)
+}
+
+// Drain rejects new dispatches and waits for accepted executions to finish.
+// If ctx expires, all still-running handlers are cancelled before returning.
+func (s *GRPCServer) Drain(ctx context.Context) error {
+	s.mu.Lock()
+	s.draining = true
+	s.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		s.executionWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		s.mu.Lock()
+		for _, current := range s.runs {
+			if current.state == "running" {
+				current.cancel()
+			}
+		}
+		s.mu.Unlock()
+		return ctx.Err()
+	}
 }
 
 func (s *GRPCServer) finish(request *executorv1.DispatchRequest, handlerErr error) {

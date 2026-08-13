@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -233,6 +234,99 @@ func TestGRPCExecutionSlotReleasesBeforeCompletionReport(t *testing.T) {
 	second := &executorv1.DispatchRequest{RunId: "report-2", JobId: "job-1", Handler: "instant", CallbackToken: "token-2", TimeoutSeconds: 10}
 	if _, err = service.Dispatch(t.Context(), second); err != nil {
 		t.Fatalf("execution slot remained occupied during completion report: %v", err)
+	}
+}
+
+func TestGRPCDrainWaitsAndRejectsNewDispatches(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Handle("drain", func(ctx context.Context, _ Task) error {
+		close(started)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reporter := &recordingReporter{completed: make(chan bool, 1)}
+	service, err := NewGRPCServer(server, reporter, GRPCServerOptions{MaxConcurrentExecutions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &executorv1.DispatchRequest{RunId: "drain-1", JobId: "job-1", Handler: "drain", CallbackToken: "token", TimeoutSeconds: 10}
+	if _, err = service.Dispatch(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	drainCtx, cancelDrain := context.WithTimeout(t.Context(), time.Second)
+	defer cancelDrain()
+	drained := make(chan error, 1)
+	go func() { drained <- service.Drain(drainCtx) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, err = service.Dispatch(t.Context(), &executorv1.DispatchRequest{RunId: "drain-2", JobId: "job-1", Handler: "drain", CallbackToken: "token", TimeoutSeconds: 10})
+		if status.Code(err) == codes.Unavailable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dispatch was not rejected while draining: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case err = <-drained:
+		t.Fatalf("Drain returned before active execution finished: %v", err)
+	default:
+	}
+	close(release)
+	if err = <-drained; err != nil {
+		t.Fatalf("Drain() error = %v", err)
+	}
+}
+
+func TestGRPCDrainTimeoutCancelsActiveExecutions(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Handle("cancel-on-drain", func(ctx context.Context, _ Task) error {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reporter := &recordingReporter{completed: make(chan bool, 1)}
+	service, err := NewGRPCServer(server, reporter, GRPCServerOptions{MaxConcurrentExecutions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &executorv1.DispatchRequest{RunId: "drain-timeout", JobId: "job-1", Handler: "cancel-on-drain", CallbackToken: "token", TimeoutSeconds: 10}
+	if _, err = service.Dispatch(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	drainCtx, cancelDrain := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancelDrain()
+	if err = service.Drain(drainCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Drain() error = %v, want deadline exceeded", err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("drain timeout did not cancel active handler")
 	}
 }
 

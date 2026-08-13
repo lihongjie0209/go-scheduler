@@ -53,6 +53,7 @@ services:
       EXECUTOR_ADVERTISE_ADDRESS: "grpc://executor:9999"
       EXECUTOR_LABELS: "${SCHEDULER_EXECUTOR_LABELS:-linux,docker,kubernetes}"
       EXECUTOR_MAX_CONCURRENCY: "${SCHEDULER_EXECUTOR_MAX_CONCURRENCY:-32}"
+      EXECUTOR_SHUTDOWN_TIMEOUT: "${SCHEDULER_EXECUTOR_SHUTDOWN_TIMEOUT:-30s}"
       DOCKER_ENABLED: "true"
       KUBERNETES_ENABLED: "true"
       DOCKER_CONFIG: "/docker-auth"
@@ -61,3 +62,4 @@ services:
       - "${DOCKER_CONFIG_DIR:-./docker-auth}:/docker-auth:ro"
     depends_on:
       scheduler-server: {condition: service_started}
+    stop_grace_period: 40s
