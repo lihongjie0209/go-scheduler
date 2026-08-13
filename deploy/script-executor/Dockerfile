@@ -3,10 +3,9 @@ WORKDIR /src
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=${GOPROXY}
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN go mod download
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/scheduler ./cmd/scheduler
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/scheduler ./cmd/scheduler
 
 FROM alpine:3.22
 ARG POWERSHELL_VERSION=7.6.4
