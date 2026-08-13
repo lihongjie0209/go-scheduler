@@ -124,7 +124,8 @@ func DockerCanceller(options DockerOptions) ExternalCanceller {
 		if !exists {
 			return nil
 		}
-		if err = exec.CommandContext(ctx, binary, "rm", "--force", name).Run(); err != nil { // #nosec G204 -- fixed Docker arguments and internally generated name.
+		//nolint:gosec // The binary is operator-configured; arguments and container name are internally generated.
+		if err = exec.CommandContext(ctx, binary, "rm", "--force", name).Run(); err != nil {
 			return fmt.Errorf("remove managed Docker container: %w", err)
 		}
 		return nil
