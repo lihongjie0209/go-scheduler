@@ -35,3 +35,22 @@ services:
       INSTANCE_ID: "standalone-compose-1"
     depends_on: {bootstrap: {condition: service_completed_successfully}}
     ports: ["18080:8080"]
+  executor:
+    profiles: [executor]
+    build:
+      context: ..
+      dockerfile: deploy/script-executor/Dockerfile
+    environment:
+      SCHEDULER_URL: "http://scheduler-server:8080"
+      SCHEDULER_TOKEN: "${SCHEDULER_EXECUTOR_TOKEN:-}"
+      EXECUTOR_GROUP_ID: "${SCHEDULER_EXECUTOR_GROUP_ID:-}"
+      EXECUTOR_NODE_ID: "compose-executor-1"
+      EXECUTOR_ADVERTISE_URL: "http://executor:9999"
+      EXECUTOR_LABELS: "${SCHEDULER_EXECUTOR_LABELS:-linux,docker}"
+      DOCKER_ENABLED: "true"
+      DOCKER_CONFIG: "/docker-auth"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "${DOCKER_CONFIG_DIR:-./docker-auth}:/docker-auth:ro"
+    depends_on:
+      scheduler-server: {condition: service_started}

@@ -86,7 +86,7 @@ go http.ListenAndServe(":9999", server)
 
 Shell、Python、Node.js、PHP 与 PowerShell 脚本由独立 `script-executor` 执行，Scheduler Core 不加载解释器。脚本以版本化任务字段 `script_language`、`script_source` 保存，执行器使用固定解释器和 0700 临时文件，不拼接 shell 命令；任务输入通过 `SCHEDULER_INPUT` 环境变量传入。
 
-执行器可通过 `EXECUTOR_LABELS=linux,gpu,zone-a` 注册最多 32 个标签。任务的 `required_executor_labels` 必须全部出现在节点上，`excluded_executor_labels` 任意命中即排除；普通路由、FAILOVER/BUSYOVER 和广播分片使用同一套过滤规则。
+执行器可通过 `EXECUTOR_LABELS=linux,gpu,zone-a` 注册最多 32 个标签。任务的 `required_executor_labels` 必须全部出现在节点上，`excluded_executor_labels` 任意命中即排除；普通路由、FAILOVER/BUSYOVER 和广播分片使用同一套过滤规则。运维人员在手工触发时显式传入的执行器地址属于强制覆盖，会绕过标签约束。
 
 ```bash
 docker build -f deploy/script-executor/Dockerfile -t go-scheduler-script-executor .

@@ -521,12 +521,16 @@ func executorsCommand(c *cliConfig) *cobra.Command {
 	cmd.AddCommand(groups)
 	var address string
 	var ttl int32
+	var labels []string
 	register := &cobra.Command{Use: "register GROUP_ID NODE_ID", Short: "Register or heartbeat an executor node", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		payload := func() ([]byte, error) { return json.Marshal(map[string]any{"address": address, "ttl_seconds": ttl}) }
+		payload := func() ([]byte, error) {
+			return json.Marshal(map[string]any{"address": address, "ttl_seconds": ttl, "labels": labels})
+		}
 		return runAuthenticated(c, http.MethodPut, "/api/v1/executor-groups/"+args[0]+"/nodes/"+args[1], payload)(cmd, nil)
 	}}
 	register.Flags().StringVar(&address, "address", "", "executor base URL")
 	register.Flags().Int32Var(&ttl, "ttl", 30, "heartbeat TTL in seconds")
+	register.Flags().StringSliceVar(&labels, "label", nil, "executor label (repeatable or comma-separated)")
 	_ = register.MarkFlagRequired("address")
 	cmd.AddCommand(register)
 	cmd.AddCommand(&cobra.Command{Use: "unregister GROUP_ID NODE_ID", Short: "Remove an executor node immediately", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {

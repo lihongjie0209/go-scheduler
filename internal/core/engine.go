@@ -183,7 +183,9 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 				}
 			}
 			node, routeErr = reserve(parent, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID, func(snapshot store.ExecutorRoutingSnapshot) (store.ExecutorNode, error) {
-				snapshot.Nodes = store.FilterExecutorNodes(snapshot.Nodes, requiredLabels, excludedLabels)
+				if len(c.Run.OverrideAddresses) == 0 {
+					snapshot.Nodes = store.FilterExecutorNodes(snapshot.Nodes, requiredLabels, excludedLabels)
+				}
 				candidates := make([]executorCandidate, 0, len(snapshot.Nodes))
 				for _, candidate := range snapshot.Nodes {
 					candidates = append(candidates, executorCandidate{ID: candidate.NodeID, Address: candidate.Address, UseCount: candidate.UseCount, LastUsedAt: candidate.LastUsedAt})

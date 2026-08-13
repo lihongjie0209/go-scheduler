@@ -949,12 +949,12 @@ func TestCrossModuleScriptJobThroughGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "script-grpc", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 30, MaxQueueSize: 10, ExecutorGroupId: group.Id, ExecutorHandler: "__script__", ScriptLanguage: "python", ScriptSource: `print("hello")`}})
+	created, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "script-grpc", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 30, MaxQueueSize: 10, ExecutorGroupId: group.Id, ExecutorHandler: "__script__", ScriptLanguage: "python", ScriptSource: `print("hello")`, RequiredExecutorLabels: []string{"linux", "gpu"}, ExcludedExecutorLabels: []string{"spot"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := fixture.client.GetJob(t.Context(), &schedulerv1.GetJobRequest{TenantId: fixture.tenantID, Id: created.Id})
-	if err != nil || loaded.ScriptLanguage != "python" || loaded.ScriptSource != `print("hello")` {
+	if err != nil || loaded.ScriptLanguage != "python" || loaded.ScriptSource != `print("hello")` || strings.Join(loaded.RequiredExecutorLabels, ",") != "gpu,linux" || strings.Join(loaded.ExcludedExecutorLabels, ",") != "spot" {
 		t.Fatalf("script job=%+v err=%v", loaded, err)
 	}
 	for _, language := range []string{"nodejs", "php", "powershell"} {

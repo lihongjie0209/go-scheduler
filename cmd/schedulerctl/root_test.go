@@ -403,13 +403,14 @@ func TestExecutorsRegisterUsesHeartbeatEndpoint(t *testing.T) {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		var body struct {
-			Address    string `json:"address"`
-			TTLSeconds int32  `json:"ttl_seconds"`
+			Address    string   `json:"address"`
+			TTLSeconds int32    `json:"ttl_seconds"`
+			Labels     []string `json:"labels"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Address != "http://executor:9999" || body.TTLSeconds != 30 {
+		if body.Address != "http://executor:9999" || body.TTLSeconds != 30 || strings.Join(body.Labels, ",") != "linux,gpu" {
 			t.Errorf("body = %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"id":"node-1","online":true}`))
@@ -417,7 +418,7 @@ func TestExecutorsRegisterUsesHeartbeatEndpoint(t *testing.T) {
 	defer server.Close()
 	command := newRootCommand("test")
 	command.SetOut(new(bytes.Buffer))
-	command.SetArgs([]string{"--server", server.URL, "--token", "gsk_test", "executors", "register", "group-1", "node-1", "--address", "http://executor:9999", "--ttl", "30"})
+	command.SetArgs([]string{"--server", server.URL, "--token", "gsk_test", "executors", "register", "group-1", "node-1", "--address", "http://executor:9999", "--ttl", "30", "--label", "linux", "--label", "gpu"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
