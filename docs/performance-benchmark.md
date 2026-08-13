@@ -57,3 +57,24 @@
 - 优化前后至少 5 轮结果的统计比较。
 
 正式报告不使用“更快”这类结论，除非差异在重复实验中稳定出现，并且没有错误率、资源消耗或语义正确性的退化。
+
+## 共享 HTTP sink
+
+`scheduler-bench` 提供两套系统共用的黑盒执行目标：
+
+```bash
+go run ./cmd/scheduler-bench --listen :19090
+```
+
+压测控制器应在触发前把唯一事件 ID 和计划时间写入 sink，任务执行 URL 只携带事件 ID：
+
+```bash
+curl -X POST http://127.0.0.1:19090/api/v1/expect \
+  -H 'Content-Type: application/json' \
+  -d '{"events":[{"id":"run-0001","scheduled_at":"2026-08-13T12:00:00Z"}]}'
+
+curl -X POST 'http://127.0.0.1:19090/execute?id=run-0001'
+curl http://127.0.0.1:19090/api/v1/report
+```
+
+sink 对每个 ID 只使用首次到达时间计算延迟，并单独统计重复、未知和非法请求。`POST /api/v1/reset` 清空上一轮数据。正式压测时 sink 必须部署在独立节点，并与两套调度器保持相同网络路径。
