@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/fx"
@@ -23,13 +24,14 @@ import (
 	"github.com/lihongjie0209/go-scheduler/internal/cryptox"
 	"github.com/lihongjie0209/go-scheduler/internal/discovery"
 	"github.com/lihongjie0209/go-scheduler/internal/notifier"
+	"github.com/lihongjie0209/go-scheduler/internal/observability"
 	"github.com/lihongjie0209/go-scheduler/internal/rpc"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	fx.New(fx.Provide(loadConfig, newStore, newEtcd, newExecutorRegistry, newCoreService, newGRPCServer, newRegistrar, newEngine, newNotifier, newCoreHTTPServer), fx.Invoke(run)).Run()
+	fx.New(fx.Provide(loadConfig, newStore, newEtcd, newExecutorRegistry, newCoreService, newGRPCServer, newRegistrar, newEngine, newNotifier, newCoreHTTPServer), fx.Invoke(registerDatabasePoolMetrics, run)).Run()
 }
 func loadConfig() (config.Config, error) { return config.Load("scheduler-core") }
 func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
@@ -39,12 +41,15 @@ func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring))
+	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring), store.WithPoolSize(int32(c.CoreDatabaseMaxConns), int32(c.CoreDatabaseMinConns)))
 	if err != nil {
 		return nil, err
 	}
 	lc.Append(fx.Hook{OnStop: func(context.Context) error { s.Close(); return nil }})
 	return s, nil
+}
+func registerDatabasePoolMetrics(s *store.Store) error {
+	return prometheus.Register(observability.NewDatabasePoolCollector("core", s.PoolStats))
 }
 func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
 	client, err := discovery.NewClient(c.EtcdEndpoints, c.EtcdUsername, c.EtcdPassword, c.EtcdCA, c.EtcdCert, c.EtcdKey)

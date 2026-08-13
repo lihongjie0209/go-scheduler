@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/fx"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
@@ -16,6 +17,7 @@ import (
 	"github.com/lihongjie0209/go-scheduler/internal/core"
 	"github.com/lihongjie0209/go-scheduler/internal/cryptox"
 	"github.com/lihongjie0209/go-scheduler/internal/notifier"
+	"github.com/lihongjie0209/go-scheduler/internal/observability"
 	"github.com/lihongjie0209/go-scheduler/internal/rpc"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
@@ -25,8 +27,10 @@ func main() {
 	fx.New(
 		fx.Provide(
 			loadConfig,
-			newStore,
-			core.NewService,
+			newStoreCipher,
+			newAPIStore,
+			newCoreStore,
+			newCoreService,
 			newInProcessScheduler,
 			newCoreClient,
 			newAuthManager,
@@ -34,20 +38,23 @@ func main() {
 			newEngine,
 			newNotifier,
 		),
-		fx.Invoke(run),
+		fx.Invoke(registerDatabasePoolMetrics, run),
 	).Run()
 }
 
 func loadConfig() (config.Config, error) { return config.Load("scheduler-server") }
 
-func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
+type apiStore struct{ *store.Store }
+type coreStore struct{ *store.Store }
+
+func newStoreCipher(c config.Config) (store.HeaderCipher, error) {
+	return cryptox.NewKeyring(c.MasterKeyVersion, c.MasterKey)
+}
+
+func openStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher, maxConns, minConns int) (*store.Store, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	ring, err := cryptox.NewKeyring(c.MasterKeyVersion, c.MasterKey)
-	if err != nil {
-		return nil, err
-	}
-	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring))
+	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(cipher), store.WithPoolSize(int32(maxConns), int32(minConns)))
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +63,31 @@ func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
 		return nil
 	}})
 	return s, nil
+}
+
+func newAPIStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher) (*apiStore, error) {
+	s, err := openStore(lc, c, cipher, c.APIDatabaseMaxConns, c.APIDatabaseMinConns)
+	if err != nil {
+		return nil, err
+	}
+	return &apiStore{Store: s}, nil
+}
+
+func newCoreStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher) (*coreStore, error) {
+	s, err := openStore(lc, c, cipher, c.CoreDatabaseMaxConns, c.CoreDatabaseMinConns)
+	if err != nil {
+		return nil, err
+	}
+	return &coreStore{Store: s}, nil
+}
+
+func newCoreService(s *coreStore) *core.Service { return core.NewService(s.Store) }
+
+func registerDatabasePoolMetrics(api *apiStore, core *coreStore) error {
+	if err := prometheus.Register(observability.NewDatabasePoolCollector("api", api.PoolStats)); err != nil {
+		return err
+	}
+	return prometheus.Register(observability.NewDatabasePoolCollector("core", core.PoolStats))
 }
 
 func newInProcessScheduler(lc fx.Lifecycle, c config.Config, service *core.Service) (*rpc.InProcessScheduler, error) {
@@ -75,8 +107,8 @@ func newAuthManager(c config.Config) (*auth.Manager, error) {
 	return auth.NewManager(c.JWTSecret, "go-scheduler", 15*time.Minute)
 }
 
-func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s *store.Store, manager *auth.Manager) *http.Server {
-	handler := apihttp.NewServer(client, s, manager, c.CookieSecure)
+func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s *apiStore, manager *auth.Manager) *http.Server {
+	handler := apihttp.NewServer(client, s.Store, manager, c.CookieSecure)
 	handler.SetContextPath(c.APIContextPath)
 	handler.SetStandaloneInstance(c.InstanceID, time.Now())
 	return &http.Server{
@@ -89,12 +121,12 @@ func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s
 	}
 }
 
-func newEngine(c config.Config, s *store.Store) *core.Engine {
-	return core.NewEngine(s, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, c.TargetAllowlist)
+func newEngine(c config.Config, s *coreStore) *core.Engine {
+	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, c.TargetAllowlist)
 }
 
-func newNotifier(c config.Config, s *store.Store) *notifier.Worker {
-	return notifier.New(s, c.InstanceID, notifier.SMTPConfig{
+func newNotifier(c config.Config, s *coreStore) *notifier.Worker {
+	return notifier.New(s.Store, c.InstanceID, notifier.SMTPConfig{
 		Address: c.SMTPAddress, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.SMTPFrom,
 	})
 }

@@ -33,6 +33,8 @@ services:
       PUBLIC_BASE_URL: "http://scheduler-server:8080"
       COOKIE_SECURE: "false"
       INSTANCE_ID: "standalone-compose-1"
+      API_DATABASE_MAX_CONNS: "8"
+      CORE_DATABASE_MAX_CONNS: "24"
     depends_on: {bootstrap: {condition: service_completed_successfully}}
     ports: ["18080:8080"]
   executor:

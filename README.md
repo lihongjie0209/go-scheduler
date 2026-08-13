@@ -55,6 +55,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `API_CONTEXT_PATH` | 空 | API URL 前缀，例如 `/scheduler`；健康检查、指标、REST、回调和执行器注册均使用此前缀 |
 | `PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | HTTP 任务异步回调使用的公开 API 地址 |
 | `WORKERS` | `16` | 单 Core 最大并发执行数 |
+| `API_DATABASE_MAX_CONNS` / `API_DATABASE_MIN_CONNS` | `8` / `1` | API PostgreSQL 连接池上限与保底连接数 |
+| `CORE_DATABASE_MAX_CONNS` / `CORE_DATABASE_MIN_CONNS` | `24` / `2` | 调度、执行状态和通知 PostgreSQL 连接池上限与保底连接数 |
 | `HISTORY_RETENTION` | `2160h` | 历史记录和运行分区保留期，必须不超过 90 天 |
 | `TARGET_HOST_ALLOWLIST` | 必填 | 允许任务访问的精确域名或 `*.example.com` 通配域名 |
 | `SMTP_ADDRESS` | 空 | 邮件告警 SMTP 地址，例如 `smtp.example.com:587` |
@@ -160,6 +162,10 @@ Kubernetes Job 名称使用整条重试链稳定不变的首个 run ID。执行�
 ## 命令行客户端
 
 调度性能与 XXL-JOB 的固定对比口径见 [调度性能基准与 XXL-JOB 对比](docs/performance-benchmark.md)。`/metrics` 提供 `scheduler_dispatch_delay_seconds` 和 `scheduler_worker_saturation_ticks_total`，用于观察运行从计划时间到 worker 开始处理的延迟以及执行槽位饱和情况；正式对比仍以共同 HTTP sink 记录的端到端数据为准。worker 全部占用时，引擎不会提前 claim 更多运行或阻塞调度循环，到期任务入队、异步 callback 超时和维护工作仍按调度 tick 继续运行。
+
+单进程模式内部使用两个独立 PostgreSQL 连接池：API 池处理认证、查询和控制面请求，Core 池处理调度 claim、运行状态和通知，API 流量无法耗尽 Core 的连接配额。`scheduler_database_pool_connections`、`scheduler_database_pool_empty_acquires_total` 和 `scheduler_database_pool_acquire_duration_seconds_total` 按 `pool=api|core` 输出池状态与等待压力。
+
+配置连接池时应确保 PostgreSQL 的 `max_connections` 能覆盖所有服务实例的 API 与 Core 上限之和，并为迁移、运维和监控连接预留空间。增加池上限不能替代慢查询与长事务治理。
 
 ```bash
 make build

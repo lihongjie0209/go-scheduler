@@ -77,6 +77,38 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer two.Close()
+	limitedAPI, err := New(ctx, dsn, WithPoolSize(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer limitedAPI.Close()
+	limitedCore, err := New(ctx, dsn, WithPoolSize(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer limitedCore.Close()
+	if stats := limitedAPI.PoolStats(); stats.MaxConnections != 1 {
+		t.Fatalf("limited API max connections = %d, want 1", stats.MaxConnections)
+	}
+	heldAPIConnection, err := limitedAPI.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiWaitCtx, cancelAPIWait := context.WithTimeout(ctx, 50*time.Millisecond)
+	if err = limitedAPI.Ping(apiWaitCtx); err == nil {
+		cancelAPIWait()
+		heldAPIConnection.Release()
+		t.Fatal("saturated API pool unexpectedly acquired another connection")
+	}
+	cancelAPIWait()
+	corePingCtx, cancelCorePing := context.WithTimeout(ctx, time.Second)
+	if err = limitedCore.Ping(corePingCtx); err != nil {
+		cancelCorePing()
+		heldAPIConnection.Release()
+		t.Fatalf("API pool saturation affected Core pool: %v", err)
+	}
+	cancelCorePing()
+	heldAPIConnection.Release()
 	routeGroup, err := one.CreateExecutorGroup(ctx, ExecutorGroup{TenantID: tenantID, Name: "workers", RouteStrategy: "round"})
 	if err != nil {
 		t.Fatal(err)

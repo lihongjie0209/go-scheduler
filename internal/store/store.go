@@ -112,11 +112,26 @@ type Store struct {
 	pool         *pgxpool.Pool
 	headerCipher HeaderCipher
 }
+
+type PoolStats struct {
+	AcquiredConnections int32
+	IdleConnections     int32
+	TotalConnections    int32
+	MaxConnections      int32
+	EmptyAcquireCount   int64
+	AcquireDuration     time.Duration
+}
 type HeaderCipher interface {
 	Encrypt([]byte) ([]byte, int, error)
 	Decrypt([]byte, int) ([]byte, error)
 }
-type Option func(*Store)
+type storeOptions struct {
+	headerCipher HeaderCipher
+	maxConns     int32
+	minConns     int32
+}
+
+type Option func(*storeOptions)
 
 type blockAction string
 
@@ -151,15 +166,31 @@ func decideBlockAction(policy string, hasActive bool) blockAction {
 	}
 }
 
-func WithHeaderCipher(cipher HeaderCipher) Option { return func(s *Store) { s.headerCipher = cipher } }
+func WithHeaderCipher(cipher HeaderCipher) Option {
+	return func(options *storeOptions) { options.headerCipher = cipher }
+}
+
+func WithPoolSize(maxConns, minConns int32) Option {
+	return func(options *storeOptions) {
+		options.maxConns = maxConns
+		options.minConns = minConns
+	}
+}
 
 func New(ctx context.Context, databaseURL string, opts ...Option) (*Store, error) {
+	options := storeOptions{maxConns: 32, minConns: 2}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if options.maxConns < 1 || options.minConns < 0 || options.minConns > options.maxConns {
+		return nil, fmt.Errorf("invalid database pool size: min=%d max=%d", options.minConns, options.maxConns)
+	}
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse database config: %w", err)
 	}
-	config.MaxConns = 32
-	config.MinConns = 2
+	config.MaxConns = options.maxConns
+	config.MinConns = options.minConns
 	config.MaxConnLifetime = time.Hour
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -169,15 +200,22 @@ func New(ctx context.Context, databaseURL string, opts ...Option) (*Store, error
 		pool.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
-	store := &Store{pool: pool}
-	for _, opt := range opts {
-		opt(store)
-	}
-	return store, nil
+	return &Store{pool: pool, headerCipher: options.headerCipher}, nil
 }
 
 func (s *Store) Close()                         { s.pool.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+func (s *Store) PoolStats() PoolStats {
+	stats := s.pool.Stat()
+	return PoolStats{
+		AcquiredConnections: stats.AcquiredConns(),
+		IdleConnections:     stats.IdleConns(),
+		TotalConnections:    stats.TotalConns(),
+		MaxConnections:      stats.MaxConns(),
+		EmptyAcquireCount:   stats.EmptyAcquireCount(),
+		AcquireDuration:     stats.AcquireDuration(),
+	}
+}
 func (s *Store) AuthenticateAPIKey(ctx context.Context, raw string) (string, string, error) {
 	hash := sha256.Sum256([]byte(raw))
 	var tenantID, role string
