@@ -3332,6 +3332,109 @@ func TestCronSchedulingUseCaseThroughCLI(t *testing.T) {
 	}
 }
 
+func TestWorkerSaturationDoesNotBlockSchedulerUseCase(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+
+	blockingStarted := make(chan struct{}, 1)
+	releaseBlocking := make(chan struct{})
+	var released bool
+	defer func() {
+		if !released {
+			close(releaseBlocking)
+		}
+	}()
+	scheduledExecuted := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/blocking":
+			select {
+			case blockingStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-releaseBlocking:
+			case <-r.Context().Done():
+			}
+		case "/scheduled":
+			select {
+			case scheduledExecuted <- struct{}{}:
+			default:
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	blockingJob, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "saturated-worker", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL + "/blocking", HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduledJob, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "scheduled-while-saturated", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL + "/scheduled", HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.store.TriggerJob(t.Context(), fixture.tenantID, blockingJob.ID, "saturation-blocker", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	engineCtx, cancelEngine := context.WithCancel(t.Context())
+	engine := core.NewEngine(fixture.store, "saturation-core", 20*time.Millisecond, 1, target.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine.Run(engineCtx)
+	defer func() {
+		cancelEngine()
+		engine.Wait()
+	}()
+	select {
+	case <-blockingStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("blocking run did not occupy the worker")
+	}
+
+	connection, err := pgx.Connect(t.Context(), fixture.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = connection.Exec(t.Context(), `UPDATE jobs SET next_run_at=now()-interval '1 second' WHERE id=$1`, scheduledJob.ID); err != nil {
+		_ = connection.Close(t.Context())
+		t.Fatal(err)
+	}
+	if err = connection.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		runs, listErr := fixture.store.ListRuns(t.Context(), fixture.tenantID, scheduledJob.ID, 10)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(runs) > 0 {
+			time.Sleep(100 * time.Millisecond)
+			runs, listErr = fixture.store.ListRuns(t.Context(), fixture.tenantID, scheduledJob.ID, 10)
+			if listErr != nil {
+				t.Fatal(listErr)
+			}
+			if len(runs) != 1 || runs[0].Status != "pending" {
+				t.Fatalf("run claimed without a free worker: %+v", runs)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("due run was not enqueued while worker was saturated")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	close(releaseBlocking)
+	released = true
+	select {
+	case <-scheduledExecuted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("pending run was not executed after worker became available")
+	}
+}
+
 func TestMisfireRecoveryUseCaseThroughCLI(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()

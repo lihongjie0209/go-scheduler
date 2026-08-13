@@ -12,8 +12,12 @@ var (
 		Help:    "Delay from a run's scheduled time until an engine worker starts processing it.",
 		Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
 	}, []string{"trigger_type"})
+	WorkerSaturationTicks = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "scheduler_worker_saturation_ticks_total",
+		Help: "Scheduler ticks that could not claim work because every execution worker was occupied.",
+	})
 )
 
 func init() {
-	prometheus.MustRegister(HTTPRequests, HTTPDuration, Runs, RunDuration, DispatchDelay)
+	prometheus.MustRegister(HTTPRequests, HTTPDuration, Runs, RunDuration, DispatchDelay, WorkerSaturationTicks)
 }

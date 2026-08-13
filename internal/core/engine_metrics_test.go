@@ -28,3 +28,25 @@ func TestDispatchDelay(t *testing.T) {
 		})
 	}
 }
+
+func TestAvailableWorkerSlots(t *testing.T) {
+	t.Parallel()
+
+	workers := make(chan struct{}, 3)
+	if got := availableWorkerSlots(workers); got != 3 {
+		t.Fatalf("empty worker pool has %d available slots, want 3", got)
+	}
+	workers <- struct{}{}
+	workers <- struct{}{}
+	if got := availableWorkerSlots(workers); got != 1 {
+		t.Fatalf("partially occupied worker pool has %d available slots, want 1", got)
+	}
+	workers <- struct{}{}
+	if got := availableWorkerSlots(workers); got != 0 {
+		t.Fatalf("saturated worker pool has %d available slots, want 0", got)
+	}
+	<-workers
+	if got := availableWorkerSlots(workers); got != 1 {
+		t.Fatalf("released worker pool has %d available slots, want 1", got)
+	}
+}

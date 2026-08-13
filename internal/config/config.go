@@ -106,6 +106,12 @@ func Load(serviceName string) (Config, error) {
 	if c.HistoryRetention <= 0 || c.HistoryRetention > 90*24*time.Hour {
 		return Config{}, fmt.Errorf("HISTORY_RETENTION must be positive and at most 2160h")
 	}
+	if c.SchedulerInterval <= 0 {
+		return Config{}, fmt.Errorf("SCHEDULER_INTERVAL must be positive")
+	}
+	if c.Workers <= 0 {
+		return Config{}, fmt.Errorf("WORKERS must be positive")
+	}
 	if len(c.TargetAllowlist) == 0 {
 		return Config{}, fmt.Errorf("TARGET_HOST_ALLOWLIST is required")
 	}

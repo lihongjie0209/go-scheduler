@@ -79,3 +79,29 @@ func TestStandaloneLoadDoesNotRequireEtcdConfiguration(t *testing.T) {
 		t.Fatalf("standalone config unexpectedly depends on etcd: %v", err)
 	}
 }
+
+func TestLoadRejectsNonPositiveSchedulerConcurrency(t *testing.T) {
+	tests := []struct {
+		name     string
+		variable string
+		value    string
+	}{
+		{name: "zero workers", variable: "WORKERS", value: "0"},
+		{name: "negative workers", variable: "WORKERS", value: "-1"},
+		{name: "zero interval", variable: "SCHEDULER_INTERVAL", value: "0s"},
+		{name: "negative interval", variable: "SCHEDULER_INTERVAL", value: "-1s"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "postgres://test")
+			t.Setenv("SERVICE_TOKEN", "service-token")
+			t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+			t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
+			t.Setenv("TARGET_HOST_ALLOWLIST", "example.com")
+			t.Setenv(test.variable, test.value)
+			if _, err := Load("scheduler-server"); err == nil {
+				t.Fatalf("Load() accepted %s=%s", test.variable, test.value)
+			}
+		})
+	}
+}

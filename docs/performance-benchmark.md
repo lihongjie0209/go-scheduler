@@ -37,6 +37,7 @@
 | 调度吞吐 | sink 每秒收到的唯一执行请求数 |
 | 调度延迟 | sink 接收时间减任务计划时间，报告 P50/P90/P95/P99/P99.9/max |
 | 引擎派发延迟 | `scheduler_dispatch_delay_seconds`，计划时间到本项目 worker 开始处理 |
+| worker 饱和 | `scheduler_worker_saturation_ticks_total`，没有空闲执行槽位的调度 tick 数 |
 | 端到端完成延迟 | 任务计划时间到运行进入成功终态 |
 | 错误率 | 失败、超时和丢失执行数除以期望执行数 |
 | 重复率 | 同一逻辑触发被 sink 收到超过一次的比例 |

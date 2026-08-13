@@ -95,7 +95,12 @@ func (e *Engine) tick(ctx context.Context, sem chan struct{}) error {
 		}
 		e.lastCleanup = time.Now()
 	}
-	runs, err := e.store.ClaimRuns(ctx, e.owner, e.workers, 2*time.Minute)
+	available := availableWorkerSlots(sem)
+	if available == 0 {
+		observability.WorkerSaturationTicks.Inc()
+		return nil
+	}
+	runs, err := e.store.ClaimRuns(ctx, e.owner, available, 2*time.Minute)
 	if err != nil {
 		return fmt.Errorf("claim runs: %w", err)
 	}
@@ -110,6 +115,11 @@ func (e *Engine) tick(ctx context.Context, sem chan struct{}) error {
 	}
 	return nil
 }
+
+func availableWorkerSlots(sem chan struct{}) int {
+	return cap(sem) - len(sem)
+}
+
 func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 	started := time.Now()
 	delay := dispatchDelay(started, c.Run.ScheduledAt)
