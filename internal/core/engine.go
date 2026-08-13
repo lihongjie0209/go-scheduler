@@ -137,6 +137,11 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 	method := c.Job.HTTPMethod
 	body := strings.ReplaceAll(c.Job.BodyTemplate, "{{input}}", c.Run.RuntimeInput)
 	if c.Job.ExecutorGroupID != "" {
+		requiredLabels, excludedLabels, labelErr := e.store.JobExecutorLabels(parent, c.Job.ID)
+		if labelErr != nil {
+			e.fail(parent, c, fmt.Errorf("load executor labels: %w", labelErr))
+			return
+		}
 		var node store.ExecutorNode
 		var routeErr error
 		strategy := ""
@@ -152,6 +157,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			activeNodes = store.OverrideExecutorNodes(c.Run.OverrideAddresses)
 		} else {
 			strategy, activeNodes, routeErr = e.store.ExecutorRouteCandidates(parent, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID)
+			activeNodes = store.FilterExecutorNodes(activeNodes, requiredLabels, excludedLabels)
 		}
 		if c.Run.BroadcastGroupID == "" && routeErr == nil && (strategy == "failover" || strategy == "busyover") {
 			candidates := make([]executorCandidate, 0, len(activeNodes))
@@ -177,6 +183,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 				}
 			}
 			node, routeErr = reserve(parent, c.Job.TenantID, c.Job.ExecutorGroupID, c.Job.ID, func(snapshot store.ExecutorRoutingSnapshot) (store.ExecutorNode, error) {
+				snapshot.Nodes = store.FilterExecutorNodes(snapshot.Nodes, requiredLabels, excludedLabels)
 				candidates := make([]executorCandidate, 0, len(snapshot.Nodes))
 				for _, candidate := range snapshot.Nodes {
 					candidates = append(candidates, executorCandidate{ID: candidate.NodeID, Address: candidate.Address, UseCount: candidate.UseCount, LastUsedAt: candidate.LastUsedAt})

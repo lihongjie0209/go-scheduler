@@ -28,6 +28,7 @@ type Job struct {
 	TargetURL, HTTPMethod, BodyTemplate, OverlapPolicy, MisfirePolicy                               string
 	ExecutorGroupID, ExecutorHandler                                                                string
 	ScriptLanguage, ScriptSource                                                                    string
+	RequiredExecutorLabels, ExcludedExecutorLabels                                                  []string
 	Headers                                                                                         map[string]string
 	TimeoutSeconds, MaxRetries, MaxConcurrentRuns, MaxCatchUp, CallbackTimeoutSeconds, MaxQueueSize int32
 	Enabled                                                                                         bool
@@ -247,6 +248,9 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (Job, error) {
 			return Job{}, err
 		}
 	}
+	if err = replaceJobExecutorLabels(ctx, tx, j.ID, j.RequiredExecutorLabels, j.ExcludedExecutorLabels); err != nil {
+		return Job{}, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return Job{}, fmt.Errorf("commit create job: %w", err)
 	}
@@ -354,6 +358,9 @@ func (s *Store) UpdateJob(ctx context.Context, j Job) (Job, error) {
 		if _, err = insertJobScriptVersion(ctx, tx, j, "job update"); err != nil {
 			return Job{}, err
 		}
+	}
+	if err = replaceJobExecutorLabels(ctx, tx, j.ID, j.RequiredExecutorLabels, j.ExcludedExecutorLabels); err != nil {
+		return Job{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return Job{}, fmt.Errorf("commit update job: %w", err)
@@ -493,6 +500,11 @@ func (s *Store) TriggerJobWithOptions(ctx context.Context, tenantID, jobID, key,
 			if nodesErr != nil {
 				return Run{}, nodesErr
 			}
+			required, excluded, labelsErr := jobExecutorLabels(ctx, tx, jobID)
+			if labelsErr != nil {
+				return Run{}, labelsErr
+			}
+			nodes = FilterExecutorNodes(nodes, required, excluded)
 		}
 		shards := planBroadcastShards(nodes)
 		if len(shards) == 0 {
@@ -623,6 +635,11 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 				if nodesErr != nil {
 					return nodesErr
 				}
+				required, excluded, labelsErr := jobExecutorLabels(ctx, tx, j.ID)
+				if labelsErr != nil {
+					return labelsErr
+				}
+				nodes = FilterExecutorNodes(nodes, required, excluded)
 				shards := planBroadcastShards(nodes)
 				if len(shards) == 0 {
 					return fmt.Errorf("no live executor nodes for broadcast job %s", j.ID)
@@ -837,6 +854,11 @@ func enqueueDependentRuns(ctx context.Context, tx pgx.Tx, parent Run) error {
 			if nodesErr != nil {
 				return nodesErr
 			}
+			required, excluded, labelsErr := jobExecutorLabels(ctx, tx, child.id)
+			if labelsErr != nil {
+				return labelsErr
+			}
+			nodes = FilterExecutorNodes(nodes, required, excluded)
 			shards := planBroadcastShards(nodes)
 			if len(shards) == 0 {
 				return fmt.Errorf("no live executor nodes for dependent broadcast job %s", child.id)

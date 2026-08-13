@@ -8,7 +8,7 @@ import (
 )
 
 type ExecutorRegistry interface {
-	RegisterExecutorNode(context.Context, string, string, string, string, time.Duration) (store.ExecutorNode, error)
+	RegisterExecutorNode(context.Context, string, string, string, string, time.Duration, ...[]string) (store.ExecutorNode, error)
 	UnregisterExecutorNode(context.Context, string, string, string) error
 	ListExecutorNodes(context.Context, string, string, bool) ([]store.ExecutorNode, error)
 }

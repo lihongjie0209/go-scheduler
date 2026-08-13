@@ -52,6 +52,9 @@ func (s *Service) GetJob(ctx context.Context, req *schedulerv1.GetJobRequest) (*
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	if j.RequiredExecutorLabels, j.ExcludedExecutorLabels, err = s.store.JobExecutorLabels(ctx, j.ID); err != nil {
+		return nil, toStatus(err)
+	}
 	return toProto(j), nil
 }
 func (s *Service) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest) (*schedulerv1.ListJobsResponse, error) {
@@ -61,6 +64,10 @@ func (s *Service) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest
 	}
 	out := &schedulerv1.ListJobsResponse{Jobs: make([]*schedulerv1.Job, 0, len(jobs))}
 	for _, j := range jobs {
+		j.RequiredExecutorLabels, j.ExcludedExecutorLabels, err = s.store.JobExecutorLabels(ctx, j.ID)
+		if err != nil {
+			return nil, toStatus(err)
+		}
 		out.Jobs = append(out.Jobs, toProto(j))
 	}
 	return out, nil
@@ -148,6 +155,27 @@ func validateJob(j *schedulerv1.Job) error {
 			return fmt.Errorf("script_source must be between 1 byte and 1 MiB")
 		}
 	}
+	required, err := normalizeExecutorLabels(j.RequiredExecutorLabels)
+	if err != nil {
+		return fmt.Errorf("required_executor_labels: %w", err)
+	}
+	excluded, err := normalizeExecutorLabels(j.ExcludedExecutorLabels)
+	if err != nil {
+		return fmt.Errorf("excluded_executor_labels: %w", err)
+	}
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, label := range excluded {
+		excludedSet[label] = struct{}{}
+	}
+	for _, label := range required {
+		if _, exists := excludedSet[label]; exists {
+			return fmt.Errorf("executor label %q cannot be both required and excluded", label)
+		}
+	}
+	if j.ExecutorGroupId == "" && (len(required) > 0 || len(excluded) > 0) {
+		return fmt.Errorf("executor labels require executor_group_id")
+	}
+	j.RequiredExecutorLabels, j.ExcludedExecutorLabels = required, excluded
 	switch j.HttpMethod {
 	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 	default:
@@ -500,7 +528,11 @@ func (s *Service) RegisterExecutorNode(ctx context.Context, req *schedulerv1.Reg
 	if req.GetTtlSeconds() < 5 || req.GetTtlSeconds() > 300 {
 		return nil, status.Error(codes.InvalidArgument, "ttl_seconds must be between 5 and 300")
 	}
-	node, err := s.executorRegistry.RegisterExecutorNode(ctx, req.TenantId, req.GroupId, strings.TrimSpace(req.NodeId), strings.TrimRight(req.Address, "/"), time.Duration(req.TtlSeconds)*time.Second)
+	labels, labelsErr := normalizeExecutorLabels(req.GetLabels())
+	if labelsErr != nil {
+		return nil, status.Error(codes.InvalidArgument, labelsErr.Error())
+	}
+	node, err := s.executorRegistry.RegisterExecutorNode(ctx, req.TenantId, req.GroupId, strings.TrimSpace(req.NodeId), strings.TrimRight(req.Address, "/"), time.Duration(req.TtlSeconds)*time.Second, labels)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -530,10 +562,10 @@ func (s *Service) ListExecutorNodes(ctx context.Context, req *schedulerv1.ListEx
 }
 
 func fromProto(j *schedulerv1.Job) store.Job {
-	return store.Job{ID: j.Id, TenantID: j.TenantId, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetURL: j.TargetUrl, HTTPMethod: j.HttpMethod, Headers: j.Headers, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupID: j.ExecutorGroupId, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource}
+	return store.Job{ID: j.Id, TenantID: j.TenantId, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetURL: j.TargetUrl, HTTPMethod: j.HttpMethod, Headers: j.Headers, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupID: j.ExecutorGroupId, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels}
 }
 func toProto(j store.Job) *schedulerv1.Job {
-	out := &schedulerv1.Job{Id: j.ID, TenantId: j.TenantID, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetUrl: j.TargetURL, HttpMethod: j.HTTPMethod, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupId: j.ExecutorGroupID, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource}
+	out := &schedulerv1.Job{Id: j.ID, TenantId: j.TenantID, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetUrl: j.TargetURL, HttpMethod: j.HTTPMethod, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupId: j.ExecutorGroupID, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels}
 	if j.NextRunAt != nil {
 		out.NextRunAt = timestamppb.New(*j.NextRunAt)
 	}
@@ -556,7 +588,32 @@ func jobScriptVersionToProto(version store.JobScriptVersion) *schedulerv1.JobScr
 	return &schedulerv1.JobScriptVersion{Id: version.ID, JobId: version.JobID, Revision: version.Revision, ScriptLanguage: version.ScriptLanguage, ScriptSource: version.ScriptSource, Remark: version.Remark, CreatedAt: timestamppb.New(version.CreatedAt)}
 }
 func executorNodeToProto(node store.ExecutorNode) *schedulerv1.ExecutorNode {
-	return &schedulerv1.ExecutorNode{GroupId: node.GroupID, NodeId: node.NodeID, Address: node.Address, ExpiresAt: timestamppb.New(node.ExpiresAt), UpdatedAt: timestamppb.New(node.UpdatedAt), Online: node.Static || node.ExpiresAt.After(time.Now()), Static: node.Static}
+	return &schedulerv1.ExecutorNode{GroupId: node.GroupID, NodeId: node.NodeID, Address: node.Address, ExpiresAt: timestamppb.New(node.ExpiresAt), UpdatedAt: timestamppb.New(node.UpdatedAt), Online: node.Static || node.ExpiresAt.After(time.Now()), Static: node.Static, Labels: node.Labels}
+}
+
+func normalizeExecutorLabels(values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	labels := make([]string, 0, len(values))
+	for _, value := range values {
+		label := strings.ToLower(strings.TrimSpace(value))
+		if label == "" || len(label) > 63 {
+			return nil, fmt.Errorf("executor labels must contain 1 to 63 characters")
+		}
+		for index, character := range label {
+			if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '.' && character != '_' && character != '-' || index == 0 && (character == '.' || character == '_' || character == '-') {
+				return nil, fmt.Errorf("executor label %q has invalid characters", label)
+			}
+		}
+		if _, exists := seen[label]; !exists {
+			seen[label] = struct{}{}
+			labels = append(labels, label)
+		}
+	}
+	if len(labels) > 32 {
+		return nil, fmt.Errorf("at most 32 executor labels are allowed")
+	}
+	sort.Strings(labels)
+	return labels, nil
 }
 func toStatus(err error) error {
 	switch {

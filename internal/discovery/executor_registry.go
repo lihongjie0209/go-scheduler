@@ -17,6 +17,7 @@ type ExecutorMetadata struct {
 	GroupID   string    `json:"group_id"`
 	NodeID    string    `json:"node_id"`
 	Address   string    `json:"address"`
+	Labels    []string  `json:"labels,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -30,7 +31,7 @@ type ExecutorRegistry struct {
 }
 
 type ExecutorNodeStore interface {
-	RegisterExecutorNode(context.Context, string, string, string, string, time.Duration) (store.ExecutorNode, error)
+	RegisterExecutorNode(context.Context, string, string, string, string, time.Duration, ...[]string) (store.ExecutorNode, error)
 	UnregisterExecutorNode(context.Context, string, string, string) error
 	ListExecutorNodes(context.Context, string, string, bool) ([]store.ExecutorNode, error)
 }
@@ -39,8 +40,12 @@ func NewExecutorRegistry(client *clientv3.Client, prefix string, database Execut
 	return &ExecutorRegistry{client: client, prefix: path.Join(prefix, "executors"), store: database}
 }
 
-func (r *ExecutorRegistry) RegisterExecutorNode(ctx context.Context, tenantID, groupID, nodeID, address string, ttl time.Duration) (store.ExecutorNode, error) {
-	metadata := ExecutorMetadata{TenantID: tenantID, GroupID: groupID, NodeID: nodeID, Address: address, UpdatedAt: time.Now().UTC()}
+func (r *ExecutorRegistry) RegisterExecutorNode(ctx context.Context, tenantID, groupID, nodeID, address string, ttl time.Duration, labelSets ...[]string) (store.ExecutorNode, error) {
+	var labels []string
+	if len(labelSets) > 0 {
+		labels = labelSets[0]
+	}
+	metadata := ExecutorMetadata{TenantID: tenantID, GroupID: groupID, NodeID: nodeID, Address: address, Labels: labels, UpdatedAt: time.Now().UTC()}
 	value, err := json.Marshal(metadata)
 	if err != nil {
 		return store.ExecutorNode{}, err
@@ -63,7 +68,7 @@ func (r *ExecutorRegistry) RegisterExecutorNode(ctx context.Context, tenantID, g
 		return store.ExecutorNode{}, fmt.Errorf("published executor disappeared")
 	}
 	revision := published.Kvs[0].ModRevision
-	node, err := r.store.RegisterExecutorNode(ctx, tenantID, groupID, nodeID, address, ttl)
+	node, err := r.store.RegisterExecutorNode(ctx, tenantID, groupID, nodeID, address, ttl, labels)
 	if err != nil {
 		rollbackCtx := context.WithoutCancel(ctx)
 		_, _ = r.client.Txn(rollbackCtx).
@@ -108,7 +113,7 @@ func (r *ExecutorRegistry) ListExecutorNodes(ctx context.Context, tenantID, grou
 		}
 		nodes[metadata.NodeID] = store.ExecutorNode{
 			GroupID: metadata.GroupID, NodeID: metadata.NodeID, Address: metadata.Address,
-			UpdatedAt: metadata.UpdatedAt, ExpiresAt: time.Now().Add(time.Duration(ttl.TTL) * time.Second),
+			Labels: metadata.Labels, UpdatedAt: metadata.UpdatedAt, ExpiresAt: time.Now().Add(time.Duration(ttl.TTL) * time.Second),
 		}
 	}
 	result := make([]store.ExecutorNode, 0, len(nodes))

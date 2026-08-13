@@ -16,6 +16,7 @@ import (
 type RegistrarOptions struct {
 	APIURL, Token, GroupID, NodeID, Address string
 	TTL                                     time.Duration
+	Labels                                  []string
 	HTTPClient                              *http.Client
 }
 type Registrar struct {
@@ -84,7 +85,7 @@ func (r *Registrar) unregister(ctx context.Context) error {
 }
 func (r *Registrar) heartbeat(ctx context.Context) error {
 	ttl := r.options.TTL / time.Second
-	payload, err := json.Marshal(map[string]any{"address": strings.TrimRight(r.options.Address, "/"), "ttl_seconds": ttl})
+	payload, err := json.Marshal(map[string]any{"address": strings.TrimRight(r.options.Address, "/"), "ttl_seconds": ttl, "labels": r.options.Labels})
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,7 @@ type ExecutorGroup struct {
 
 type ExecutorNode struct {
 	GroupID, NodeID, Address string
+	Labels                   []string
 	ExpiresAt, UpdatedAt     time.Time
 	UseCount                 int64
 	LastUsedAt               time.Time
@@ -46,14 +47,14 @@ func (s *Store) ReserveExecutorRoute(ctx context.Context, tenantID, groupID, job
 	if err != nil {
 		return ExecutorNode{}, err
 	}
-	rows, err := tx.Query(ctx, `SELECT n.group_id,n.node_id,n.address,n.expires_at,n.updated_at,COALESCE(s.use_count,0),s.last_used_at,n.is_static FROM executor_nodes n LEFT JOIN executor_job_route_state s ON s.group_id=n.group_id AND s.node_id=n.node_id AND s.job_id=$2 WHERE n.group_id=$1 AND (n.is_static OR n.expires_at>now()) ORDER BY CASE WHEN n.is_static THEN n.address ELSE n.node_id END`, groupID, jobID)
+	rows, err := tx.Query(ctx, `SELECT n.group_id,n.node_id,n.address,n.expires_at,n.updated_at,COALESCE(s.use_count,0),s.last_used_at,n.is_static,n.labels FROM executor_nodes n LEFT JOIN executor_job_route_state s ON s.group_id=n.group_id AND s.node_id=n.node_id AND s.job_id=$2 WHERE n.group_id=$1 AND (n.is_static OR n.expires_at>now()) ORDER BY CASE WHEN n.is_static THEN n.address ELSE n.node_id END`, groupID, jobID)
 	if err != nil {
 		return ExecutorNode{}, err
 	}
 	for rows.Next() {
 		var node ExecutorNode
 		var lastUsedAt *time.Time
-		if err = rows.Scan(&node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.UseCount, &lastUsedAt, &node.Static); err != nil {
+		if err = rows.Scan(&node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.UseCount, &lastUsedAt, &node.Static, &node.Labels); err != nil {
 			rows.Close()
 			return ExecutorNode{}, err
 		}
@@ -254,9 +255,13 @@ func (s *Store) ListExecutorGroups(ctx context.Context, tenantID string) ([]Exec
 	return groups, rows.Err()
 }
 
-func (s *Store) RegisterExecutorNode(ctx context.Context, tenantID, groupID, nodeID, address string, ttl time.Duration) (ExecutorNode, error) {
+func (s *Store) RegisterExecutorNode(ctx context.Context, tenantID, groupID, nodeID, address string, ttl time.Duration, labelSets ...[]string) (ExecutorNode, error) {
 	var node ExecutorNode
-	err := s.pool.QueryRow(ctx, `INSERT INTO executor_nodes(group_id,node_id,address,expires_at,is_static) SELECT id,$3,$4,now()+$5*interval '1 second',false FROM executor_groups WHERE tenant_id=$1 AND id=$2 AND registration_mode='automatic' ON CONFLICT(group_id,node_id) DO UPDATE SET address=excluded.address,expires_at=excluded.expires_at,is_static=false,updated_at=now() RETURNING group_id,node_id,address,expires_at,updated_at,is_static`, tenantID, groupID, nodeID, address, ttl.Seconds()).Scan(&node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.Static)
+	var labels []string
+	if len(labelSets) > 0 {
+		labels = labelSets[0]
+	}
+	err := s.pool.QueryRow(ctx, `INSERT INTO executor_nodes(group_id,node_id,address,expires_at,is_static,labels) SELECT id,$3,$4,now()+$5*interval '1 second',false,$6 FROM executor_groups WHERE tenant_id=$1 AND id=$2 AND registration_mode='automatic' ON CONFLICT(group_id,node_id) DO UPDATE SET address=excluded.address,expires_at=excluded.expires_at,is_static=false,labels=excluded.labels,updated_at=now() RETURNING group_id,node_id,address,expires_at,updated_at,is_static,labels`, tenantID, groupID, nodeID, address, ttl.Seconds(), labels).Scan(&node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.Static, &node.Labels)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var exists bool
 		if existsErr := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM executor_groups WHERE tenant_id=$1 AND id=$2)`, tenantID, groupID).Scan(&exists); existsErr != nil {
@@ -294,7 +299,7 @@ func (s *Store) UnregisterExecutorNode(ctx context.Context, tenantID, groupID, n
 }
 
 func (s *Store) ListExecutorNodes(ctx context.Context, tenantID, groupID string, liveOnly bool) ([]ExecutorNode, error) {
-	rows, err := s.pool.Query(ctx, `SELECT n.group_id,n.node_id,n.address,n.expires_at,n.updated_at,n.is_static FROM executor_nodes n JOIN executor_groups g ON g.id=n.group_id WHERE g.tenant_id=$1 AND g.id=$2 AND (NOT $3 OR n.is_static OR n.expires_at>now()) ORDER BY CASE WHEN n.is_static THEN n.address ELSE n.node_id END`, tenantID, groupID, liveOnly)
+	rows, err := s.pool.Query(ctx, `SELECT n.group_id,n.node_id,n.address,n.expires_at,n.updated_at,n.is_static,n.labels FROM executor_nodes n JOIN executor_groups g ON g.id=n.group_id WHERE g.tenant_id=$1 AND g.id=$2 AND (NOT $3 OR n.is_static OR n.expires_at>now()) ORDER BY CASE WHEN n.is_static THEN n.address ELSE n.node_id END`, tenantID, groupID, liveOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +307,7 @@ func (s *Store) ListExecutorNodes(ctx context.Context, tenantID, groupID string,
 	var nodes []ExecutorNode
 	for rows.Next() {
 		var node ExecutorNode
-		if err = rows.Scan(&node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.Static); err != nil {
+		if err = rows.Scan(&node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.Static, &node.Labels); err != nil {
 			return nil, err
 		}
 		nodes = append(nodes, node)
@@ -311,7 +316,7 @@ func (s *Store) ListExecutorNodes(ctx context.Context, tenantID, groupID string,
 }
 
 func (s *Store) ExecutorRouteCandidates(ctx context.Context, tenantID, groupID, jobID string) (string, []ExecutorNode, error) {
-	rows, err := s.pool.Query(ctx, `SELECT g.route_strategy,n.group_id,n.node_id,n.address,n.expires_at,n.updated_at,n.is_static FROM executor_groups g JOIN jobs j ON j.executor_group_id=g.id JOIN executor_nodes n ON n.group_id=g.id WHERE g.tenant_id=$1 AND g.id=$2 AND j.id=$3 AND (n.is_static OR n.expires_at>now()) ORDER BY CASE WHEN n.is_static THEN n.address ELSE n.node_id END`, tenantID, groupID, jobID)
+	rows, err := s.pool.Query(ctx, `SELECT g.route_strategy,n.group_id,n.node_id,n.address,n.expires_at,n.updated_at,n.is_static,n.labels FROM executor_groups g JOIN jobs j ON j.executor_group_id=g.id JOIN executor_nodes n ON n.group_id=g.id WHERE g.tenant_id=$1 AND g.id=$2 AND j.id=$3 AND (n.is_static OR n.expires_at>now()) ORDER BY CASE WHEN n.is_static THEN n.address ELSE n.node_id END`, tenantID, groupID, jobID)
 	if err != nil {
 		return "", nil, err
 	}
@@ -320,7 +325,7 @@ func (s *Store) ExecutorRouteCandidates(ctx context.Context, tenantID, groupID, 
 	var nodes []ExecutorNode
 	for rows.Next() {
 		var node ExecutorNode
-		if err = rows.Scan(&strategy, &node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.Static); err != nil {
+		if err = rows.Scan(&strategy, &node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.Static, &node.Labels); err != nil {
 			return "", nil, err
 		}
 		nodes = append(nodes, node)

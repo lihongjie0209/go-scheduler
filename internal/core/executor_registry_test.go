@@ -14,7 +14,7 @@ type recordingExecutorRegistry struct {
 	ttl        time.Duration
 }
 
-func (r *recordingExecutorRegistry) RegisterExecutorNode(_ context.Context, _, groupID, nodeID, address string, ttl time.Duration) (store.ExecutorNode, error) {
+func (r *recordingExecutorRegistry) RegisterExecutorNode(_ context.Context, _, groupID, nodeID, address string, ttl time.Duration, labels ...[]string) (store.ExecutorNode, error) {
 	r.registered = store.ExecutorNode{GroupID: groupID, NodeID: nodeID, Address: address, ExpiresAt: time.Now().Add(ttl), UpdatedAt: time.Now()}
 	r.ttl = ttl
 	return r.registered, nil

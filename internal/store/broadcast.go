@@ -13,7 +13,7 @@ type BroadcastShard struct {
 }
 
 func liveExecutorNodesTx(ctx context.Context, tx pgx.Tx, groupID string) ([]ExecutorNode, error) {
-	rows, err := tx.Query(ctx, `SELECT group_id,node_id,address,expires_at,updated_at FROM executor_nodes WHERE group_id=$1 AND expires_at>now() ORDER BY node_id`, groupID)
+	rows, err := tx.Query(ctx, `SELECT group_id,node_id,address,expires_at,updated_at,labels FROM executor_nodes WHERE group_id=$1 AND (is_static OR expires_at>now()) ORDER BY node_id`, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -21,7 +21,7 @@ func liveExecutorNodesTx(ctx context.Context, tx pgx.Tx, groupID string) ([]Exec
 	var nodes []ExecutorNode
 	for rows.Next() {
 		var node ExecutorNode
-		if err = rows.Scan(&node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt); err != nil {
+		if err = rows.Scan(&node.GroupID, &node.NodeID, &node.Address, &node.ExpiresAt, &node.UpdatedAt, &node.Labels); err != nil {
 			return nil, err
 		}
 		nodes = append(nodes, node)

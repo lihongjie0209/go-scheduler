@@ -20,7 +20,7 @@ type executorProjection struct {
 	nodes map[string]store.ExecutorNode
 }
 
-func (p *executorProjection) RegisterExecutorNode(_ context.Context, _, groupID, nodeID, address string, ttl time.Duration) (store.ExecutorNode, error) {
+func (p *executorProjection) RegisterExecutorNode(_ context.Context, _, groupID, nodeID, address string, ttl time.Duration, labels ...[]string) (store.ExecutorNode, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	node := store.ExecutorNode{GroupID: groupID, NodeID: nodeID, Address: address, ExpiresAt: time.Now().Add(ttl), UpdatedAt: time.Now()}

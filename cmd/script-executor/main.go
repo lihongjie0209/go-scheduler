@@ -29,6 +29,7 @@ func run() error {
 		return errors.New("SCHEDULER_URL, SCHEDULER_TOKEN, EXECUTOR_GROUP_ID, EXECUTOR_NODE_ID and EXECUTOR_ADVERTISE_URL are required")
 	}
 	languages := splitLanguages(envOr("SCRIPT_LANGUAGES", "shell,python,nodejs,php,powershell"))
+	labels := splitLanguages(os.Getenv("EXECUTOR_LABELS"))
 	server, err := executor.NewServer(executor.Options{SchedulerURL: schedulerURL})
 	if err != nil {
 		return err
@@ -47,7 +48,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("parse EXECUTOR_TTL: %w", err)
 	}
-	registrar, err := executor.NewRegistrar(executor.RegistrarOptions{APIURL: schedulerURL, Token: token, GroupID: groupID, NodeID: nodeID, Address: address, TTL: ttl})
+	registrar, err := executor.NewRegistrar(executor.RegistrarOptions{APIURL: schedulerURL, Token: token, GroupID: groupID, NodeID: nodeID, Address: address, TTL: ttl, Labels: labels})
 	if err != nil {
 		return err
 	}

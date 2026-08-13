@@ -852,13 +852,14 @@ func (s *Server) registerExecutorNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Address    string `json:"address"`
-		TTLSeconds int32  `json:"ttl_seconds"`
+		Address    string   `json:"address"`
+		TTLSeconds int32    `json:"ttl_seconds"`
+		Labels     []string `json:"labels"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	out, err := s.client.RegisterExecutorNode(r.Context(), &schedulerv1.RegisterExecutorNodeRequest{TenantId: tenantID(r.Context()), GroupId: chi.URLParam(r, "id"), NodeId: chi.URLParam(r, "nodeID"), Address: body.Address, TtlSeconds: body.TTLSeconds})
+	out, err := s.client.RegisterExecutorNode(r.Context(), &schedulerv1.RegisterExecutorNodeRequest{TenantId: tenantID(r.Context()), GroupId: chi.URLParam(r, "id"), NodeId: chi.URLParam(r, "nodeID"), Address: body.Address, TtlSeconds: body.TTLSeconds, Labels: body.Labels})
 	respond(w, out, err, http.StatusOK)
 }
 func (s *Server) unregisterExecutorNode(w http.ResponseWriter, r *http.Request) {

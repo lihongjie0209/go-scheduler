@@ -240,6 +240,26 @@ func TestValidateDockerImageJob(t *testing.T) {
 	}
 }
 
+func TestValidateJobNormalizesExecutorLabels(t *testing.T) {
+	t.Parallel()
+	job := validJob()
+	job.TargetUrl = ""
+	job.ExecutorGroupId = "group"
+	job.ExecutorHandler = "handler"
+	job.RequiredExecutorLabels = []string{" Linux ", "gpu", "linux"}
+	job.ExcludedExecutorLabels = []string{"spot"}
+	if err := validateJob(job); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(job.RequiredExecutorLabels, ",") != "gpu,linux" {
+		t.Fatalf("required labels = %v", job.RequiredExecutorLabels)
+	}
+	job.ExcludedExecutorLabels = []string{"linux"}
+	if err := validateJob(job); err == nil {
+		t.Fatal("overlapping labels accepted")
+	}
+}
+
 func TestScriptVersionRequestsRejectInvalidInputBeforeStore(t *testing.T) {
 	t.Parallel()
 	service := NewService(nil)
