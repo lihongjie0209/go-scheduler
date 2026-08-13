@@ -106,7 +106,7 @@ docker run --rm -p 9999:9999 \
   go-scheduler-script-executor
 ```
 
-脚本任务使用 `executor_handler: "__script__"`。默认允许 `shell,python,nodejs,php,powershell`，可通过 `SCRIPT_LANGUAGES` 收窄；`EXECUTOR_MAX_CONCURRENCY` 设置节点同时运行的脚本、HTTP、Docker 和 Kubernetes 任务数，默认 32。达到上限时新任务返回 `ResourceExhausted` 并进入 Core 的失败/重试状态机，重复派发不重复占槽；BUSYOVER 的 `/idle` 探测与同一活跃计数保持一致。收到 SIGTERM 后执行器立即注销并拒绝新派发，在 `EXECUTOR_SHUTDOWN_TIMEOUT`（默认 30 秒）内等待已接收任务，超时则取消进程内 handler。源码及单次 stdout/stderr 总输出分别限制为 1 MiB，任务超时会终止整个脚本进程组。自建 Alpine 镜像固定安装 Python 3、Node.js 22、PHP 8.3 CLI 与 PowerShell 7.6.4；PowerShell 使用微软官方 Alpine tar.gz，构建时校验官方 SHA256。镜像和完整 use case Testcontainers 测试会真实执行这些运行时。
+脚本任务使用 `executor_handler: "__script__"`。默认允许 `shell,python,nodejs,php,powershell`，可通过 `SCRIPT_LANGUAGES` 收窄；`EXECUTOR_MAX_CONCURRENCY` 设置节点同时运行的脚本、HTTP、Docker 和 Kubernetes 任务数，默认 32。达到上限时新任务返回 `ResourceExhausted` 并进入 Core 的失败/重试状态机，重复派发不重复占槽；BUSYOVER 的 `/idle` 探测与同一活跃计数保持一致。收到 SIGTERM 后执行器立即注销并拒绝新派发，在 `EXECUTOR_SHUTDOWN_TIMEOUT`（默认 30 秒）内等待已接收任务，超时则取消进程内 handler。源码及单次 stdout/stderr 总输出分别限制为 1 MiB，任务超时会终止整个脚本进程组；Linux executor 异常退出时，内核 parent-death signal 会终止解释器，避免孤儿脚本继续产生副作用。自建 Alpine 镜像固定安装 Python 3、Node.js 22、PHP 8.3 CLI 与 PowerShell 7.6.4；PowerShell 使用微软官方 Alpine tar.gz，构建时校验官方 SHA256。镜像和完整 use case Testcontainers 测试会真实执行这些运行时。
 
 ## Docker Image Executor
 
