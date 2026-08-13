@@ -105,7 +105,7 @@ func (w *Worker) tick(ctx context.Context) int {
 	}
 	processDeliveries(ctx, deliveries, notificationConcurrency, func(delivery store.NotificationDelivery) {
 		deliveryCtx, cancel := context.WithTimeout(ctx, notificationTimeout)
-		deliverErr := w.deliver(deliveryCtx, delivery.Channel, delivery.Event)
+		deliverErr := w.deliverSafely(deliveryCtx, delivery.Channel, delivery.Event)
 		cancel()
 		if deliverErr != nil {
 			if delivery.Attempts >= delivery.Channel.MaxAttempts {
@@ -162,6 +162,17 @@ func (w *Worker) deliver(ctx context.Context, channel store.NotificationChannel,
 		return fmt.Errorf("deliver %s: %w", channel.Name, err)
 	}
 	return err
+}
+
+func (w *Worker) deliverSafely(ctx context.Context, channel store.NotificationChannel, event store.OutboxEvent) (err error) {
+	defer func() {
+		if recover() != nil {
+			// Provider implementations may handle secret-bearing configuration. Do not
+			// persist or log the recovered value because it may contain credentials.
+			err = fmt.Errorf("notification provider panicked")
+		}
+	}()
+	return w.deliver(ctx, channel, event)
 }
 func (w *Worker) webhook(ctx context.Context, channel store.NotificationChannel, event store.OutboxEvent) error {
 	var config struct {

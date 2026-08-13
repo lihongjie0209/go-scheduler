@@ -181,6 +181,18 @@ func TestNotificationHTTPErrorRedactsEndpointSecrets(t *testing.T) {
 	}
 }
 
+func TestDeliverSafelyRecoversProviderPanicWithoutLeakingValue(t *testing.T) {
+	t.Parallel()
+	worker := New(nil, "test", SMTPConfig{})
+	worker.senders["panic"] = func(context.Context, store.NotificationChannel, store.OutboxEvent) error {
+		panic("credential=super-secret")
+	}
+	err := worker.deliverSafely(t.Context(), store.NotificationChannel{Kind: "panic", Name: "unsafe"}, store.OutboxEvent{})
+	if err == nil || !strings.Contains(err.Error(), "provider panicked") || strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("recovered provider error = %v", err)
+	}
+}
+
 func TestProcessDeliveriesBoundsConcurrency(t *testing.T) {
 	t.Parallel()
 	deliveries := make([]store.NotificationDelivery, 30)
