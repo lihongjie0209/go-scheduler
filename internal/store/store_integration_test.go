@@ -1657,7 +1657,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lockedChannels, err := matchingNotificationChannelIDs(ctx, lockTx, managedEventID, tenantID)
+	lockedChannels, err := matchingNotificationChannelIDs(ctx, lockTx, managedEventID, tenantID, "")
 	if err != nil || len(lockedChannels) != 1 || lockedChannels[0] != managedChannel.ID {
 		_ = lockTx.Rollback(ctx)
 		t.Fatalf("locked notification channels = %v, %v", lockedChannels, err)
@@ -1737,6 +1737,28 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	scoped, err := one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "dingtalk", Name: "queue-job-only", Config: json.RawMessage(`{"url":"https://oapi.dingtalk.com/robot/send","auth_type":"none"}`), Events: []string{"job.run.succeeded"}, JobIDs: []string{queueLimited.ID}, MaxAttempts: 1, BackoffInitialSeconds: 2, BackoffMaxSeconds: 2})
 	if err != nil {
 		t.Fatal(err)
+	}
+	poisonGlobal, err := one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "webhook", Name: "malformed-event-global", Config: json.RawMessage(`{"url":"https://alerts.example.com/global"}`), Events: []string{"job.run.succeeded"}, AllJobs: true, MaxAttempts: 1, BackoffInitialSeconds: 1, BackoffMaxSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var malformedJobEventID string
+	if err = one.pool.QueryRow(ctx, `INSERT INTO outbox_events(tenant_id,topic,payload) VALUES($1,'job.run.succeeded','{"run_id":"malformed-job","job_id":"not-a-uuid"}') RETURNING id`, tenantID).Scan(&malformedJobEventID); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.PrepareNotificationDeliveries(ctx, 10); err != nil {
+		t.Fatalf("prepare malformed job event: %v", err)
+	}
+	malformedJobDeliveries, err := one.ClaimNotificationDeliveries(ctx, "notifier-malformed-job", 10)
+	if err != nil || len(malformedJobDeliveries) != 1 || malformedJobDeliveries[0].Channel.ID != poisonGlobal.ID {
+		t.Fatalf("malformed job deliveries = %+v, %v", malformedJobDeliveries, err)
+	}
+	if err = one.CompleteNotificationDelivery(ctx, "notifier-malformed-job", malformedJobDeliveries[0].ID, malformedJobEventID); err != nil {
+		t.Fatal(err)
+	}
+	poisonGlobal, err = one.SetNotificationChannelEnabled(ctx, tenantID, poisonGlobal.ID, false, poisonGlobal.Version)
+	if err != nil || poisonGlobal.Enabled {
+		t.Fatalf("disable malformed event global channel = %+v, %v", poisonGlobal, err)
 	}
 	var matchingEventID, ignoredEventID string
 	if err = one.pool.QueryRow(ctx, `INSERT INTO outbox_events(tenant_id,topic,payload) VALUES($1,'job.run.succeeded',jsonb_build_object('run_id','matching','job_id',$2::text)) RETURNING id`, tenantID, queueLimited.ID).Scan(&matchingEventID); err != nil {

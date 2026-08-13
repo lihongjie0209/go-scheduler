@@ -41,6 +41,22 @@ func TestLoadNotificationDeliveryConfigIsFailClosedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestValidNotificationEventJobID(t *testing.T) {
+	t.Parallel()
+	valid := "3e44d267-8f43-4224-a972-b5fe637d95d2"
+	if got := validNotificationEventJobID(valid); got != valid {
+		t.Fatalf("valid job ID = %q", got)
+	}
+	if got := validNotificationEventJobID("3e44d2678f434224a972b5fe637d95d2"); got != valid {
+		t.Fatalf("compact job ID normalized to %q", got)
+	}
+	for _, raw := range []string{"", "not-a-uuid", " 3e44d267-8f43-4224-a972-b5fe637d95d2"} {
+		if got := validNotificationEventJobID(raw); got != "" {
+			t.Errorf("invalid job ID %q normalized to %q", raw, got)
+		}
+	}
+}
+
 func TestEncodeNotificationConfigRequiresCipher(t *testing.T) {
 	t.Parallel()
 	plaintext, encrypted, version, err := (&Store{}).encodeNotificationConfig(json.RawMessage(`{"url":"https://hooks.example.com?token=secret"}`))

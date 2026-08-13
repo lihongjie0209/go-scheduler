@@ -303,15 +303,15 @@ func (s *Store) PrepareNotificationDeliveries(ctx context.Context, limit int) er
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	rows, err := tx.Query(ctx, `SELECT e.id,e.tenant_id FROM outbox_events e WHERE e.published_at IS NULL AND e.available_at<=now() AND NOT EXISTS(SELECT 1 FROM notification_deliveries d WHERE d.event_id=e.id) ORDER BY e.available_at,e.id FOR UPDATE OF e SKIP LOCKED LIMIT $1`, limit)
+	rows, err := tx.Query(ctx, `SELECT e.id,e.tenant_id,COALESCE(e.payload->>'job_id','') FROM outbox_events e WHERE e.published_at IS NULL AND e.available_at<=now() AND NOT EXISTS(SELECT 1 FROM notification_deliveries d WHERE d.event_id=e.id) ORDER BY e.available_at,e.id FOR UPDATE OF e SKIP LOCKED LIMIT $1`, limit)
 	if err != nil {
 		return err
 	}
-	type eventRef struct{ id, tenantID string }
+	type eventRef struct{ id, tenantID, jobID string }
 	var events []eventRef
 	for rows.Next() {
 		var event eventRef
-		if err = rows.Scan(&event.id, &event.tenantID); err != nil {
+		if err = rows.Scan(&event.id, &event.tenantID, &event.jobID); err != nil {
 			rows.Close()
 			return err
 		}
@@ -322,7 +322,7 @@ func (s *Store) PrepareNotificationDeliveries(ctx context.Context, limit int) er
 		return err
 	}
 	for _, event := range events {
-		channelIDs, matchErr := matchingNotificationChannelIDs(ctx, tx, event.id, event.tenantID)
+		channelIDs, matchErr := matchingNotificationChannelIDs(ctx, tx, event.id, event.tenantID, validNotificationEventJobID(event.jobID))
 		if matchErr != nil {
 			return matchErr
 		}
@@ -339,11 +339,19 @@ func (s *Store) PrepareNotificationDeliveries(ctx context.Context, limit int) er
 	return tx.Commit(ctx)
 }
 
-func matchingNotificationChannelIDs(ctx context.Context, tx pgx.Tx, eventID, tenantID string) ([]string, error) {
+func validNotificationEventJobID(raw string) string {
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return id.String()
+}
+
+func matchingNotificationChannelIDs(ctx context.Context, tx pgx.Tx, eventID, tenantID, jobID string) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT n.id FROM notification_channels n JOIN outbox_events e ON e.id=$1
 		WHERE n.tenant_id=$2 AND n.enabled AND n.deleted_at IS NULL AND e.topic=ANY(n.event_types)
-		AND (n.all_jobs OR EXISTS(SELECT 1 FROM notification_channel_jobs j WHERE j.channel_id=n.id AND j.job_id=NULLIF(e.payload->>'job_id','')::uuid))
-		ORDER BY n.id FOR NO KEY UPDATE OF n`, eventID, tenantID)
+		AND (n.all_jobs OR EXISTS(SELECT 1 FROM notification_channel_jobs j WHERE j.channel_id=n.id AND j.job_id::text=$3))
+		ORDER BY n.id FOR NO KEY UPDATE OF n`, eventID, tenantID, jobID)
 	if err != nil {
 		return nil, err
 	}
