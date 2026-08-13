@@ -21,9 +21,15 @@ import (
 const maxRunRequestBytes = 2 << 20
 
 type Handler func(context.Context, Task) error
+type ExternalCanceller func(context.Context, ExternalCancellation) error
 type TaskLogger interface {
 	Info(string) error
 	Error(string) error
+}
+
+type ExternalCancellation struct {
+	RunID, ExternalExecutionID, JobID, ScriptLanguage string
+	KubernetesCluster                                 *KubernetesClusterConfig
 }
 
 type Task struct {
@@ -62,12 +68,13 @@ type registeredHandler struct {
 }
 
 type Server struct {
-	scheduler *url.URL
-	client    *http.Client
-	mux       *http.ServeMux
-	mu        sync.RWMutex
-	handlers  map[string]registeredHandler
-	active    map[string]int
+	scheduler  *url.URL
+	client     *http.Client
+	mux        *http.ServeMux
+	mu         sync.RWMutex
+	handlers   map[string]registeredHandler
+	cancellers map[string]ExternalCanceller
+	active     map[string]int
 }
 
 type runRequest struct {
@@ -102,7 +109,7 @@ func NewServer(options Options) (*Server, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	s := &Server{scheduler: scheduler, client: client, mux: http.NewServeMux(), handlers: map[string]registeredHandler{}, active: map[string]int{}}
+	s := &Server{scheduler: scheduler, client: client, mux: http.NewServeMux(), handlers: map[string]registeredHandler{}, cancellers: map[string]ExternalCanceller{}, active: map[string]int{}}
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	s.mux.HandleFunc("GET /idle", s.idle)
 	s.mux.HandleFunc("POST /run", s.run)
@@ -114,6 +121,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.Serve
 func (s *Server) Handle(name string, handler Handler) error { return s.register(name, handler, false) }
 func (s *Server) HandleAsync(name string, handler Handler) error {
 	return s.register(name, handler, true)
+}
+
+func (s *Server) HandleExternalCancellation(scriptLanguage string, canceller ExternalCanceller) error {
+	scriptLanguage = strings.TrimSpace(scriptLanguage)
+	if scriptLanguage == "" || len(scriptLanguage) > 64 || canceller == nil {
+		return errors.New("script language and external canceller are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.cancellers[scriptLanguage]; exists {
+		return fmt.Errorf("external canceller for %q is already registered", scriptLanguage)
+	}
+	s.cancellers[scriptLanguage] = canceller
+	return nil
 }
 func (s *Server) register(name string, handler Handler, async bool) error {
 	name = strings.TrimSpace(name)

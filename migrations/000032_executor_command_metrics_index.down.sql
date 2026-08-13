@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS executor_commands_pending_created_idx;

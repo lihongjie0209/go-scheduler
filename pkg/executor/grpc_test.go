@@ -404,6 +404,36 @@ func TestGRPCCancelStopsExecution(t *testing.T) {
 	}
 }
 
+func TestGRPCCancelRecoversExternalExecutionAfterRestart(t *testing.T) {
+	t.Parallel()
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan ExternalCancellation, 1)
+	if err = server.HandleExternalCancellation("kubernetes", func(_ context.Context, cancellation ExternalCancellation) error {
+		received <- cancellation
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client, cleanup := newBufconnExecutor(t, server, &recordingReporter{completed: make(chan bool, 1)})
+	defer cleanup()
+	request := &executorv1.CancelRequest{RunId: "restarted-run", Reason: "operator", ExternalExecutionId: "stable-execution", JobId: "job-1", ScriptLanguage: "kubernetes", KubernetesCluster: &executorv1.KubernetesCluster{AuthMode: "service_account", ApiServer: "https://k8s.example", Namespace: "work", Token: "secret"}}
+	response, err := client.Cancel(t.Context(), request)
+	if err != nil || !response.GetAccepted() {
+		t.Fatalf("Cancel() accepted=%v err=%v", response.GetAccepted(), err)
+	}
+	select {
+	case cancellation := <-received:
+		if cancellation.RunID != request.GetRunId() || cancellation.ExternalExecutionID != request.GetExternalExecutionId() || cancellation.JobID != request.GetJobId() || cancellation.KubernetesCluster == nil || cancellation.KubernetesCluster.Token != "secret" {
+			t.Fatalf("external cancellation = %+v", cancellation)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("external canceller was not invoked")
+	}
+}
+
 func TestGRPCExecutionHistoryIsBounded(t *testing.T) {
 	t.Parallel()
 	now := time.Now()

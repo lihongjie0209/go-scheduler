@@ -1454,7 +1454,7 @@ func (s *Store) CancelRun(ctx context.Context, tenantID, runID, reason string) (
 			return Run{}, err
 		}
 		if run.ExecutorAddress != "" {
-			if _, err = tx.Exec(ctx, `INSERT INTO executor_commands(tenant_id,run_id,executor_address,command_type,payload) VALUES($1,$2,$3,'cancel',jsonb_build_object('reason',$4::text)) ON CONFLICT(tenant_id,run_id,command_type) DO NOTHING`, run.TenantID, run.ID, run.ExecutorAddress, reason); err != nil {
+			if err = enqueueExecutorCancellationTx(ctx, tx, run, reason); err != nil {
 				return Run{}, fmt.Errorf("enqueue executor cancellation: %w", err)
 			}
 		}
@@ -1480,7 +1480,7 @@ func (s *Store) CancelRun(ctx context.Context, tenantID, runID, reason string) (
 	}
 	if run.Status == "cancelled" {
 		if run.ExecutorAddress != "" {
-			if _, err = tx.Exec(ctx, `INSERT INTO executor_commands(tenant_id,run_id,executor_address,command_type,payload) VALUES($1,$2,$3,'cancel',jsonb_build_object('reason',$4::text)) ON CONFLICT(tenant_id,run_id,command_type) DO NOTHING`, run.TenantID, run.ID, run.ExecutorAddress, run.ErrorMessage); err != nil {
+			if err = enqueueExecutorCancellationTx(ctx, tx, run, run.ErrorMessage); err != nil {
 				return Run{}, fmt.Errorf("ensure executor cancellation: %w", err)
 			}
 		}
@@ -1490,6 +1490,17 @@ func (s *Store) CancelRun(ctx context.Context, tenantID, runID, reason string) (
 		return run, nil
 	}
 	return Run{}, ErrNotCancellable
+}
+
+func enqueueExecutorCancellationTx(ctx context.Context, tx pgx.Tx, run Run, reason string) error {
+	var scriptLanguage, kubernetesClusterID string
+	if err := tx.QueryRow(ctx, `SELECT script_language,COALESCE(kubernetes_cluster_id::text,'') FROM jobs WHERE tenant_id=$1 AND id=$2`, run.TenantID, run.JobID).Scan(&scriptLanguage, &kubernetesClusterID); err != nil {
+		return fmt.Errorf("read cancellation execution target: %w", err)
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO executor_commands(tenant_id,run_id,executor_address,command_type,payload)
+		VALUES($1,$2,$3,'cancel',jsonb_build_object('reason',$4::text,'external_execution_id',$5::text,'job_id',$6::text,'script_language',$7::text,'kubernetes_cluster_id',$8::text))
+		ON CONFLICT(tenant_id,run_id,command_type) DO UPDATE SET payload=executor_commands.payload||(EXCLUDED.payload-'reason')`, run.TenantID, run.ID, run.ExecutorAddress, reason, run.ExternalExecutionID, run.JobID, scriptLanguage, kubernetesClusterID)
+	return err
 }
 
 const runSelectColumns = `id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,started_at,finished_at,COALESCE(response_status,0),COALESCE(error_message,''),runtime_input,COALESCE(parent_run_id::text,''),COALESCE(retry_of_run_id::text,''),external_execution_id,COALESCE(executor_node_id,''),COALESCE(executor_address,''),COALESCE(broadcast_group_id::text,''),COALESCE(shard_index,0),COALESCE(shard_total,0),reschedule_on_terminal,override_addresses`

@@ -277,18 +277,48 @@ func (s *GRPCServer) pruneExecutionHistoryLocked(now time.Time) {
 	}
 }
 
-func (s *GRPCServer) Cancel(_ context.Context, request *executorv1.CancelRequest) (*executorv1.CancelResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current, exists := s.runs[request.GetRunId()]
-	if !exists || current.state != "running" {
-		return &executorv1.CancelResponse{Accepted: false}, nil
+func (s *GRPCServer) Cancel(ctx context.Context, request *executorv1.CancelRequest) (*executorv1.CancelResponse, error) {
+	if request.GetRunId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "run_id is required")
 	}
-	finishedAt := time.Now()
-	current.state, current.message, current.finishedAt = "cancelled", request.GetReason(), finishedAt
-	current.cancel()
-	s.completed = append(s.completed, executionCompletion{runID: request.GetRunId(), finishedAt: finishedAt})
-	s.pruneExecutionHistoryLocked(finishedAt)
+	s.mu.Lock()
+	current, exists := s.runs[request.GetRunId()]
+	cancelledInMemory := false
+	if exists && current.state == "running" {
+		finishedAt := time.Now()
+		current.state, current.message, current.finishedAt = "cancelled", request.GetReason(), finishedAt
+		current.cancel()
+		s.completed = append(s.completed, executionCompletion{runID: request.GetRunId(), finishedAt: finishedAt})
+		s.pruneExecutionHistoryLocked(finishedAt)
+		cancelledInMemory = true
+	} else if exists && current.state == "cancelled" {
+		cancelledInMemory = true
+	}
+	s.mu.Unlock()
+
+	if request.GetExternalExecutionId() == "" || request.GetJobId() == "" || request.GetScriptLanguage() == "" {
+		return &executorv1.CancelResponse{Accepted: cancelledInMemory}, nil
+	}
+	s.server.mu.RLock()
+	canceller := s.server.cancellers[request.GetScriptLanguage()]
+	s.server.mu.RUnlock()
+	if canceller == nil {
+		if request.GetScriptLanguage() == "docker" || request.GetScriptLanguage() == "kubernetes" {
+			return &executorv1.CancelResponse{Accepted: false}, nil
+		}
+		// Script and HTTP work cannot survive an executor process restart. If
+		// no in-memory execution exists, their desired cancelled state is
+		// already satisfied.
+		return &executorv1.CancelResponse{Accepted: true}, nil
+	}
+	var cluster *KubernetesClusterConfig
+	if value := request.GetKubernetesCluster(); value != nil {
+		cluster = &KubernetesClusterConfig{AuthMode: value.GetAuthMode(), APIServer: value.GetApiServer(), Namespace: value.GetNamespace(), Kubeconfig: value.GetKubeconfig(), Token: value.GetToken(), CAData: value.GetCaData(), InsecureSkipTLSVerify: value.GetInsecureSkipTlsVerify()}
+	}
+	cancellation := ExternalCancellation{RunID: request.GetRunId(), ExternalExecutionID: request.GetExternalExecutionId(), JobID: request.GetJobId(), ScriptLanguage: request.GetScriptLanguage(), KubernetesCluster: cluster}
+	if err := canceller(ctx, cancellation); err != nil {
+		return nil, status.Errorf(codes.Unavailable, "cancel external execution: %v", err)
+	}
 	return &executorv1.CancelResponse{Accepted: true}, nil
 }
 

@@ -182,7 +182,7 @@ Kubernetes Job 名称使用整条重试链稳定不变的首个 run ID。执行�
 
 ## 命令行客户端
 
-调度性能验收口径见 [调度性能基准](docs/performance-benchmark.md)，架构、性能和安全风险记录见 [代码库审计](docs/code-audit.md)。`/metrics` 提供 `scheduler_dispatch_delay_seconds` 和 `scheduler_worker_saturation_ticks_total`，用于观察运行从计划时间到 worker 开始处理的延迟以及执行槽位饱和情况；正式结论仍以 HTTP sink 记录的端到端数据为准。worker 全部占用时，引擎不会提前 claim 更多运行或阻塞调度循环，到期任务入队、异步 callback 超时和维护工作仍按调度 tick 继续运行。
+调度性能验收口径见 [调度性能基准](docs/performance-benchmark.md)，架构、性能和安全风险记录见 [代码库审计](docs/code-audit.md)。`/metrics` 提供 `scheduler_dispatch_delay_seconds` 和 `scheduler_worker_saturation_ticks_total`，用于观察运行从计划时间到 worker 开始处理的延迟以及执行槽位饱和情况；`scheduler_executor_command_queue_pending`、`scheduler_executor_command_queue_oldest_pending_age_seconds` 和 `scheduler_executor_command_queue_collect_success` 用于监控执行器取消指令积压。正式结论仍以 HTTP sink 记录的端到端数据为准。worker 全部占用时，引擎不会提前 claim 更多运行或阻塞调度循环，到期任务入队、异步 callback 超时和维护工作仍按调度 tick 继续运行。
 
 单进程模式内部使用两个独立 PostgreSQL 连接池：API 池处理认证、查询和控制面请求，Core 池处理调度 claim、运行状态和通知，API 流量无法耗尽 Core 的连接配额。`scheduler_database_pool_connections`、`scheduler_database_pool_empty_acquires_total` 和 `scheduler_database_pool_acquire_duration_seconds_total` 按 `pool=api|core` 输出池状态与等待压力。
 

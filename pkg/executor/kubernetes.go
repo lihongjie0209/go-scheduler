@@ -50,6 +50,7 @@ const (
 	kubernetesManagedByLabel   = "app.kubernetes.io/managed-by"
 	kubernetesManagedByValue   = "go-scheduler"
 	kubernetesExecutionIDLabel = "go-scheduler/execution-id"
+	kubernetesJobIDLabel       = "go-scheduler/job-id"
 )
 
 func KubernetesHandler(options KubernetesOptions) Handler {
@@ -86,10 +87,7 @@ func KubernetesHandler(options KubernetesOptions) Handler {
 		if executionID == "" {
 			executionID = task.RunID
 		}
-		name := "scheduler-" + strings.ToLower(strings.ReplaceAll(executionID, "-", ""))
-		if len(name) > 63 {
-			name = name[:63]
-		}
+		name := kubernetesJobName(executionID)
 		env := make([]corev1.EnvVar, 0, len(definition.Env)+1)
 		for key, value := range definition.Env {
 			env = append(env, corev1.EnvVar{Name: key, Value: value})
@@ -106,7 +104,7 @@ func KubernetesHandler(options KubernetesOptions) Handler {
 		if ttl <= 0 {
 			ttl = 86400
 		}
-		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{kubernetesManagedByLabel: kubernetesManagedByValue, kubernetesExecutionIDLabel: executionID}}, Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"job-name": name, kubernetesExecutionIDLabel: executionID}}, Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: definition.ServiceAccount, ImagePullSecrets: pullSecrets, Containers: []corev1.Container{{Name: "task", Image: definition.Image, Command: definition.Command, Args: definition.Args, Env: env}}}}}}
+		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{kubernetesManagedByLabel: kubernetesManagedByValue, kubernetesExecutionIDLabel: executionID, kubernetesJobIDLabel: task.JobID}}, Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"job-name": name, kubernetesExecutionIDLabel: executionID, kubernetesJobIDLabel: task.JobID}}, Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: definition.ServiceAccount, ImagePullSecrets: pullSecrets, Containers: []corev1.Container{{Name: "task", Image: definition.Image, Command: definition.Command, Args: definition.Args, Env: env}}}}}}
 		existing, getErr := client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
 		if apierrors.IsNotFound(getErr) {
 			if _, err = client.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
@@ -117,13 +115,13 @@ func KubernetesHandler(options KubernetesOptions) Handler {
 				if getErr != nil {
 					return fmt.Errorf("get concurrently created kubernetes job: %w", getErr)
 				}
-				if err = validateManagedKubernetesJob(existing, executionID); err != nil {
+				if err = validateManagedKubernetesJob(existing, executionID, task.JobID); err != nil {
 					return err
 				}
 			}
 		} else if getErr != nil {
 			return fmt.Errorf("get kubernetes job: %w", getErr)
-		} else if err = validateManagedKubernetesJob(existing, executionID); err != nil {
+		} else if err = validateManagedKubernetesJob(existing, executionID, task.JobID); err != nil {
 			return err
 		}
 		err = wait.PollUntilContextCancel(ctx, options.PollInterval, true, func(pollCtx context.Context) (bool, error) {
@@ -131,7 +129,7 @@ func KubernetesHandler(options KubernetesOptions) Handler {
 			if getErr != nil {
 				return false, getErr
 			}
-			if validateErr := validateManagedKubernetesJob(current, executionID); validateErr != nil {
+			if validateErr := validateManagedKubernetesJob(current, executionID, task.JobID); validateErr != nil {
 				return false, validateErr
 			}
 			for _, condition := range current.Status.Conditions {
@@ -147,17 +145,89 @@ func KubernetesHandler(options KubernetesOptions) Handler {
 			}
 			return false, nil
 		})
-		logErr := writeKubernetesPodLogs(ctx, client, namespace, name, task.Logger)
+		if err != nil && ctx.Err() != nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			cleanupErr := cancelManagedKubernetesJob(cleanupCtx, client, namespace, cancellationIdentity(task))
+			cleanupCancel()
+			if cleanupErr != nil {
+				return errors.Join(err, cleanupErr)
+			}
+		}
 		if err != nil {
 			return err
 		}
-		return logErr
+		return writeKubernetesPodLogs(ctx, client, namespace, name, task.Logger)
 	}
 }
 
-func validateManagedKubernetesJob(job *batchv1.Job, executionID string) error {
+func KubernetesCanceller(options KubernetesOptions) ExternalCanceller {
+	if options.ClientFactory == nil {
+		options.ClientFactory = func(config *rest.Config) (kubernetes.Interface, error) { return kubernetes.NewForConfig(config) }
+	}
+	return func(ctx context.Context, cancellation ExternalCancellation) error {
+		if cancellation.RunID == "" || cancellation.ExternalExecutionID == "" || cancellation.JobID == "" || cancellation.KubernetesCluster == nil {
+			return errors.New("run, external execution, job, and cluster details are required for Kubernetes cancellation")
+		}
+		config, err := kubernetesRESTConfig(*cancellation.KubernetesCluster)
+		if err != nil {
+			return err
+		}
+		client, err := options.ClientFactory(config)
+		if err != nil {
+			return fmt.Errorf("create kubernetes client: %w", err)
+		}
+		namespace := strings.TrimSpace(cancellation.KubernetesCluster.Namespace)
+		if namespace == "" {
+			namespace = "default"
+		}
+		return cancelManagedKubernetesJob(ctx, client, namespace, cancellation)
+	}
+}
+
+func cancelManagedKubernetesJob(ctx context.Context, client kubernetes.Interface, namespace string, cancellation ExternalCancellation) error {
+	name := kubernetesJobName(cancellation.ExternalExecutionID)
+	job, err := client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get Kubernetes Job for cancellation: %w", err)
+	}
+	if err = validateManagedKubernetesJob(job, cancellation.ExternalExecutionID, cancellation.JobID); err != nil {
+		return err
+	}
+	propagation := metav1.DeletePropagationBackground
+	if err = client.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete managed Kubernetes Job: %w", err)
+	}
+	return nil
+}
+
+func cancellationIdentity(task Task) ExternalCancellation {
+	executionID := task.ExternalExecutionID
+	if executionID == "" {
+		executionID = task.RunID
+	}
+	return ExternalCancellation{RunID: task.RunID, ExternalExecutionID: executionID, JobID: task.JobID, ScriptLanguage: task.ScriptLanguage, KubernetesCluster: task.KubernetesCluster}
+}
+
+func kubernetesJobName(executionID string) string {
+	name := "scheduler-" + strings.ToLower(strings.ReplaceAll(executionID, "-", ""))
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
+}
+
+func validateManagedKubernetesJob(job *batchv1.Job, executionID string, jobID ...string) error {
 	if job == nil || job.Labels[kubernetesManagedByLabel] != kubernetesManagedByValue || job.Labels[kubernetesExecutionIDLabel] != executionID {
 		return fmt.Errorf("kubernetes job name collision for execution %q", executionID)
+	}
+	if len(jobID) > 0 && jobID[0] != "" {
+		storedJobID := job.Labels[kubernetesJobIDLabel]
+		if storedJobID != "" && storedJobID != jobID[0] {
+			return fmt.Errorf("kubernetes job belongs to a different scheduler job")
+		}
 	}
 	return nil
 }

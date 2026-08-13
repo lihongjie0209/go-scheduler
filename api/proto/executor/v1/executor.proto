@@ -61,6 +61,10 @@ message DispatchResponse {
 message CancelRequest {
   string run_id = 1;
   string reason = 2;
+  string external_execution_id = 3;
+  string job_id = 4;
+  string script_language = 5;
+  KubernetesCluster kubernetes_cluster = 6;
 }
 message CancelResponse { bool accepted = 1; }
 

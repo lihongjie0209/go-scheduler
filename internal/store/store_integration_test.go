@@ -1058,10 +1058,14 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands, err := one.ClaimExecutorCommands(ctx, "command-core-a", 10)
-	if err != nil || len(commands) != 1 || commands[0].RunID != waitingRun.ID || commands[0].ExecutorAddress != "127.0.0.1:19091" || commands[0].Reason != "cancel callback wait" || commands[0].Attempts != 1 {
+	if err != nil || len(commands) != 1 || commands[0].TenantID != tenantID || commands[0].RunID != waitingRun.ID || commands[0].ExternalExecutionID != waitingRun.ID || commands[0].JobID != cancelJob.ID || commands[0].ExecutorAddress != "127.0.0.1:19091" || commands[0].Reason != "cancel callback wait" || commands[0].Attempts != 1 {
 		t.Fatalf("claimed executor commands = %+v, %v", commands, err)
 	}
 	commandID := commands[0].ID
+	commandStats, err := one.ExecutorCommandQueueStats(ctx)
+	if err != nil || commandStats.Pending != 1 || commandStats.OldestPendingAge < 0 {
+		t.Fatalf("executor command queue stats = %+v, %v", commandStats, err)
+	}
 	if repeated, repeatErr := one.CancelRun(ctx, tenantID, waitingRun.ID, "different reason"); repeatErr != nil || repeated.Status != "cancelled" {
 		t.Fatalf("repeat waiting cancellation = %+v, %v", repeated, repeatErr)
 	}
@@ -1075,6 +1079,9 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	}
 	if err = two.CompleteExecutorCommand(ctx, "command-core-b", commands[0].ID); err != nil {
 		t.Fatal(err)
+	}
+	if commandStats, err = one.ExecutorCommandQueueStats(ctx); err != nil || commandStats.Pending != 0 {
+		t.Fatalf("completed executor command queue stats = %+v, %v", commandStats, err)
 	}
 	if commands, err = one.ClaimExecutorCommands(ctx, "command-core-a", 10); err != nil || len(commands) != 0 {
 		t.Fatalf("delivered executor command was reclaimed: %+v, %v", commands, err)

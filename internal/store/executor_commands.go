@@ -9,8 +9,26 @@ import (
 const maxExecutorCommandErrorBytes = 4096
 
 type ExecutorCommand struct {
-	ID, RunID, ExecutorAddress, Type, Reason string
-	Attempts                                 int
+	ID, TenantID, RunID, ExecutorAddress, Type, Reason string
+	ExternalExecutionID, JobID, ScriptLanguage         string
+	KubernetesClusterID                                string
+	Attempts                                           int
+}
+
+type ExecutorCommandQueueStats struct {
+	Pending          int64
+	OldestPendingAge time.Duration
+}
+
+func (s *Store) ExecutorCommandQueueStats(ctx context.Context) (ExecutorCommandQueueStats, error) {
+	var stats ExecutorCommandQueueStats
+	var oldestPendingAgeSeconds float64
+	err := s.pool.QueryRow(ctx, `SELECT count(*),COALESCE(GREATEST(EXTRACT(EPOCH FROM now()-min(created_at)),0),0) FROM executor_commands WHERE status='pending'`).Scan(&stats.Pending, &oldestPendingAgeSeconds)
+	if err != nil {
+		return ExecutorCommandQueueStats{}, fmt.Errorf("executor command queue stats: %w", err)
+	}
+	stats.OldestPendingAge = time.Duration(oldestPendingAgeSeconds * float64(time.Second))
+	return stats, nil
 }
 
 func (s *Store) ClaimExecutorCommands(ctx context.Context, owner string, limit int) ([]ExecutorCommand, error) {
@@ -24,9 +42,9 @@ func (s *Store) ClaimExecutorCommands(ctx context.Context, owner string, limit i
 	), claimed AS (
 		UPDATE executor_commands c SET locked_by=$2,locked_until=now()+interval '30 seconds',attempts=attempts+1
 		FROM picked WHERE c.id=picked.id
-		RETURNING c.id,c.run_id,c.executor_address,c.command_type,c.payload,c.attempts
+		RETURNING c.id,c.tenant_id,c.run_id,c.executor_address,c.command_type,c.payload,c.attempts
 	)
-	SELECT id,run_id,executor_address,command_type,COALESCE(payload->>'reason',''),attempts FROM claimed`, limit, owner)
+	SELECT id,tenant_id,run_id,executor_address,command_type,COALESCE(payload->>'reason',''),COALESCE(payload->>'external_execution_id',''),COALESCE(payload->>'job_id',''),COALESCE(payload->>'script_language',''),COALESCE(payload->>'kubernetes_cluster_id',''),attempts FROM claimed`, limit, owner)
 	if err != nil {
 		return nil, fmt.Errorf("claim executor commands: %w", err)
 	}
@@ -34,7 +52,7 @@ func (s *Store) ClaimExecutorCommands(ctx context.Context, owner string, limit i
 	commands := make([]ExecutorCommand, 0, limit)
 	for rows.Next() {
 		var command ExecutorCommand
-		if err = rows.Scan(&command.ID, &command.RunID, &command.ExecutorAddress, &command.Type, &command.Reason, &command.Attempts); err != nil {
+		if err = rows.Scan(&command.ID, &command.TenantID, &command.RunID, &command.ExecutorAddress, &command.Type, &command.Reason, &command.ExternalExecutionID, &command.JobID, &command.ScriptLanguage, &command.KubernetesClusterID, &command.Attempts); err != nil {
 			return nil, err
 		}
 		commands = append(commands, command)
@@ -49,14 +67,6 @@ func (s *Store) CompleteExecutorCommand(ctx context.Context, owner, id string) e
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrConflict
-	}
-	return nil
-}
-
-func (s *Store) CompleteExecutorCancelCommand(ctx context.Context, tenantID, runID string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE executor_commands SET status='delivered',delivered_at=COALESCE(delivered_at,now()),locked_by=NULL,locked_until=NULL,last_error=NULL WHERE tenant_id=$1 AND run_id=$2 AND command_type='cancel' AND status='pending'`, tenantID, runID)
-	if err != nil {
-		return fmt.Errorf("complete executor cancel command: %w", err)
 	}
 	return nil
 }

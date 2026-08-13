@@ -53,7 +53,7 @@ func DockerHandler(options DockerOptions) Handler {
 		if executionID == "" {
 			executionID = task.RunID
 		}
-		name := "go-scheduler-" + strings.Trim(safeContainerName.ReplaceAllString(executionID, "-"), "-.")
+		name := dockerContainerName(executionID)
 		if name == "go-scheduler-" {
 			return errors.New("run ID cannot form a container name")
 		}
@@ -98,6 +98,41 @@ func DockerHandler(options DockerOptions) Handler {
 		}
 		return nil
 	}
+}
+
+func DockerCanceller(options DockerOptions) ExternalCanceller {
+	binary := options.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+	return func(ctx context.Context, cancellation ExternalCancellation) error {
+		if cancellation.RunID == "" || cancellation.ExternalExecutionID == "" || cancellation.JobID == "" {
+			return errors.New("run, external execution, and job IDs are required for Docker cancellation")
+		}
+		if _, err := exec.LookPath(binary); err != nil {
+			return fmt.Errorf("find docker client: %w", err)
+		}
+		name := dockerContainerName(cancellation.ExternalExecutionID)
+		if name == "go-scheduler-" {
+			return errors.New("external execution ID cannot form a container name")
+		}
+		task := Task{RunID: cancellation.RunID, ExternalExecutionID: cancellation.ExternalExecutionID, JobID: cancellation.JobID}
+		exists, err := inspectManagedDockerContainer(ctx, binary, name, task)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		if err = exec.CommandContext(ctx, binary, "rm", "--force", name).Run(); err != nil { // #nosec G204 -- fixed Docker arguments and internally generated name.
+			return fmt.Errorf("remove managed Docker container: %w", err)
+		}
+		return nil
+	}
+}
+
+func dockerContainerName(executionID string) string {
+	return "go-scheduler-" + strings.Trim(safeContainerName.ReplaceAllString(executionID, "-"), "-.")
 }
 
 func inspectManagedDockerContainer(ctx context.Context, binary, name string, task Task) (bool, error) {

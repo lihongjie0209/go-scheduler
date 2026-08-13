@@ -124,9 +124,15 @@ func registerDatabasePoolMetrics(api *apiStore, core *coreStore) error {
 	if err := prometheus.Register(observability.NewDatabasePoolCollector("core", core.PoolStats)); err != nil {
 		return err
 	}
-	return prometheus.Register(observability.NewNotificationQueueCollector(func(ctx context.Context) (observability.NotificationQueueSnapshot, error) {
+	if err := prometheus.Register(observability.NewNotificationQueueCollector(func(ctx context.Context) (observability.NotificationQueueSnapshot, error) {
 		stats, err := core.NotificationQueueStats(ctx)
 		return observability.NotificationQueueSnapshot{Pending: stats.Pending, OldestPendingAge: stats.OldestPendingAge}, err
+	})); err != nil {
+		return err
+	}
+	return prometheus.Register(observability.NewExecutorCommandQueueCollector(func(ctx context.Context) (observability.ExecutorCommandQueueSnapshot, error) {
+		stats, err := core.ExecutorCommandQueueStats(ctx)
+		return observability.ExecutorCommandQueueSnapshot{Pending: stats.Pending, OldestPendingAge: stats.OldestPendingAge}, err
 	}))
 }
 

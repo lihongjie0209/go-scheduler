@@ -186,3 +186,32 @@ func TestDockerHandlerResumesManagedContainerAfterExecutorRestart(t *testing.T) 
 		t.Fatal("resumed container was not removed")
 	}
 }
+
+func TestDockerCancellerStopsManagedContainerAfterExecutorRestart(t *testing.T) {
+	const name = "go-scheduler-cancel-stable-execution"
+	managed, err := testcontainers.GenericContainer(t.Context(), testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{
+		Image: "alpine:3.22", Name: name,
+		Labels: map[string]string{
+			"go-scheduler.managed-by":   "lihongjie0209",
+			"go-scheduler.execution-id": "cancel-stable-execution",
+			"go-scheduler.run-id":       "first-attempt",
+			"go-scheduler.job-id":       "job-docker-cancel",
+		},
+		Cmd: []string{"sh", "-c", "sleep 300"},
+	}, Started: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = managed.Terminate(context.Background()) })
+	canceller := DockerCanceller(DockerOptions{})
+	cancellation := ExternalCancellation{RunID: "retry-attempt", ExternalExecutionID: "cancel-stable-execution", JobID: "job-docker-cancel", ScriptLanguage: "docker"}
+	if err = canceller(t.Context(), cancellation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = managed.Inspect(t.Context()); err == nil {
+		t.Fatal("managed container was not removed by recovered cancellation")
+	}
+	if err = canceller(t.Context(), cancellation); err != nil {
+		t.Fatalf("repeated Docker cancellation was not idempotent: %v", err)
+	}
+}

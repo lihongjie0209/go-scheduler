@@ -111,13 +111,13 @@ func (p *executorGRPCPool) dispatch(ctx context.Context, address string, request
 	return nil
 }
 
-func (p *executorGRPCPool) cancel(ctx context.Context, address, runID, reason string) error {
+func (p *executorGRPCPool) cancel(ctx context.Context, address string, request *executorv1.CancelRequest) error {
 	client, release, err := p.acquire(address)
 	if err != nil {
 		return err
 	}
 	defer release()
-	response, err := client.Cancel(ctx, &executorv1.CancelRequest{RunId: runID, Reason: reason})
+	response, err := client.Cancel(ctx, request)
 	if err != nil {
 		return fmt.Errorf("cancel executor run: %w", err)
 	}
@@ -139,7 +139,7 @@ func NewExecutorController(token string, transport credentials.TransportCredenti
 }
 
 func (c *ExecutorController) Cancel(ctx context.Context, address, runID, reason string) error {
-	return c.pool.cancel(ctx, address, runID, reason)
+	return c.pool.cancel(ctx, address, &executorv1.CancelRequest{RunId: runID, Reason: reason})
 }
 
 func (c *ExecutorController) Close() { c.pool.close() }

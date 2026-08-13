@@ -43,14 +43,22 @@ func Run() error {
 		return err
 	}
 	if dockerEnabled := envOr("DOCKER_ENABLED", "false"); dockerEnabled == "true" {
-		if err = server.Handle("__docker__", executor.DockerHandler(executor.DockerOptions{Binary: envOr("DOCKER_BINARY", "docker")})); err != nil {
+		dockerOptions := executor.DockerOptions{Binary: envOr("DOCKER_BINARY", "docker")}
+		if err = server.Handle("__docker__", executor.DockerHandler(dockerOptions)); err != nil {
+			return err
+		}
+		if err = server.HandleExternalCancellation("docker", executor.DockerCanceller(dockerOptions)); err != nil {
 			return err
 		}
 	} else if dockerEnabled != "false" {
 		return errors.New("DOCKER_ENABLED must be true or false")
 	}
 	if kubernetesEnabled := envOr("KUBERNETES_ENABLED", "false"); kubernetesEnabled == "true" {
-		if err = server.HandleAsync("__kubernetes__", executor.KubernetesHandler(executor.KubernetesOptions{})); err != nil {
+		kubernetesOptions := executor.KubernetesOptions{}
+		if err = server.HandleAsync("__kubernetes__", executor.KubernetesHandler(kubernetesOptions)); err != nil {
+			return err
+		}
+		if err = server.HandleExternalCancellation("kubernetes", executor.KubernetesCanceller(kubernetesOptions)); err != nil {
 			return err
 		}
 	} else if kubernetesEnabled != "false" {

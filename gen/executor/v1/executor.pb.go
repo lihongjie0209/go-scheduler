@@ -466,11 +466,15 @@ func (x *DispatchResponse) GetState() string {
 }
 
 type CancelRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	RunId               string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Reason              string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	ExternalExecutionId string                 `protobuf:"bytes,3,opt,name=external_execution_id,json=externalExecutionId,proto3" json:"external_execution_id,omitempty"`
+	JobId               string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	ScriptLanguage      string                 `protobuf:"bytes,5,opt,name=script_language,json=scriptLanguage,proto3" json:"script_language,omitempty"`
+	KubernetesCluster   *KubernetesCluster     `protobuf:"bytes,6,opt,name=kubernetes_cluster,json=kubernetesCluster,proto3" json:"kubernetes_cluster,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CancelRequest) Reset() {
@@ -515,6 +519,34 @@ func (x *CancelRequest) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *CancelRequest) GetExternalExecutionId() string {
+	if x != nil {
+		return x.ExternalExecutionId
+	}
+	return ""
+}
+
+func (x *CancelRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *CancelRequest) GetScriptLanguage() string {
+	if x != nil {
+		return x.ScriptLanguage
+	}
+	return ""
+}
+
+func (x *CancelRequest) GetKubernetesCluster() *KubernetesCluster {
+	if x != nil {
+		return x.KubernetesCluster
+	}
+	return nil
 }
 
 type CancelResponse struct {
@@ -722,10 +754,14 @@ const file_executor_v1_executor_proto_rawDesc = "" +
 	"\x10DispatchResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12!\n" +
 	"\fexecution_id\x18\x02 \x01(\tR\vexecutionId\x12\x14\n" +
-	"\x05state\x18\x03 \x01(\tR\x05state\">\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\"\x81\x02\n" +
 	"\rCancelRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\",\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x122\n" +
+	"\x15external_execution_id\x18\x03 \x01(\tR\x13externalExecutionId\x12\x15\n" +
+	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12'\n" +
+	"\x0fscript_language\x18\x05 \x01(\tR\x0escriptLanguage\x12M\n" +
+	"\x12kubernetes_cluster\x18\x06 \x01(\v2\x1e.executor.v1.KubernetesClusterR\x11kubernetesCluster\",\n" +
 	"\x0eCancelResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\"'\n" +
 	"\x0eInspectRequest\x12\x15\n" +
@@ -770,17 +806,18 @@ var file_executor_v1_executor_proto_depIdxs = []int32{
 	2, // 1: executor.v1.DispatchRequest.http:type_name -> executor.v1.HttpExecution
 	1, // 2: executor.v1.DispatchRequest.docker_registry_auth:type_name -> executor.v1.DockerRegistryAuth
 	9, // 3: executor.v1.HttpExecution.headers:type_name -> executor.v1.HttpExecution.HeadersEntry
-	0, // 4: executor.v1.ExecutorService.Dispatch:input_type -> executor.v1.DispatchRequest
-	5, // 5: executor.v1.ExecutorService.Cancel:input_type -> executor.v1.CancelRequest
-	7, // 6: executor.v1.ExecutorService.Inspect:input_type -> executor.v1.InspectRequest
-	4, // 7: executor.v1.ExecutorService.Dispatch:output_type -> executor.v1.DispatchResponse
-	6, // 8: executor.v1.ExecutorService.Cancel:output_type -> executor.v1.CancelResponse
-	8, // 9: executor.v1.ExecutorService.Inspect:output_type -> executor.v1.ExecutionState
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	3, // 4: executor.v1.CancelRequest.kubernetes_cluster:type_name -> executor.v1.KubernetesCluster
+	0, // 5: executor.v1.ExecutorService.Dispatch:input_type -> executor.v1.DispatchRequest
+	5, // 6: executor.v1.ExecutorService.Cancel:input_type -> executor.v1.CancelRequest
+	7, // 7: executor.v1.ExecutorService.Inspect:input_type -> executor.v1.InspectRequest
+	4, // 8: executor.v1.ExecutorService.Dispatch:output_type -> executor.v1.DispatchResponse
+	6, // 9: executor.v1.ExecutorService.Cancel:output_type -> executor.v1.CancelResponse
+	8, // 10: executor.v1.ExecutorService.Inspect:output_type -> executor.v1.ExecutionState
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_executor_v1_executor_proto_init() }

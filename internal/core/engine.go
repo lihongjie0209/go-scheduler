@@ -197,7 +197,19 @@ func (e *Engine) processExecutorCommands(ctx context.Context) int {
 			defer group.Done()
 			defer func() { <-semaphore }()
 			commandCtx, cancel := context.WithTimeout(ctx, executorCommandTimeout)
-			deliverErr := e.executorGRPC.cancel(commandCtx, command.ExecutorAddress, command.RunID, command.Reason)
+			request := &executorv1.CancelRequest{RunId: command.RunID, Reason: command.Reason, ExternalExecutionId: command.ExternalExecutionID, JobId: command.JobID, ScriptLanguage: command.ScriptLanguage}
+			var deliverErr error
+			if command.ScriptLanguage == "kubernetes" {
+				cluster, clusterErr := e.store.GetKubernetesCluster(commandCtx, command.TenantID, command.KubernetesClusterID)
+				if clusterErr != nil {
+					deliverErr = fmt.Errorf("load Kubernetes cancellation target: %w", clusterErr)
+				} else {
+					request.KubernetesCluster = &executorv1.KubernetesCluster{AuthMode: cluster.AuthMode, ApiServer: cluster.APIServer, Namespace: cluster.Namespace, Kubeconfig: cluster.Credentials.Kubeconfig, Token: cluster.Credentials.Token, CaData: cluster.Credentials.CAData, InsecureSkipTlsVerify: cluster.InsecureSkipTLSVerify}
+				}
+			}
+			if deliverErr == nil {
+				deliverErr = e.executorGRPC.cancel(commandCtx, command.ExecutorAddress, request)
+			}
 			cancel()
 			if deliverErr == nil {
 				if completeErr := e.store.CompleteExecutorCommand(ctx, e.owner, command.ID); completeErr != nil && !errors.Is(completeErr, store.ErrConflict) {

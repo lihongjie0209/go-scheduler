@@ -51,9 +51,15 @@ func registerDatabasePoolMetrics(s *store.Store) error {
 	if err := prometheus.Register(observability.NewDatabasePoolCollector("core", s.PoolStats)); err != nil {
 		return err
 	}
-	return prometheus.Register(observability.NewNotificationQueueCollector(func(ctx context.Context) (observability.NotificationQueueSnapshot, error) {
+	if err := prometheus.Register(observability.NewNotificationQueueCollector(func(ctx context.Context) (observability.NotificationQueueSnapshot, error) {
 		stats, err := s.NotificationQueueStats(ctx)
 		return observability.NotificationQueueSnapshot{Pending: stats.Pending, OldestPendingAge: stats.OldestPendingAge}, err
+	})); err != nil {
+		return err
+	}
+	return prometheus.Register(observability.NewExecutorCommandQueueCollector(func(ctx context.Context) (observability.ExecutorCommandQueueSnapshot, error) {
+		stats, err := s.ExecutorCommandQueueStats(ctx)
+		return observability.ExecutorCommandQueueSnapshot{Pending: stats.Pending, OldestPendingAge: stats.OldestPendingAge}, err
 	}))
 }
 func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {

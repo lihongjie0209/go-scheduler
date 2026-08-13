@@ -64,7 +64,7 @@ func TestKubernetesHandlerRejectsJobNameCollision(t *testing.T) {
 	}
 }
 
-func TestKubernetesHandlerCreatesRecoverableJob(t *testing.T) {
+func TestKubernetesHandlerDeletesJobAfterContextCancellation(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	handler := KubernetesHandler(KubernetesOptions{PollInterval: time.Millisecond, ClientFactory: func(*rest.Config) (kubernetes.Interface, error) { return client, nil }})
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
@@ -73,11 +73,39 @@ func TestKubernetesHandlerCreatesRecoverableJob(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected context deadline while fake job remains active")
 	}
-	job, getErr := client.BatchV1().Jobs("work").Get(t.Context(), "scheduler-aaaaaaaabbbbccccddddeeeeeeeeeeee", metav1.GetOptions{})
-	if getErr != nil {
-		t.Fatal(getErr)
+	if _, getErr := client.BatchV1().Jobs("work").Get(t.Context(), "scheduler-aaaaaaaabbbbccccddddeeeeeeeeeeee", metav1.GetOptions{}); getErr == nil {
+		t.Fatal("Kubernetes Job remained after execution context cancellation")
 	}
-	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != 86400 || len(job.Spec.Template.Spec.ImagePullSecrets) != 1 {
-		t.Fatalf("job is not recoverable or pull secret missing: %+v", job.Spec)
+}
+
+func TestKubernetesCancellerRecoversAfterExecutorRestart(t *testing.T) {
+	executionID := "11111111-2222-3333-4444-555555555555"
+	jobID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	name := kubernetesJobName(executionID)
+	client := fake.NewSimpleClientset(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "work", Labels: map[string]string{kubernetesManagedByLabel: kubernetesManagedByValue, kubernetesExecutionIDLabel: executionID, kubernetesJobIDLabel: jobID}}})
+	canceller := KubernetesCanceller(KubernetesOptions{ClientFactory: func(*rest.Config) (kubernetes.Interface, error) { return client, nil }})
+	cancellation := ExternalCancellation{RunID: "retry-run", ExternalExecutionID: executionID, JobID: jobID, ScriptLanguage: "kubernetes", KubernetesCluster: &KubernetesClusterConfig{AuthMode: "service_account", APIServer: "https://k8s.example", Token: "token", Namespace: "work"}}
+	if err := canceller(t.Context(), cancellation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.BatchV1().Jobs("work").Get(t.Context(), name, metav1.GetOptions{}); err == nil {
+		t.Fatal("managed Kubernetes Job was not deleted")
+	}
+	if err := canceller(t.Context(), cancellation); err != nil {
+		t.Fatalf("repeated cancellation was not idempotent: %v", err)
+	}
+}
+
+func TestKubernetesCancellerRejectsDifferentJobIdentity(t *testing.T) {
+	executionID := "11111111-2222-3333-4444-555555555555"
+	name := kubernetesJobName(executionID)
+	client := fake.NewSimpleClientset(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "work", Labels: map[string]string{kubernetesManagedByLabel: kubernetesManagedByValue, kubernetesExecutionIDLabel: executionID, kubernetesJobIDLabel: "different-job"}}})
+	canceller := KubernetesCanceller(KubernetesOptions{ClientFactory: func(*rest.Config) (kubernetes.Interface, error) { return client, nil }})
+	err := canceller(t.Context(), ExternalCancellation{RunID: "run", ExternalExecutionID: executionID, JobID: "expected-job", KubernetesCluster: &KubernetesClusterConfig{AuthMode: "service_account", APIServer: "https://k8s.example", Token: "token", Namespace: "work"}})
+	if err == nil || !strings.Contains(err.Error(), "different scheduler job") {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	if _, getErr := client.BatchV1().Jobs("work").Get(t.Context(), name, metav1.GetOptions{}); getErr != nil {
+		t.Fatalf("mismatched Kubernetes Job was deleted: %v", getErr)
 	}
 }

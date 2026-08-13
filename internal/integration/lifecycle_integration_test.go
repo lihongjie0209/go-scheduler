@@ -907,6 +907,22 @@ func TestExecutorCancellationRecoversAfterExecutorReconnects(t *testing.T) {
 	}
 
 	job := createPolicyJob(t, fixture, "cancel-reconnect", "serial")
+	cluster, err := fixture.store.CreateKubernetesCluster(t.Context(), store.KubernetesCluster{TenantID: fixture.tenantID, Name: "cancel-reconnect", AuthMode: "service_account", APIServer: "https://k8s.example", Namespace: "work", Credentials: store.KubernetesCredentials{Token: "reconnect-token", CAData: "reconnect-ca"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{TenantID: fixture.tenantID, Name: "cancel-reconnect", RouteStrategy: "round"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := pgx.Connect(t.Context(), fixture.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.Close(context.Background()) }()
+	if _, err = connection.Exec(t.Context(), `UPDATE jobs SET script_language='kubernetes',script_source='{"image":"alpine:3.22"}',executor_group_id=$2,executor_handler='__kubernetes__',kubernetes_cluster_id=$3 WHERE id=$1`, job.ID, group.ID, cluster.ID); err != nil {
+		t.Fatal(err)
+	}
 	run, err := fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "cancel-reconnect", "")
 	if err != nil {
 		t.Fatal(err)
@@ -932,11 +948,6 @@ func TestExecutorCancellationRecoversAfterExecutorReconnects(t *testing.T) {
 		engine.Wait()
 	}()
 
-	connection, err := pgx.Connect(t.Context(), fixture.dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = connection.Close(context.Background()) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var attempts int
@@ -964,7 +975,8 @@ func TestExecutorCancellationRecoversAfterExecutorReconnects(t *testing.T) {
 
 	select {
 	case request := <-recorder.requests:
-		if request.GetRunId() != run.ID || request.GetReason() != "executor reconnect test" {
+		kubernetes := request.GetKubernetesCluster()
+		if request.GetRunId() != run.ID || request.GetReason() != "executor reconnect test" || request.GetExternalExecutionId() != run.ExternalExecutionID || request.GetJobId() != job.ID || request.GetScriptLanguage() != "kubernetes" || kubernetes.GetApiServer() != "https://k8s.example" || kubernetes.GetNamespace() != "work" || kubernetes.GetToken() != "reconnect-token" || kubernetes.GetCaData() != "reconnect-ca" {
 			t.Fatalf("recovered cancel request = %+v", request)
 		}
 	case <-time.After(5 * time.Second):

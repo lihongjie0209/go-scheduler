@@ -24,3 +24,9 @@ func DockerHandler(DockerOptions) Handler {
 		return errors.New("Docker execution is not supported on this operating system")
 	}
 }
+
+func DockerCanceller(DockerOptions) ExternalCanceller {
+	return func(context.Context, ExternalCancellation) error {
+		return errors.New("Docker cancellation is not supported on this operating system")
+	}
+}
