@@ -4,6 +4,7 @@ package migrations
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -50,5 +51,30 @@ func TestHotPathIndexesMigration(t *testing.T) {
 	}
 	if count != len(want) {
 		t.Fatalf("hot-path indexes = %d, want %d", count, len(want))
+	}
+	var tenantID, jobID string
+	if err = conn.QueryRow(t.Context(), `INSERT INTO tenants(name) VALUES('index-plan') RETURNING id`).Scan(&tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err = conn.QueryRow(t.Context(), `INSERT INTO jobs(tenant_id,name,schedule_type,schedule_expression,timezone,target_url,http_method,headers,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled) VALUES($1,'index-plan','fixed_rate','60','UTC','http://example.invalid','POST','{}',30,0,'parallel','fire_once',false) RETURNING id`, tenantID).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(t.Context(), `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at)
+		SELECT gen_random_uuid(),$1,$2,'manual','succeeded',now(),now() FROM generate_series(1,20000)`, tenantID, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(t.Context(), `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,lease_until)
+		SELECT gen_random_uuid(),$1,$2,'manual','running',now(),now()+interval '1 minute' FROM generate_series(1,10)`, tenantID, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(t.Context(), `ANALYZE job_runs`); err != nil {
+		t.Fatal(err)
+	}
+	var plan string
+	if err = conn.QueryRow(t.Context(), `EXPLAIN (FORMAT JSON) SELECT job_id,tenant_id FROM job_runs WHERE (status='running' AND lease_until>=now()) OR status='waiting_callback'`).Scan(&plan); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "Index") {
+		t.Fatalf("active-run plan does not use an index: %s", plan)
 	}
 }

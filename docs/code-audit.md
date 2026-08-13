@@ -71,7 +71,7 @@ Migration 23 增加：
 - `outbox_published_idx`：已发布事件清理；
 - `job_dependency_dispatches_created_idx`、`job_dependency_dispatches_child_run_idx`：依赖历史清理。
 
-这些索引已在 PostgreSQL 16 Testcontainers 中应用并验证。它们主要改善大历史量和恢复场景，不应使用空数据库 burst 数字夸大收益。
+这些索引已在 PostgreSQL 16 Testcontainers 中应用，并在 20,000 条终态历史、10 条活跃运行的数据集上确认活跃集合查询采用索引计划。它们主要改善大历史量和恢复场景，不应使用空数据库 burst 数字夸大收益。
 
 ### 剩余性能工作
 
