@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,7 +35,10 @@ const (
 	notificationTimeout     = 10 * time.Second
 	notificationIdlePoll    = 2 * time.Second
 	maxProviderResponseSize = 64 << 10
+	maxNotificationBodySize = 1 << 20
 )
+
+var errNotificationBodyTooLarge = errors.New("notification body exceeds 1 MiB")
 
 type Worker struct {
 	store   *store.Store
@@ -184,6 +188,9 @@ func processDeliveries(ctx context.Context, deliveries []store.NotificationDeliv
 	group.Wait()
 }
 func (w *Worker) deliver(ctx context.Context, channel store.NotificationChannel, event store.OutboxEvent) error {
+	if len(event.Payload) > maxNotificationBodySize {
+		return errNotificationBodyTooLarge
+	}
 	sender, ok := w.senders[channel.Kind]
 	if !ok {
 		return fmt.Errorf("unknown notification channel %q", channel.Kind)
@@ -278,6 +285,9 @@ func (w *Worker) dingtalk(ctx context.Context, channel store.NotificationChannel
 	if err != nil {
 		return err
 	}
+	if len(body) > maxNotificationBodySize {
+		return errNotificationBodyTooLarge
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -330,7 +340,14 @@ func redactedHTTPRequestError(provider string, err error) error {
 
 func webhookBody(rawTemplate string, event store.OutboxEvent) ([]byte, error) {
 	if rawTemplate == "" {
-		return json.Marshal(map[string]any{"topic": event.Topic, "payload": json.RawMessage(event.Payload)})
+		body, err := json.Marshal(map[string]any{"topic": event.Topic, "payload": json.RawMessage(event.Payload)})
+		if err != nil {
+			return nil, err
+		}
+		if len(body) > maxNotificationBodySize {
+			return nil, errNotificationBodyTooLarge
+		}
+		return body, nil
 	}
 	rendered, err := renderNotificationTemplate(rawTemplate, event)
 	if err != nil {
@@ -354,15 +371,37 @@ func renderNotificationTemplate(rawTemplate string, event store.OutboxEvent) (st
 	if err != nil {
 		return "", err
 	}
-	var output bytes.Buffer
-	if err = tmpl.Execute(&output, map[string]any{"EventID": event.ID, "Topic": event.Topic, "Payload": payload}); err != nil {
-		return "", err
+	if len(event.Payload) > maxNotificationBodySize {
+		return "", errNotificationBodyTooLarge
 	}
-	if output.Len() > 1<<20 {
-		return "", fmt.Errorf("rendered notification exceeds 1 MiB")
+	output := limitedNotificationBuffer{limit: maxNotificationBodySize}
+	if err = tmpl.Execute(&output, map[string]any{"EventID": event.ID, "Topic": event.Topic, "Payload": payload}); err != nil {
+		if errors.Is(err, errNotificationBodyTooLarge) {
+			return "", errNotificationBodyTooLarge
+		}
+		return "", err
 	}
 	return output.String(), nil
 }
+
+type limitedNotificationBuffer struct {
+	buffer bytes.Buffer
+	limit  int
+}
+
+func (w *limitedNotificationBuffer) Write(data []byte) (int, error) {
+	remaining := w.limit - w.buffer.Len()
+	if remaining <= 0 {
+		return 0, errNotificationBodyTooLarge
+	}
+	if len(data) > remaining {
+		written, _ := w.buffer.Write(data[:remaining])
+		return written, errNotificationBodyTooLarge
+	}
+	return w.buffer.Write(data)
+}
+
+func (w *limitedNotificationBuffer) String() string { return w.buffer.String() }
 func (w *Worker) email(ctx context.Context, channel store.NotificationChannel, event store.OutboxEvent) error {
 	if w.smtp.Address == "" {
 		return fmt.Errorf("SMTP is not configured")
@@ -454,6 +493,9 @@ func (w *Worker) email(ctx context.Context, channel store.NotificationChannel, e
 		toHeader = append(toHeader, recipient.String())
 	}
 	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: %s\r\n\r\n%s", from.String(), strings.Join(toHeader, ","), subject, contentType, content)
+	if len(message) > maxNotificationBodySize {
+		return errNotificationBodyTooLarge
+	}
 	if _, err = writer.Write([]byte(message)); err != nil {
 		return err
 	}

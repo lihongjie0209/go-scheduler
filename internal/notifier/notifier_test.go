@@ -266,6 +266,37 @@ func TestAttemptDeliveryDoesNotCallProviderForUnreadableConfig(t *testing.T) {
 	}
 }
 
+func TestDeliverRejectsOversizedPayloadBeforeProvider(t *testing.T) {
+	t.Parallel()
+	called := false
+	worker := &Worker{senders: map[string]func(context.Context, store.NotificationChannel, store.OutboxEvent) error{
+		"webhook": func(context.Context, store.NotificationChannel, store.OutboxEvent) error {
+			called = true
+			return nil
+		},
+	}}
+	event := store.OutboxEvent{Payload: bytes.Repeat([]byte("x"), maxNotificationBodySize+1)}
+	if err := worker.deliver(t.Context(), store.NotificationChannel{Kind: "webhook"}, event); !errors.Is(err, errNotificationBodyTooLarge) {
+		t.Fatalf("oversized payload error = %v", err)
+	}
+	if called {
+		t.Fatal("provider called with oversized payload")
+	}
+}
+
+func TestRenderNotificationTemplateStopsAtBodyLimit(t *testing.T) {
+	t.Parallel()
+	value := strings.Repeat("x", maxNotificationBodySize/2+1)
+	payload, err := json.Marshal(map[string]string{"value": value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = renderNotificationTemplate(`{{.Payload.value}}{{.Payload.value}}`, store.OutboxEvent{Payload: payload})
+	if !errors.Is(err, errNotificationBodyTooLarge) {
+		t.Fatalf("oversized template error = %v", err)
+	}
+}
+
 func TestDeliverSafelyRecoversProviderPanicWithoutLeakingValue(t *testing.T) {
 	t.Parallel()
 	worker := New(nil, "test", SMTPConfig{})
