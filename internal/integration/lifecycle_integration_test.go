@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	apihttp "github.com/lihongjie0209/go-scheduler/internal/api"
 	"github.com/lihongjie0209/go-scheduler/internal/auth"
 	"github.com/lihongjie0209/go-scheduler/internal/core"
+	"github.com/lihongjie0209/go-scheduler/internal/cryptox"
 	"github.com/lihongjie0209/go-scheduler/internal/discovery"
 	"github.com/lihongjie0209/go-scheduler/internal/notifier"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
@@ -175,7 +177,12 @@ func newLifecycleFixture(t *testing.T) lifecycleFixture {
 		t.Fatal(err)
 	}
 	_ = conn.Close(ctx)
-	database, err := store.New(ctx, dsn)
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	ring, err := cryptox.NewKeyring(1, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := store.New(ctx, dsn, store.WithHeaderCipher(ring))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2867,6 +2874,103 @@ func TestExecutorActiveRoutingUseCaseThroughCLI(t *testing.T) {
 	}
 	if rejectedRuns.Load() != 0 || acceptedRuns.Load() != 2 {
 		t.Fatalf("run calls rejected=%d accepted=%d", rejectedRuns.Load(), acceptedRuns.Load())
+	}
+}
+
+func TestKubernetesExecutorLabelRoutingUseCase(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+	var kubernetesCalls, excludedCalls atomic.Int32
+	var dispatched struct {
+		ExternalExecutionID string                               `json:"external_execution_id"`
+		Cluster             *executorsdk.KubernetesClusterConfig `json:"kubernetes_cluster"`
+	}
+	newExecutor := func(calls *atomic.Int32) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/run" {
+				http.NotFound(w, r)
+				return
+			}
+			calls.Add(1)
+			if calls == &kubernetesCalls {
+				if err := json.NewDecoder(r.Body).Decode(&dispatched); err != nil {
+					t.Errorf("decode kubernetes dispatch: %v", err)
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	}
+	kubernetesNode := newExecutor(&kubernetesCalls)
+	defer kubernetesNode.Close()
+	excludedNode := newExecutor(&excludedCalls)
+	defer excludedNode.Close()
+	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{TenantID: fixture.tenantID, Name: "label-routing", RouteStrategy: "round"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "kubernetes-node", kubernetesNode.URL, 30*time.Second, []string{"kubernetes", "linux"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "excluded-node", excludedNode.URL, 30*time.Second, []string{"kubernetes", "linux", "spot"}); err != nil {
+		t.Fatal(err)
+	}
+	cluster, err := fixture.store.CreateKubernetesCluster(t.Context(), store.KubernetesCluster{TenantID: fixture.tenantID, Name: "routing-cluster", AuthMode: "service_account", APIServer: "https://k8s.example", Namespace: "jobs", Credentials: store.KubernetesCredentials{Token: "routing-token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "kubernetes-label-routed", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, CallbackTimeoutSeconds: 30, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, ExecutorGroupID: group.ID, ExecutorHandler: "__kubernetes__", ScriptLanguage: "kubernetes", ScriptSource: `{"image":"alpine:3.22"}`, KubernetesClusterID: cluster.ID, Enabled: false, RequiredExecutorLabels: []string{"kubernetes", "linux"}, ExcludedExecutorLabels: []string{"spot"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "labels-match", ""); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := auth.NewManager(string(bytes.Repeat([]byte("x"), 32)), "test", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	defer httpServer.Close()
+	engineCtx, cancelEngine := context.WithCancel(t.Context())
+	engine := core.NewEngine(fixture.store, "label-routing-core", 10*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine.Run(engineCtx)
+	defer func() { cancelEngine(); engine.Wait() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for kubernetesCalls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if kubernetesCalls.Load() != 1 || excludedCalls.Load() != 0 {
+		t.Fatalf("label routing calls kubernetes=%d excluded=%d", kubernetesCalls.Load(), excludedCalls.Load())
+	}
+	runs, err := fixture.store.ListRuns(t.Context(), fixture.tenantID, job.ID, 10)
+	if err != nil || len(runs) != 1 || runs[0].Status != "succeeded" || runs[0].ExecutorNodeID != "kubernetes-node" {
+		t.Fatalf("label-routed runs = %+v, %v", runs, err)
+	}
+	if dispatched.ExternalExecutionID != runs[0].ID || dispatched.Cluster == nil || dispatched.Cluster.Token != "routing-token" || dispatched.Cluster.Namespace != "jobs" {
+		t.Fatalf("kubernetes dispatch = %+v", dispatched)
+	}
+	job.RequiredExecutorLabels = []string{"windows"}
+	job.ExcludedExecutorLabels = nil
+	job, err = fixture.store.UpdateJob(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "labels-no-match", ""); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, err = fixture.store.ListRuns(t.Context(), fixture.tenantID, job.ID, 10)
+		if err == nil && len(runs) == 2 && runs[0].Status == "failed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(runs) != 2 || runs[0].Status != "failed" || !strings.Contains(runs[0].ErrorMessage, "no live executor nodes") {
+		t.Fatalf("no-match runs = %+v", runs)
+	}
+	if kubernetesCalls.Load() != 1 || excludedCalls.Load() != 0 {
+		t.Fatalf("no-match dispatched unexpectedly kubernetes=%d excluded=%d", kubernetesCalls.Load(), excludedCalls.Load())
 	}
 }
 

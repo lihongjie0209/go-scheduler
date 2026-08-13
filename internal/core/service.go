@@ -144,16 +144,24 @@ func validateJob(j *schedulerv1.Job) error {
 		expectedHandler := "__script__"
 		if j.ScriptLanguage == "docker" {
 			expectedHandler = "__docker__"
+		} else if j.ScriptLanguage == "kubernetes" {
+			expectedHandler = "__kubernetes__"
 		}
 		if j.ExecutorGroupId == "" || j.ExecutorHandler != expectedHandler {
 			return fmt.Errorf("%s jobs require executor_group_id and %s handler", j.ScriptLanguage, expectedHandler)
 		}
-		if j.ScriptLanguage != "shell" && j.ScriptLanguage != "python" && j.ScriptLanguage != "nodejs" && j.ScriptLanguage != "php" && j.ScriptLanguage != "powershell" && j.ScriptLanguage != "docker" {
-			return fmt.Errorf("script_language must be shell, python, nodejs, php, powershell or docker")
+		if j.ScriptLanguage != "shell" && j.ScriptLanguage != "python" && j.ScriptLanguage != "nodejs" && j.ScriptLanguage != "php" && j.ScriptLanguage != "powershell" && j.ScriptLanguage != "docker" && j.ScriptLanguage != "kubernetes" {
+			return fmt.Errorf("script_language must be shell, python, nodejs, php, powershell, docker or kubernetes")
 		}
 		if j.ScriptSource == "" || len(j.ScriptSource) > 1<<20 {
 			return fmt.Errorf("script_source must be between 1 byte and 1 MiB")
 		}
+	}
+	if j.ScriptLanguage == "kubernetes" && j.KubernetesClusterId == "" {
+		return fmt.Errorf("kubernetes_cluster_id is required for kubernetes jobs")
+	}
+	if j.ScriptLanguage != "kubernetes" && j.KubernetesClusterId != "" {
+		return fmt.Errorf("kubernetes_cluster_id is only valid for kubernetes jobs")
 	}
 	required, err := normalizeExecutorLabels(j.RequiredExecutorLabels)
 	if err != nil {
@@ -562,10 +570,10 @@ func (s *Service) ListExecutorNodes(ctx context.Context, req *schedulerv1.ListEx
 }
 
 func fromProto(j *schedulerv1.Job) store.Job {
-	return store.Job{ID: j.Id, TenantID: j.TenantId, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetURL: j.TargetUrl, HTTPMethod: j.HttpMethod, Headers: j.Headers, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupID: j.ExecutorGroupId, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels}
+	return store.Job{ID: j.Id, TenantID: j.TenantId, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetURL: j.TargetUrl, HTTPMethod: j.HttpMethod, Headers: j.Headers, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupID: j.ExecutorGroupId, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels, KubernetesClusterID: j.KubernetesClusterId}
 }
 func toProto(j store.Job) *schedulerv1.Job {
-	out := &schedulerv1.Job{Id: j.ID, TenantId: j.TenantID, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetUrl: j.TargetURL, HttpMethod: j.HTTPMethod, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupId: j.ExecutorGroupID, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels}
+	out := &schedulerv1.Job{Id: j.ID, TenantId: j.TenantID, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetUrl: j.TargetURL, HttpMethod: j.HTTPMethod, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupId: j.ExecutorGroupID, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels, KubernetesClusterId: j.KubernetesClusterID}
 	if j.NextRunAt != nil {
 		out.NextRunAt = timestamppb.New(*j.NextRunAt)
 	}

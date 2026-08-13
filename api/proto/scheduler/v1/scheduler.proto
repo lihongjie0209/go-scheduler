@@ -67,6 +67,7 @@ message Job {
   string script_source = 26;
   repeated string required_executor_labels = 27;
   repeated string excluded_executor_labels = 28;
+  string kubernetes_cluster_id = 29;
 }
 
 message CreateJobRequest { Job job = 1; }

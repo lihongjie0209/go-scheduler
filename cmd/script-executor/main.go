@@ -44,6 +44,13 @@ func run() error {
 	} else if dockerEnabled != "false" {
 		return errors.New("DOCKER_ENABLED must be true or false")
 	}
+	if kubernetesEnabled := envOr("KUBERNETES_ENABLED", "false"); kubernetesEnabled == "true" {
+		if err = server.HandleAsync("__kubernetes__", executor.KubernetesHandler(executor.KubernetesOptions{})); err != nil {
+			return err
+		}
+	} else if kubernetesEnabled != "false" {
+		return errors.New("KUBERNETES_ENABLED must be true or false")
+	}
 	ttl, err := time.ParseDuration(envOr("EXECUTOR_TTL", "30s"))
 	if err != nil {
 		return fmt.Errorf("parse EXECUTOR_TTL: %w", err)

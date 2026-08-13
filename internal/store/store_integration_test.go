@@ -1063,6 +1063,32 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if loaded.Headers["Authorization"] != "Bearer top-secret" {
 		t.Fatal("encrypted headers did not round-trip")
 	}
+	kubernetesCluster, err := encryptedStore.CreateKubernetesCluster(ctx, KubernetesCluster{TenantID: tenantID, Name: "integration-k8s", AuthMode: "service_account", APIServer: "https://k8s.example", Namespace: "jobs", Credentials: KubernetesCredentials{Token: "service-account-secret", CAData: "test-ca"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawCredentials []byte
+	if err = direct.QueryRow(ctx, `SELECT encrypted_credentials FROM kubernetes_clusters WHERE id=$1`, kubernetesCluster.ID).Scan(&rawCredentials); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(rawCredentials, []byte("service-account-secret")) {
+		t.Fatal("kubernetes credentials were stored in plaintext")
+	}
+	loadedCluster, err := encryptedStore.GetKubernetesCluster(ctx, tenantID, kubernetesCluster.ID)
+	if err != nil || loadedCluster.Credentials.Token != "service-account-secret" {
+		t.Fatalf("kubernetes cluster = %+v, %v", loadedCluster, err)
+	}
+	kubernetesJob, err := encryptedStore.CreateJob(ctx, Job{TenantID: tenantID, Name: "kubernetes-persistence", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 60, CallbackTimeoutSeconds: 60, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "__kubernetes__", ScriptLanguage: "kubernetes", ScriptSource: `{"image":"alpine:3.22"}`, KubernetesClusterID: kubernetesCluster.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedKubernetesJob, err := encryptedStore.GetJob(ctx, tenantID, kubernetesJob.ID)
+	if err != nil || loadedKubernetesJob.KubernetesClusterID != kubernetesCluster.ID {
+		t.Fatalf("kubernetes job binding = %+v, %v", loadedKubernetesJob, err)
+	}
+	if err = encryptedStore.DeleteKubernetesCluster(ctx, tenantID, kubernetesCluster.ID, kubernetesCluster.Version); err != ErrKubernetesClusterInUse {
+		t.Fatalf("delete referenced kubernetes cluster = %v", err)
+	}
 	if _, err = one.TriggerJob(ctx, tenantID, "00000000-0000-0000-0000-000000000099", "missing-job", ""); err != ErrNotFound {
 		t.Fatalf("trigger missing job = %v, want ErrNotFound", err)
 	}

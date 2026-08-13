@@ -113,6 +113,11 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/executor-groups/{id}/nodes", s.listExecutorNodes)
 		r.Put("/executor-groups/{id}/nodes/{nodeID}", s.registerExecutorNode)
 		r.Delete("/executor-groups/{id}/nodes/{nodeID}", s.unregisterExecutorNode)
+		r.Get("/kubernetes-clusters", s.listKubernetesClusters)
+		r.Post("/kubernetes-clusters", s.createKubernetesCluster)
+		r.Get("/kubernetes-clusters/{id}", s.getKubernetesCluster)
+		r.Put("/kubernetes-clusters/{id}", s.updateKubernetesCluster)
+		r.Delete("/kubernetes-clusters/{id}", s.deleteKubernetesCluster)
 		r.Get("/notification-channels", s.listNotificationChannels)
 		r.Post("/notification-channels", s.createNotificationChannel)
 		r.Get("/api-keys", s.listAPIKeys)
@@ -127,6 +132,109 @@ func (s *Server) Routes() http.Handler {
 	root.Mount(s.contextPath, r)
 	root.NotFound(http.NotFoundHandler().ServeHTTP)
 	return root
+}
+
+type kubernetesClusterRequest struct {
+	Name                  string `json:"name"`
+	AuthMode              string `json:"auth_mode"`
+	APIServer             string `json:"api_server"`
+	Namespace             string `json:"namespace"`
+	Kubeconfig            string `json:"kubeconfig"`
+	Token                 string `json:"token"`
+	CAData                string `json:"ca_data"`
+	InsecureSkipTLSVerify bool   `json:"insecure_skip_tls_verify"`
+	Version               int64  `json:"version"`
+}
+
+func publicKubernetesCluster(cluster store.KubernetesCluster) map[string]any {
+	return map[string]any{"id": cluster.ID, "tenant_id": cluster.TenantID, "name": cluster.Name, "auth_mode": cluster.AuthMode, "api_server": cluster.APIServer, "namespace": cluster.Namespace, "insecure_skip_tls_verify": cluster.InsecureSkipTLSVerify, "credentials_configured": true, "version": cluster.Version, "created_at": cluster.CreatedAt, "updated_at": cluster.UpdatedAt}
+}
+
+func clusterFromRequest(tenant, id string, body kubernetesClusterRequest) store.KubernetesCluster {
+	return store.KubernetesCluster{ID: id, TenantID: tenant, Name: body.Name, AuthMode: body.AuthMode, APIServer: body.APIServer, Namespace: body.Namespace, Credentials: store.KubernetesCredentials{Kubeconfig: body.Kubeconfig, Token: body.Token, CAData: body.CAData}, InsecureSkipTLSVerify: body.InsecureSkipTLSVerify, Version: body.Version}
+}
+
+func (s *Server) listKubernetesClusters(w http.ResponseWriter, r *http.Request) {
+	if tenantID(r.Context()) == "" {
+		writeError(w, 400, "X-Tenant-ID is required")
+		return
+	}
+	clusters, err := s.store.ListKubernetesClusters(r.Context(), tenantID(r.Context()))
+	if err != nil {
+		writeError(w, 500, "list kubernetes clusters failed")
+		return
+	}
+	out := make([]map[string]any, 0, len(clusters))
+	for _, cluster := range clusters {
+		out = append(out, publicKubernetesCluster(cluster))
+	}
+	writeJSON(w, 200, map[string]any{"clusters": out})
+}
+
+func (s *Server) getKubernetesCluster(w http.ResponseWriter, r *http.Request) {
+	cluster, err := s.store.GetKubernetesCluster(r.Context(), tenantID(r.Context()), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, 404, "kubernetes cluster not found")
+		return
+	}
+	writeJSON(w, 200, publicKubernetesCluster(cluster))
+}
+
+func (s *Server) createKubernetesCluster(w http.ResponseWriter, r *http.Request) {
+	if !requireTenantAdmin(w, r) {
+		return
+	}
+	var body kubernetesClusterRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	cluster, err := s.store.CreateKubernetesCluster(r.Context(), clusterFromRequest(tenantID(r.Context()), "", body))
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 201, publicKubernetesCluster(cluster))
+}
+
+func (s *Server) updateKubernetesCluster(w http.ResponseWriter, r *http.Request) {
+	if !requireTenantAdmin(w, r) {
+		return
+	}
+	var body kubernetesClusterRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	cluster, err := s.store.UpdateKubernetesCluster(r.Context(), clusterFromRequest(tenantID(r.Context()), chi.URLParam(r, "id"), body))
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, 409, "kubernetes cluster version conflict")
+		return
+	}
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, publicKubernetesCluster(cluster))
+}
+
+func (s *Server) deleteKubernetesCluster(w http.ResponseWriter, r *http.Request) {
+	if !requireTenantAdmin(w, r) {
+		return
+	}
+	version, err := strconv.ParseInt(r.URL.Query().Get("version"), 10, 64)
+	if err != nil {
+		writeError(w, 400, "version is required")
+		return
+	}
+	err = s.store.DeleteKubernetesCluster(r.Context(), tenantID(r.Context()), chi.URLParam(r, "id"), version)
+	if errors.Is(err, store.ErrKubernetesClusterInUse) {
+		writeError(w, 409, "kubernetes cluster is referenced by a job")
+		return
+	}
+	if err != nil {
+		writeError(w, 409, "kubernetes cluster version conflict")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 func requireTenantAdmin(w http.ResponseWriter, r *http.Request) bool {
 	p := getPrincipal(r.Context())

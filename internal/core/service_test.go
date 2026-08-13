@@ -240,6 +240,25 @@ func TestValidateDockerImageJob(t *testing.T) {
 	}
 }
 
+func TestValidateKubernetesJob(t *testing.T) {
+	t.Parallel()
+	job := validJob()
+	job.TargetUrl = ""
+	job.ExecutorGroupId = "kubernetes-group"
+	job.ExecutorHandler = "__kubernetes__"
+	job.ScriptLanguage = "kubernetes"
+	job.ScriptSource = `{"image":"alpine:3.22"}`
+	job.KubernetesClusterId = "cluster-id"
+	job.RequiredExecutorLabels = []string{"kubernetes", "prod-network"}
+	if err := validateJob(job); err != nil {
+		t.Fatal(err)
+	}
+	job.KubernetesClusterId = ""
+	if err := validateJob(job); err == nil {
+		t.Fatal("Kubernetes job accepted without cluster binding")
+	}
+}
+
 func TestValidateJobNormalizesExecutorLabels(t *testing.T) {
 	t.Parallel()
 	job := validJob()

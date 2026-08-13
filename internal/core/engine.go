@@ -212,7 +212,22 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		}
 		targetURL = strings.TrimRight(node.Address, "/") + "/run"
 		method = http.MethodPost
-		payload, marshalErr := json.Marshal(map[string]any{"run_id": c.Run.ID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource})
+		runPayload := map[string]any{"run_id": c.Run.ID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource}
+		if c.Job.KubernetesClusterID != "" {
+			cluster, clusterErr := e.store.GetKubernetesCluster(parent, c.Job.TenantID, c.Job.KubernetesClusterID)
+			if clusterErr != nil {
+				e.fail(parent, c, fmt.Errorf("load kubernetes cluster: %w", clusterErr))
+				return
+			}
+			executionID, executionErr := e.store.RootRunID(parent, c.Job.TenantID, c.Run.ID)
+			if executionErr != nil {
+				e.fail(parent, c, fmt.Errorf("resolve external execution identity: %w", executionErr))
+				return
+			}
+			runPayload["external_execution_id"] = executionID
+			runPayload["kubernetes_cluster"] = map[string]any{"auth_mode": cluster.AuthMode, "api_server": cluster.APIServer, "namespace": cluster.Namespace, "kubeconfig": cluster.Credentials.Kubeconfig, "token": cluster.Credentials.Token, "ca_data": cluster.Credentials.CAData, "insecure_skip_tls_verify": cluster.InsecureSkipTLSVerify}
+		}
+		payload, marshalErr := json.Marshal(runPayload)
 		if marshalErr != nil {
 			e.fail(parent, c, marshalErr)
 			return

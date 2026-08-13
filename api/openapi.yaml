@@ -52,6 +52,31 @@ paths:
       parameters: [{$ref: '#/components/parameters/Tenant'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
       responses: {'201': {description: Created}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /kubernetes-clusters:
+    get:
+      summary: List Kubernetes execution clusters without credentials
+      operationId: listKubernetesClusters
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      responses: {'200': {description: Clusters}}
+    post:
+      summary: Create a Kubernetes execution cluster
+      operationId: createKubernetesCluster
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/KubernetesClusterInput'}}}}
+      responses: {'201': {description: Created}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /kubernetes-clusters/{id}:
+    parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+    get: {summary: Get a Kubernetes execution cluster without credentials, operationId: getKubernetesCluster, responses: {'200': {description: Cluster}, '404': {description: Not found}}}
+    put:
+      summary: Replace a Kubernetes execution cluster configuration
+      operationId: updateKubernetesCluster
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/KubernetesClusterInput'}}}}
+      responses: {'200': {description: Updated}, '409': {description: Version conflict}}
+    delete:
+      summary: Delete an unused Kubernetes execution cluster
+      operationId: deleteKubernetesCluster
+      parameters: [{name: version, in: query, required: true, schema: {type: integer, format: int64, minimum: 1}}]
+      responses: {'204': {description: Deleted}, '409': {description: Version conflict or cluster is in use}}
   /jobs/{id}:
     parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
     get: {summary: Get a tenant job, operationId: getJob, responses: {'200': {description: Job}, '404': {description: Not found}}}
@@ -343,8 +368,11 @@ components:
         target_url: {type: string, format: uri}
         executor_group_id: {type: string, format: uuid, description: When set, dispatch through a registered executor group instead of target_url}
         executor_handler: {type: string, description: Required when executor_group_id is set}
-        script_language: {type: string, enum: [shell, python, nodejs, php, powershell], description: Script jobs require executor_handler=__script__}
+        script_language: {type: string, enum: [shell, python, nodejs, php, powershell, docker, kubernetes], description: Kubernetes jobs require executor_handler=__kubernetes__ and kubernetes_cluster_id}
         script_source: {type: string, minLength: 1, maxLength: 1048576, description: Versioned script source dispatched only to a Script Executor}
+        kubernetes_cluster_id: {type: string, format: uuid, description: Bound managed cluster for Kubernetes Job execution}
+        required_executor_labels: {type: array, maxItems: 32, uniqueItems: true, items: {type: string}}
+        excluded_executor_labels: {type: array, maxItems: 32, uniqueItems: true, items: {type: string}}
         http_method: {type: string, enum: [GET, POST, PUT, PATCH, DELETE]}
         headers: {type: object, additionalProperties: {type: string}, writeOnly: true}
         body_template: {type: string, description: "Supports only the '{{input}}' placeholder"}
@@ -358,3 +386,16 @@ components:
         callback_timeout_seconds: {type: integer, minimum: 1, maximum: 86400}
         enabled: {type: boolean}
         version: {type: integer, format: int64}
+    KubernetesClusterInput:
+      type: object
+      required: [name, auth_mode, namespace]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        auth_mode: {type: string, enum: [kubeconfig, service_account]}
+        api_server: {type: string, format: uri, description: Required for service_account mode}
+        namespace: {type: string, default: default}
+        kubeconfig: {type: string, writeOnly: true, description: Required for kubeconfig mode and encrypted at rest}
+        token: {type: string, writeOnly: true, description: Required for service_account mode and encrypted at rest}
+        ca_data: {type: string, writeOnly: true, description: PEM CA certificate}
+        insecure_skip_tls_verify: {type: boolean, default: false}
+        version: {type: integer, format: int64, description: Required for update}

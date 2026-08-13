@@ -26,7 +26,7 @@ var ErrOverrideRequiresExecutorGroup = errors.New("executor address override req
 type Job struct {
 	ID, TenantID, Name, Description, ScheduleType, ScheduleExpression, Timezone                     string
 	TargetURL, HTTPMethod, BodyTemplate, OverlapPolicy, MisfirePolicy                               string
-	ExecutorGroupID, ExecutorHandler                                                                string
+	ExecutorGroupID, ExecutorHandler, KubernetesClusterID                                           string
 	ScriptLanguage, ScriptSource                                                                    string
 	RequiredExecutorLabels, ExcludedExecutorLabels                                                  []string
 	Headers                                                                                         map[string]string
@@ -237,9 +237,9 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (Job, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	err = tx.QueryRow(ctx, `INSERT INTO jobs
-	 (id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,executor_group_id,executor_handler,script_language,script_source)
-	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULLIF($24,'')::uuid,$25,$26,$27)
-	 RETURNING next_run_at,version`, j.ID, j.TenantID, j.Name, j.Description, j.ScheduleType, j.ScheduleExpression, j.Timezone, j.TargetURL, j.HTTPMethod, headers, encrypted, keyVersion, j.BodyTemplate, j.TimeoutSeconds, j.MaxRetries, j.OverlapPolicy, j.MisfirePolicy, j.Enabled, nextArg, j.MaxConcurrentRuns, j.MaxCatchUp, j.CallbackTimeoutSeconds, j.MaxQueueSize, j.ExecutorGroupID, j.ExecutorHandler, j.ScriptLanguage, j.ScriptSource).Scan(&j.NextRunAt, &j.Version)
+	 (id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,executor_group_id,executor_handler,script_language,script_source,kubernetes_cluster_id)
+	 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULLIF($24,'')::uuid,$25,$26,$27,NULLIF($28,'')::uuid)
+	 RETURNING next_run_at,version`, j.ID, j.TenantID, j.Name, j.Description, j.ScheduleType, j.ScheduleExpression, j.Timezone, j.TargetURL, j.HTTPMethod, headers, encrypted, keyVersion, j.BodyTemplate, j.TimeoutSeconds, j.MaxRetries, j.OverlapPolicy, j.MisfirePolicy, j.Enabled, nextArg, j.MaxConcurrentRuns, j.MaxCatchUp, j.CallbackTimeoutSeconds, j.MaxQueueSize, j.ExecutorGroupID, j.ExecutorHandler, j.ScriptLanguage, j.ScriptSource, j.KubernetesClusterID).Scan(&j.NextRunAt, &j.Version)
 	if err != nil {
 		return Job{}, fmt.Errorf("insert job: %w", err)
 	}
@@ -257,13 +257,13 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (Job, error) {
 	return j, nil
 }
 
-const jobColumns = `id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,version,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,COALESCE(executor_group_id::text,''),executor_handler,script_language,script_source`
+const jobColumns = `id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,version,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,COALESCE(executor_group_id::text,''),executor_handler,script_language,script_source,COALESCE(kubernetes_cluster_id::text,'')`
 
 func (s *Store) scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	var headers, encrypted []byte
 	var keyVersion *int
-	err := row.Scan(&j.ID, &j.TenantID, &j.Name, &j.Description, &j.ScheduleType, &j.ScheduleExpression, &j.Timezone, &j.TargetURL, &j.HTTPMethod, &headers, &encrypted, &keyVersion, &j.BodyTemplate, &j.TimeoutSeconds, &j.MaxRetries, &j.OverlapPolicy, &j.MisfirePolicy, &j.Enabled, &j.NextRunAt, &j.Version, &j.MaxConcurrentRuns, &j.MaxCatchUp, &j.CallbackTimeoutSeconds, &j.MaxQueueSize, &j.ExecutorGroupID, &j.ExecutorHandler, &j.ScriptLanguage, &j.ScriptSource)
+	err := row.Scan(&j.ID, &j.TenantID, &j.Name, &j.Description, &j.ScheduleType, &j.ScheduleExpression, &j.Timezone, &j.TargetURL, &j.HTTPMethod, &headers, &encrypted, &keyVersion, &j.BodyTemplate, &j.TimeoutSeconds, &j.MaxRetries, &j.OverlapPolicy, &j.MisfirePolicy, &j.Enabled, &j.NextRunAt, &j.Version, &j.MaxConcurrentRuns, &j.MaxCatchUp, &j.CallbackTimeoutSeconds, &j.MaxQueueSize, &j.ExecutorGroupID, &j.ExecutorHandler, &j.ScriptLanguage, &j.ScriptSource, &j.KubernetesClusterID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
@@ -350,7 +350,7 @@ func (s *Store) UpdateJob(ctx context.Context, j Job) (Job, error) {
 		return Job{}, ErrConflict
 	}
 	scriptChanged := current.ScriptLanguage != j.ScriptLanguage || current.ScriptSource != j.ScriptSource
-	err = tx.QueryRow(ctx, `UPDATE jobs SET name=$3,description=$4,schedule_type=$5,schedule_expression=$6,timezone=$7,target_url=$8,http_method=$9,headers=$10,encrypted_headers=$11,encryption_key_version=$12,body_template=$13,timeout_seconds=$14,max_retries=$15,overlap_policy=$16,misfire_policy=$17,enabled=$18,next_run_at=$19,max_concurrent_runs=$20,max_catch_up=$21,callback_timeout_seconds=$22,max_queue_size=$23,executor_group_id=NULLIF($24,'')::uuid,executor_handler=$25,script_language=$26,script_source=$27,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING next_run_at,version`, j.TenantID, j.ID, j.Name, j.Description, j.ScheduleType, j.ScheduleExpression, j.Timezone, j.TargetURL, j.HTTPMethod, headers, encrypted, keyVersion, j.BodyTemplate, j.TimeoutSeconds, j.MaxRetries, j.OverlapPolicy, j.MisfirePolicy, j.Enabled, nextArg, j.MaxConcurrentRuns, j.MaxCatchUp, j.CallbackTimeoutSeconds, j.MaxQueueSize, j.ExecutorGroupID, j.ExecutorHandler, j.ScriptLanguage, j.ScriptSource).Scan(&j.NextRunAt, &j.Version)
+	err = tx.QueryRow(ctx, `UPDATE jobs SET name=$3,description=$4,schedule_type=$5,schedule_expression=$6,timezone=$7,target_url=$8,http_method=$9,headers=$10,encrypted_headers=$11,encryption_key_version=$12,body_template=$13,timeout_seconds=$14,max_retries=$15,overlap_policy=$16,misfire_policy=$17,enabled=$18,next_run_at=$19,max_concurrent_runs=$20,max_catch_up=$21,callback_timeout_seconds=$22,max_queue_size=$23,executor_group_id=NULLIF($24,'')::uuid,executor_handler=$25,script_language=$26,script_source=$27,kubernetes_cluster_id=NULLIF($28,'')::uuid,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING next_run_at,version`, j.TenantID, j.ID, j.Name, j.Description, j.ScheduleType, j.ScheduleExpression, j.Timezone, j.TargetURL, j.HTTPMethod, headers, encrypted, keyVersion, j.BodyTemplate, j.TimeoutSeconds, j.MaxRetries, j.OverlapPolicy, j.MisfirePolicy, j.Enabled, nextArg, j.MaxConcurrentRuns, j.MaxCatchUp, j.CallbackTimeoutSeconds, j.MaxQueueSize, j.ExecutorGroupID, j.ExecutorHandler, j.ScriptLanguage, j.ScriptSource, j.KubernetesClusterID).Scan(&j.NextRunAt, &j.Version)
 	if err != nil {
 		return Job{}, fmt.Errorf("update job: %w", err)
 	}
@@ -714,7 +714,7 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 		var x ClaimedRun
 		var headers, encrypted []byte
 		var keyVersion *int
-		err = rows.Scan(&x.Run.ID, &x.Run.TenantID, &x.Run.JobID, &x.Run.TriggerType, &x.Run.Status, &x.Run.Attempt, &x.Run.ScheduledAt, &x.Run.RuntimeInput, &x.Run.ParentRunID, &x.Run.RetryOfRunID, &x.Run.ExecutorNodeID, &x.Run.ExecutorAddress, &x.Run.BroadcastGroupID, &x.Run.ShardIndex, &x.Run.ShardTotal, &x.Run.RescheduleOnTerminal, &x.Run.OverrideAddresses, &x.Job.ID, &x.Job.TenantID, &x.Job.Name, &x.Job.Description, &x.Job.ScheduleType, &x.Job.ScheduleExpression, &x.Job.Timezone, &x.Job.TargetURL, &x.Job.HTTPMethod, &headers, &encrypted, &keyVersion, &x.Job.BodyTemplate, &x.Job.TimeoutSeconds, &x.Job.MaxRetries, &x.Job.OverlapPolicy, &x.Job.MisfirePolicy, &x.Job.Enabled, &x.Job.NextRunAt, &x.Job.Version, &x.Job.MaxConcurrentRuns, &x.Job.MaxCatchUp, &x.Job.CallbackTimeoutSeconds, &x.Job.MaxQueueSize, &x.Job.ExecutorGroupID, &x.Job.ExecutorHandler, &x.Job.ScriptLanguage, &x.Job.ScriptSource)
+		err = rows.Scan(&x.Run.ID, &x.Run.TenantID, &x.Run.JobID, &x.Run.TriggerType, &x.Run.Status, &x.Run.Attempt, &x.Run.ScheduledAt, &x.Run.RuntimeInput, &x.Run.ParentRunID, &x.Run.RetryOfRunID, &x.Run.ExecutorNodeID, &x.Run.ExecutorAddress, &x.Run.BroadcastGroupID, &x.Run.ShardIndex, &x.Run.ShardTotal, &x.Run.RescheduleOnTerminal, &x.Run.OverrideAddresses, &x.Job.ID, &x.Job.TenantID, &x.Job.Name, &x.Job.Description, &x.Job.ScheduleType, &x.Job.ScheduleExpression, &x.Job.Timezone, &x.Job.TargetURL, &x.Job.HTTPMethod, &headers, &encrypted, &keyVersion, &x.Job.BodyTemplate, &x.Job.TimeoutSeconds, &x.Job.MaxRetries, &x.Job.OverlapPolicy, &x.Job.MisfirePolicy, &x.Job.Enabled, &x.Job.NextRunAt, &x.Job.Version, &x.Job.MaxConcurrentRuns, &x.Job.MaxCatchUp, &x.Job.CallbackTimeoutSeconds, &x.Job.MaxQueueSize, &x.Job.ExecutorGroupID, &x.Job.ExecutorHandler, &x.Job.ScriptLanguage, &x.Job.ScriptSource, &x.Job.KubernetesClusterID)
 		if err != nil {
 			return nil, err
 		}
@@ -735,7 +735,7 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 	return out, rows.Err()
 }
 func jobColumnsWithAlias(a string) string {
-	return a + `.id,` + a + `.tenant_id,` + a + `.name,` + a + `.description,` + a + `.schedule_type,` + a + `.schedule_expression,` + a + `.timezone,` + a + `.target_url,` + a + `.http_method,` + a + `.headers,` + a + `.encrypted_headers,` + a + `.encryption_key_version,` + a + `.body_template,` + a + `.timeout_seconds,` + a + `.max_retries,` + a + `.overlap_policy,` + a + `.misfire_policy,` + a + `.enabled,` + a + `.next_run_at,` + a + `.version,` + a + `.max_concurrent_runs,` + a + `.max_catch_up,` + a + `.callback_timeout_seconds,` + a + `.max_queue_size,COALESCE(` + a + `.executor_group_id::text,''),` + a + `.executor_handler,` + a + `.script_language,` + a + `.script_source`
+	return a + `.id,` + a + `.tenant_id,` + a + `.name,` + a + `.description,` + a + `.schedule_type,` + a + `.schedule_expression,` + a + `.timezone,` + a + `.target_url,` + a + `.http_method,` + a + `.headers,` + a + `.encrypted_headers,` + a + `.encryption_key_version,` + a + `.body_template,` + a + `.timeout_seconds,` + a + `.max_retries,` + a + `.overlap_policy,` + a + `.misfire_policy,` + a + `.enabled,` + a + `.next_run_at,` + a + `.version,` + a + `.max_concurrent_runs,` + a + `.max_catch_up,` + a + `.callback_timeout_seconds,` + a + `.max_queue_size,COALESCE(` + a + `.executor_group_id::text,''),` + a + `.executor_handler,` + a + `.script_language,` + a + `.script_source,COALESCE(` + a + `.kubernetes_cluster_id::text,'')`
 }
 
 func (s *Store) CompleteRun(ctx context.Context, r Run, success bool, status int, body, errorMessage string) error {

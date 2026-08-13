@@ -27,10 +27,11 @@ type TaskLogger interface {
 }
 
 type Task struct {
-	RunID, JobID, Input, BroadcastGroupID string
-	ScriptLanguage, ScriptSource          string
-	BroadcastIndex, BroadcastTotal        int32
-	Logger                                TaskLogger
+	RunID, JobID, Input, BroadcastGroupID, ExternalExecutionID string
+	ScriptLanguage, ScriptSource                               string
+	KubernetesCluster                                          *KubernetesClusterConfig
+	BroadcastIndex, BroadcastTotal                             int32
+	Logger                                                     TaskLogger
 }
 
 type Options struct {
@@ -59,19 +60,21 @@ type Server struct {
 }
 
 type runRequest struct {
-	RunID            string `json:"run_id"`
-	JobID            string `json:"job_id"`
-	Handler          string `json:"handler"`
-	Input            string `json:"input"`
-	CallbackURL      string `json:"callback_url"`
-	LogURL           string `json:"log_url"`
-	CallbackToken    string `json:"callback_token"`
-	TimeoutSeconds   int32  `json:"timeout_seconds"`
-	BroadcastGroupID string `json:"broadcast_group_id"`
-	BroadcastIndex   int32  `json:"broadcast_index"`
-	BroadcastTotal   int32  `json:"broadcast_total"`
-	ScriptLanguage   string `json:"script_language"`
-	ScriptSource     string `json:"script_source"`
+	RunID               string                   `json:"run_id"`
+	ExternalExecutionID string                   `json:"external_execution_id,omitempty"`
+	JobID               string                   `json:"job_id"`
+	Handler             string                   `json:"handler"`
+	Input               string                   `json:"input"`
+	CallbackURL         string                   `json:"callback_url"`
+	LogURL              string                   `json:"log_url"`
+	CallbackToken       string                   `json:"callback_token"`
+	TimeoutSeconds      int32                    `json:"timeout_seconds"`
+	BroadcastGroupID    string                   `json:"broadcast_group_id"`
+	BroadcastIndex      int32                    `json:"broadcast_index"`
+	BroadcastTotal      int32                    `json:"broadcast_total"`
+	ScriptLanguage      string                   `json:"script_language"`
+	ScriptSource        string                   `json:"script_source"`
+	KubernetesCluster   *KubernetesClusterConfig `json:"kubernetes_cluster,omitempty"`
 }
 
 func NewServer(options Options) (*Server, error) {
@@ -151,7 +154,7 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(parent, time.Duration(request.TimeoutSeconds)*time.Second)
 		defer cancel()
 		logger := &Logger{client: s.client, url: request.LogURL, token: request.CallbackToken}
-		return invokeHandler(ctx, registered.handler, Task{RunID: request.RunID, JobID: request.JobID, Input: request.Input, BroadcastGroupID: request.BroadcastGroupID, BroadcastIndex: request.BroadcastIndex, BroadcastTotal: request.BroadcastTotal, ScriptLanguage: request.ScriptLanguage, ScriptSource: request.ScriptSource, Logger: logger})
+		return invokeHandler(ctx, registered.handler, Task{RunID: request.RunID, JobID: request.JobID, Input: request.Input, BroadcastGroupID: request.BroadcastGroupID, ExternalExecutionID: request.ExternalExecutionID, BroadcastIndex: request.BroadcastIndex, BroadcastTotal: request.BroadcastTotal, ScriptLanguage: request.ScriptLanguage, ScriptSource: request.ScriptSource, KubernetesCluster: request.KubernetesCluster, Logger: logger})
 	}
 	if registered.async {
 		go func() { err := execute(context.Background()); _ = s.callback(request, err) }()

@@ -46,8 +46,9 @@ services:
       EXECUTOR_GROUP_ID: "${SCHEDULER_EXECUTOR_GROUP_ID:-}"
       EXECUTOR_NODE_ID: "compose-executor-1"
       EXECUTOR_ADVERTISE_URL: "http://executor:9999"
-      EXECUTOR_LABELS: "${SCHEDULER_EXECUTOR_LABELS:-linux,docker}"
+      EXECUTOR_LABELS: "${SCHEDULER_EXECUTOR_LABELS:-linux,docker,kubernetes}"
       DOCKER_ENABLED: "true"
+      KUBERNETES_ENABLED: "true"
       DOCKER_CONFIG: "/docker-auth"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

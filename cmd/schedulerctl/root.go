@@ -42,7 +42,7 @@ func newRootCommand(buildVersion string) *cobra.Command {
 	f.StringVar(&c.password, "password", c.password, "login password (SCHEDULER_PASSWORD)")
 	f.BoolVar(&c.passwordStdin, "password-stdin", false, "read login password from stdin")
 	f.StringVar(&c.tenant, "tenant", c.tenant, "tenant UUID (SCHEDULER_TENANT)")
-	root.AddCommand(loginCommand(c), healthCommand(c), dashboardCommand(c), reportsCommand(c), jobsCommand(c), runsCommand(c), executorsCommand(c), notificationsCommand(c), versionCommand(buildVersion), completionCommand(root))
+	root.AddCommand(loginCommand(c), healthCommand(c), dashboardCommand(c), reportsCommand(c), jobsCommand(c), runsCommand(c), executorsCommand(c), kubernetesClustersCommand(c), notificationsCommand(c), versionCommand(buildVersion), completionCommand(root))
 	return root
 }
 
@@ -541,6 +541,73 @@ func executorsCommand(c *cliConfig) *cobra.Command {
 	}})
 	return cmd
 }
+
+func kubernetesClustersCommand(c *cliConfig) *cobra.Command {
+	cmd := &cobra.Command{Use: "kubernetes-clusters", Aliases: []string{"k8s-clusters"}, Short: "Manage Kubernetes execution clusters"}
+	cmd.AddCommand(&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: runAuthenticated(c, http.MethodGet, "/api/v1/kubernetes-clusters", nil)})
+	cmd.AddCommand(&cobra.Command{Use: "get ID", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return runAuthenticated(c, http.MethodGet, "/api/v1/kubernetes-clusters/"+args[0], nil)(cmd, nil)
+	}})
+	addWrite := func(update bool) *cobra.Command {
+		var name, authMode, apiServer, namespace, kubeconfigFile, token, caFile string
+		var insecure bool
+		var version int64
+		use := "create"
+		argsValidator := cobra.NoArgs
+		method := http.MethodPost
+		if update {
+			use, argsValidator, method = "update ID", cobra.ExactArgs(1), http.MethodPut
+		}
+		write := &cobra.Command{Use: use, Args: argsValidator, RunE: func(command *cobra.Command, args []string) error {
+			var kubeconfig, caData []byte
+			var err error
+			if kubeconfigFile != "" {
+				kubeconfig, err = os.ReadFile(kubeconfigFile)
+				if err != nil {
+					return fmt.Errorf("read kubeconfig: %w", err)
+				}
+			}
+			if caFile != "" {
+				caData, err = os.ReadFile(caFile)
+				if err != nil {
+					return fmt.Errorf("read CA file: %w", err)
+				}
+			}
+			payload := func() ([]byte, error) {
+				return json.Marshal(map[string]any{"name": name, "auth_mode": authMode, "api_server": apiServer, "namespace": namespace, "kubeconfig": string(kubeconfig), "token": token, "ca_data": string(caData), "insecure_skip_tls_verify": insecure, "version": version})
+			}
+			path := "/api/v1/kubernetes-clusters"
+			if update {
+				path += "/" + args[0]
+			}
+			return runAuthenticated(c, method, path, payload)(command, nil)
+		}}
+		write.Flags().StringVar(&name, "name", "", "cluster name")
+		write.Flags().StringVar(&authMode, "auth-mode", "kubeconfig", "kubeconfig or service_account")
+		write.Flags().StringVar(&apiServer, "api-server", "", "Kubernetes API Server URL")
+		write.Flags().StringVar(&namespace, "namespace", "default", "default Job namespace")
+		write.Flags().StringVar(&kubeconfigFile, "kubeconfig", "", "path to kubeconfig")
+		write.Flags().StringVar(&token, "service-account-token", "", "ServiceAccount bearer token")
+		write.Flags().StringVar(&caFile, "ca-file", "", "path to API Server CA certificate")
+		write.Flags().BoolVar(&insecure, "insecure-skip-tls-verify", false, "skip API Server TLS verification")
+		write.Flags().Int64Var(&version, "version", 0, "expected cluster version (update only)")
+		_ = write.MarkFlagRequired("name")
+		if update {
+			_ = write.MarkFlagRequired("version")
+		}
+		return write
+	}
+	cmd.AddCommand(addWrite(false), addWrite(true))
+	var deleteVersion int64
+	remove := &cobra.Command{Use: "delete ID", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		return runAuthenticated(c, http.MethodDelete, "/api/v1/kubernetes-clusters/"+args[0]+"?version="+strconv.FormatInt(deleteVersion, 10), nil)(command, nil)
+	}}
+	remove.Flags().Int64Var(&deleteVersion, "version", 0, "expected cluster version")
+	_ = remove.MarkFlagRequired("version")
+	cmd.AddCommand(remove)
+	return cmd
+}
+
 func notificationsCommand(c *cliConfig) *cobra.Command {
 	cmd := &cobra.Command{Use: "notifications", Short: "Manage failure notification channels"}
 	cmd.AddCommand(&cobra.Command{Use: "list", Short: "List enabled notification channels", Args: cobra.NoArgs, RunE: runAuthenticated(c, http.MethodGet, "/api/v1/notification-channels", nil)})

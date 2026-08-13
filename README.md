@@ -140,6 +140,23 @@ docker run --rm -p 9999:9999 \
 
 Kubernetes 中应把仓库凭据以 Secret 挂载为 `/docker-auth/config.json`。挂载宿主 Docker Socket 等价于授予执行器宿主机高权限，生产环境建议使用隔离的专用 Worker 节点或远程受限 Docker Engine。
 
+## Kubernetes Job Executor
+
+统一执行器设置 `KUBERNETES_ENABLED=true` 后注册 `__kubernetes__` handler。集群是租户级资源，支持完整 kubeconfig，或 API Server + ServiceAccount Token + CA；凭据通过 `MASTER_KEY` 加密存入 PostgreSQL，读取 API 永不返回明文。Kubernetes 任务绑定 `kubernetes_cluster_id`，同时仍按执行器组及 `required_executor_labels` / `excluded_executor_labels` 选择能够访问目标集群的执行节点。
+
+```json
+{
+  "executor_group_id": "...",
+  "executor_handler": "__kubernetes__",
+  "script_language": "kubernetes",
+  "kubernetes_cluster_id": "...",
+  "required_executor_labels": ["kubernetes", "prod-network"],
+  "script_source": "{\"image\":\"registry.example.com/jobs/reconcile:v1\",\"args\":[\"--once\"],\"image_pull_secrets\":[\"registry-auth\"]}"
+}
+```
+
+Kubernetes Job 名称使用整条重试链稳定不变的首个 run ID。执行器重启或连接中断不会删除 Job；重派后执行器查询并接管已有 Job，完成后补采 Pod 日志和回调。Job 默认设置 `ttlSecondsAfterFinished=86400`，由集群 TTL Controller 延迟回收。私有镜像使用目标 namespace 中已有的 `imagePullSecrets`。
+
 ## 命令行客户端
 
 ```bash
