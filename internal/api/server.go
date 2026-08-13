@@ -340,14 +340,18 @@ func (s *Server) listNotificationHistory(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "X-Tenant-ID is required")
 		return
 	}
-	limit, err := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 32)
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
 	if r.URL.Query().Get("limit") == "" {
 		limit = 100
 	} else if err != nil {
 		writeError(w, 400, "invalid limit")
 		return
 	}
-	out, callErr := s.client.ListNotificationHistory(r.Context(), &schedulerv1.ListNotificationHistoryRequest{TenantId: tenantID(r.Context()), ChannelId: r.URL.Query().Get("channel_id"), JobId: r.URL.Query().Get("job_id"), Status: r.URL.Query().Get("status"), Limit: int32(limit)})
+	if limit < 1 || limit > 500 {
+		writeError(w, 400, "limit must be between 1 and 500")
+		return
+	}
+	out, callErr := s.client.ListNotificationHistory(r.Context(), &schedulerv1.ListNotificationHistoryRequest{TenantId: tenantID(r.Context()), ChannelId: r.URL.Query().Get("channel_id"), JobId: r.URL.Query().Get("job_id"), Status: r.URL.Query().Get("status"), Limit: int32(limit)}) // #nosec G115 -- limit is bounded to 500.
 	respond(w, out, callErr, http.StatusOK)
 }
 func (s *Server) completeCallback(w http.ResponseWriter, r *http.Request) {

@@ -145,7 +145,17 @@ func (s *Service) ListNotificationChannels(ctx context.Context, req *schedulerv1
 }
 
 func notificationChannelToProto(channel store.NotificationChannel) *schedulerv1.NotificationChannel {
-	return &schedulerv1.NotificationChannel{Id: channel.ID, TenantId: channel.TenantID, Kind: channel.Kind, Name: channel.Name, Configured: len(channel.Config) > 0, Events: trimEventPrefixes(channel.Events), AllJobs: channel.AllJobs, JobIds: channel.JobIDs, MaxAttempts: int32(channel.MaxAttempts), BackoffInitialSeconds: int32(channel.BackoffInitialSeconds), BackoffMaxSeconds: int32(channel.BackoffMaxSeconds)}
+	return &schedulerv1.NotificationChannel{Id: channel.ID, TenantId: channel.TenantID, Kind: channel.Kind, Name: channel.Name, Configured: len(channel.Config) > 0, Events: trimEventPrefixes(channel.Events), AllJobs: channel.AllJobs, JobIds: channel.JobIDs, MaxAttempts: boundedInt32(channel.MaxAttempts), BackoffInitialSeconds: boundedInt32(channel.BackoffInitialSeconds), BackoffMaxSeconds: boundedInt32(channel.BackoffMaxSeconds)}
+}
+
+func boundedInt32(value int) int32 {
+	if value < 0 {
+		return 0
+	}
+	if value > 86400 {
+		return 86400
+	}
+	return int32(value) // #nosec G115 -- bounded above to 86400.
 }
 
 func normalizeNotificationEvents(events []string) ([]string, error) {
@@ -213,7 +223,7 @@ func (s *Service) ListNotificationHistory(ctx context.Context, req *schedulerv1.
 	}
 	out := &schedulerv1.ListNotificationHistoryResponse{Deliveries: make([]*schedulerv1.NotificationHistoryEntry, 0, len(entries))}
 	for _, entry := range entries {
-		item := &schedulerv1.NotificationHistoryEntry{DeliveryId: entry.DeliveryID, EventId: entry.EventID, ChannelId: entry.ChannelID, ChannelName: entry.ChannelName, ChannelKind: entry.ChannelKind, Topic: entry.Topic, JobId: entry.JobID, RunId: entry.RunID, Status: entry.Status, Attempts: int32(entry.Attempts), LastError: entry.LastError, CreatedAt: timestamppb.New(entry.CreatedAt)}
+		item := &schedulerv1.NotificationHistoryEntry{DeliveryId: entry.DeliveryID, EventId: entry.EventID, ChannelId: entry.ChannelID, ChannelName: entry.ChannelName, ChannelKind: entry.ChannelKind, Topic: entry.Topic, JobId: entry.JobID, RunId: entry.RunID, Status: entry.Status, Attempts: boundedInt32(entry.Attempts), LastError: entry.LastError, CreatedAt: timestamppb.New(entry.CreatedAt)}
 		if entry.DeliveredAt != nil {
 			item.DeliveredAt = timestamppb.New(*entry.DeliveredAt)
 		}
