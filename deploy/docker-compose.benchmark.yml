@@ -1,7 +1,6 @@
 services:
   scheduler-server:
     environment:
-      TARGET_HOST_ALLOWLIST: "benchmark-sink"
       WORKERS: "${BENCH_WORKERS:-16}"
       SCHEDULER_INTERVAL: "${BENCH_SCHEDULER_INTERVAL:-1s}"
     depends_on:
@@ -15,4 +14,3 @@ services:
         TARGET: scheduler-bench
     command: ["serve", "--listen", ":19090"]
     ports: ["19090:19090"]
-

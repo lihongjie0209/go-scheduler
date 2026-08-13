@@ -19,7 +19,6 @@ services:
       SERVICE_TOKEN: "compose-internal-service-token-change-in-production"
       MASTER_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
       JWT_SECRET: "compose-jwt-secret-change-in-production-at-least-32-bytes"
-      TARGET_HOST_ALLOWLIST: "example.com,*.example.com"
       TENANT_NAME: "演示租户"
       ADMIN_EMAIL: "admin@example.com"
       ADMIN_PASSWORD: "SchedulerDemo123!"

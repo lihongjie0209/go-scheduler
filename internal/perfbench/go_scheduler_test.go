@@ -21,7 +21,7 @@ func TestGoSchedulerLoaderCreatesEnabledCronJob(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["schedule_expression"] != "5 4 3 2 1 ?" || body["timezone"] != "UTC" || body["enabled"] != true || body["target_url"] != "https://sink.example/execute?id=event-1" {
+		if body["schedule_expression"] != "5 4 3 2 1 ?" || body["timezone"] != "UTC" || body["enabled"] != true || body["target_url"] != "https://sink.example/execute?id=event-1" || body["misfire_policy"] != "fire_once" {
 			t.Errorf("body = %#v", body)
 		}
 		w.WriteHeader(http.StatusCreated)

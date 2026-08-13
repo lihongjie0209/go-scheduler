@@ -90,9 +90,24 @@ sink 对每个 ID 只使用首次到达时间计算延迟，并单独统计重�
 - PostgreSQL 中的运行状态和派发延迟；
 - 完整容器日志、提交 SHA 和 runner 环境。
 
-工作流要求 missing、duplicate、unexpected 和 invalid 全部为零，否则失败。默认参数为 1,000 个任务、16 个执行 worker 和 1 秒调度间隔，可从 Actions 页面调整。
+工作流和本地入口执行同一个 `make integration-benchmark` 目标，要求 missing、duplicate、unexpected 和 invalid 全部为零，否则失败。默认参数为 1,000 个任务、16 个执行 worker 和 1 秒调度间隔，可从 Actions 页面调整。
 
 ## 本地等价命令
+
+完整单节点集成压测需要 Docker、Go、curl、jq 和 GNU coreutils：
+
+```bash
+make integration-benchmark
+
+# 快速 smoke；产物默认写入 benchmark-artifacts/<run-id>/
+BENCH_COUNT=100 BENCH_LEAD_SECONDS=31 make integration-benchmark
+
+# 调整单节点参数，并在结束后保留容器用于排查
+BENCH_COUNT=10000 BENCH_WORKERS=64 BENCH_SCHEDULER_INTERVAL=100ms \
+BENCH_KEEP_STACK=true make integration-benchmark
+```
+
+每次运行使用独立 Compose project 和全新 PostgreSQL 数据卷；正常情况下退出时自动清理。设置 `BENCH_ARTIFACT_DIR` 可指定产物目录，设置 `BENCH_KEEP_STACK=true` 可保留现场。
 
 `scheduler-bench load` 生成稳定的事件 ID、UTC Quartz Cron 表达式和统一计划时刻。控制面地址与任务实际访问的 sink 地址可以分开，以支持 Docker 网络：
 
@@ -108,3 +123,19 @@ BENCH_TOKEN=gsk_xxx BENCH_TENANT_ID=tenant-id \
 ```
 
 `--executor` 仅在需要把目标请求经过共享执行器转发时使用；单节点调度器基准直接请求 sink，避免额外代理影响结果。服务进程必须使用 UTC 时区，装载结束时间晚于计划时刻时整轮实验作废。
+
+## 2026-08-13 单节点瓶颈记录
+
+环境为本地 Docker Compose、单个 `scheduler-server`、16 个 Worker、1 秒调度周期。修复前，Worker 即使已经完成 HTTP 请求，也只能等到下一个调度 tick 才领取任务，导致吞吐被近似限制为 `workers / interval`。
+
+| 100 个同时到期任务 | 修复前 | Worker 完成主动唤醒后 |
+| --- | ---: | ---: |
+| 吞吐 | 15.21/s | 123.19/s |
+| P50 | 3,566 ms | 726 ms |
+| P99 | 6,573 ms | 812 ms |
+| 最大延迟 | 6,573 ms | 812 ms |
+| 丢失 / 重复 | 0 / 0 | 0 / 0 |
+
+同一优化下的 1,000 任务结果为 256.76/s、P99 3,864 ms、零丢失、零重复；数据库记录的派发 P99 为 3.849 秒。该轮 Core 连接池累计等待 403 次、等待 1.296 秒，说明解除 tick 限流后，下一个主要方向是批量化到期入队和降低运行状态 SQL 往返。
+
+这些数字用于记录当前机器上的优化前后证据，不是生产容量承诺。后续 Core/Executor gRPC 外置执行模型完成后必须重新建立基线。

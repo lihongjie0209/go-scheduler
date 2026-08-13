@@ -3435,6 +3435,59 @@ func TestWorkerSaturationDoesNotBlockSchedulerUseCase(t *testing.T) {
 	}
 }
 
+func TestWorkerCompletionImmediatelyDispatchesPendingRunUseCase(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	var calls atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(firstStarted)
+			select {
+			case <-releaseFirst:
+			case <-r.Context().Done():
+			}
+		} else {
+			close(secondStarted)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "wake-dispatcher", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"wake-first", "wake-second"} {
+		if _, err = fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, key, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	engineCtx, cancelEngine := context.WithCancel(t.Context())
+	engine := core.NewEngine(fixture.store, "wake-dispatch-core", 5*time.Second, 1, target.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine.Run(engineCtx)
+	defer func() {
+		cancelEngine()
+		engine.Wait()
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first pending run was not dispatched")
+	}
+	close(releaseFirst)
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second run waited for the five-second scheduler tick")
+	}
+}
+
 func TestMisfireRecoveryUseCaseThroughCLI(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()

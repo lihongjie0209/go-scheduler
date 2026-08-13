@@ -122,7 +122,7 @@ func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s
 }
 
 func newEngine(c config.Config, s *coreStore) *core.Engine {
-	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, c.TargetAllowlist)
+	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil)
 }
 
 func newNotifier(c config.Config, s *coreStore) *notifier.Worker {

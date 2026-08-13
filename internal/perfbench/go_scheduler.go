@@ -35,7 +35,7 @@ func (l *GoSchedulerLoader) CreateScheduledJob(ctx context.Context, job Schedule
 		"timeout_seconds":          10,
 		"max_retries":              0,
 		"overlap_policy":           "parallel",
-		"misfire_policy":           "skip",
+		"misfire_policy":           "fire_once",
 		"max_concurrent_runs":      1,
 		"max_catch_up":             1,
 		"callback_timeout_seconds": 30,

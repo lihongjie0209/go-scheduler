@@ -19,7 +19,6 @@ export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/scheduler?sslmo
 export SERVICE_TOKEN='replace-with-a-long-random-token'
 export MASTER_KEY="$(openssl rand -base64 32)"
 export JWT_SECRET="$(openssl rand -base64 48)"
-export TARGET_HOST_ALLOWLIST='example.com,*.example.org'
 
 make migrate-up
 TENANT_NAME=demo ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='replace-with-strong-password' go run ./cmd/bootstrap
@@ -58,7 +57,6 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `API_DATABASE_MAX_CONNS` / `API_DATABASE_MIN_CONNS` | `8` / `1` | API PostgreSQL 连接池上限与保底连接数 |
 | `CORE_DATABASE_MAX_CONNS` / `CORE_DATABASE_MIN_CONNS` | `24` / `2` | 调度、执行状态和通知 PostgreSQL 连接池上限与保底连接数 |
 | `HISTORY_RETENTION` | `2160h` | 历史记录和运行分区保留期，必须不超过 90 天 |
-| `TARGET_HOST_ALLOWLIST` | 必填 | 允许任务访问的精确域名或 `*.example.com` 通配域名 |
 | `SMTP_ADDRESS` | 空 | 邮件告警 SMTP 地址，例如 `smtp.example.com:587` |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | 空 | SMTP 凭据和发件人 |
 

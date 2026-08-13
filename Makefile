@@ -1,4 +1,4 @@
-.PHONY: generate test race integration integration-module integration-cross integration-usecase lint security build migrate-up
+.PHONY: generate test race integration integration-module integration-cross integration-usecase integration-benchmark lint security build migrate-up
 
 generate:
 	protoc -I api/proto --go_out=. --go_opt=module=github.com/lihongjie0209/go-scheduler --go-grpc_out=. --go-grpc_opt=module=github.com/lihongjie0209/go-scheduler api/proto/scheduler/v1/scheduler.proto
@@ -22,6 +22,9 @@ integration-cross:
 
 integration-usecase:
 	go test -tags=integration -count=1 -timeout=10m -run 'Test.*UseCase' ./internal/integration
+
+integration-benchmark:
+	./hack/standalone-benchmark.sh
 
 lint:
 	golangci-lint run ./...

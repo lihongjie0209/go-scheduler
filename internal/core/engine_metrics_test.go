@@ -50,3 +50,20 @@ func TestAvailableWorkerSlots(t *testing.T) {
 		t.Fatalf("released worker pool has %d available slots, want 1", got)
 	}
 }
+
+func TestReleaseWorkerWakesDispatcher(t *testing.T) {
+	t.Parallel()
+	engine := &Engine{dispatchWake: make(chan struct{}, 1)}
+	workers := make(chan struct{}, 1)
+	workers <- struct{}{}
+
+	engine.releaseWorker(workers)
+	if len(workers) != 0 {
+		t.Fatal("worker slot was not released")
+	}
+	select {
+	case <-engine.dispatchWake:
+	default:
+		t.Fatal("dispatcher was not notified")
+	}
+}

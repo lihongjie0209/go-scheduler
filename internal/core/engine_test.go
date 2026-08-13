@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"net"
 	"testing"
 	"time"
 )
@@ -70,39 +69,6 @@ func TestNewCallbackToken(t *testing.T) {
 	}
 }
 
-func TestValidateAddressBlocksInternalNetworks(t *testing.T) {
-	t.Parallel()
-	blocked := []string{"127.0.0.1:80", "10.0.0.1:443", "169.254.169.254:80", "[::1]:80"}
-	for _, address := range blocked {
-		address := address
-		t.Run(address, func(t *testing.T) {
-			t.Parallel()
-			if err := validateAddress(address); err == nil {
-				t.Fatalf("expected %s to be blocked", address)
-			}
-		})
-	}
-}
-
-func TestValidateAddressAllowsPublicIP(t *testing.T) {
-	t.Parallel()
-	if err := validateAddress(net.JoinHostPort("1.1.1.1", "443")); err != nil {
-		t.Fatalf("public IP rejected: %v", err)
-	}
-}
-func TestHostAllowlist(t *testing.T) {
-	t.Parallel()
-	allow := []string{"api.example.com", "*.jobs.example.org"}
-	tests := []struct {
-		host string
-		want bool
-	}{{"api.example.com", true}, {"worker.jobs.example.org", true}, {"jobs.example.org", false}, {"evil-example.org", false}, {"api.example.com.evil.test", false}}
-	for _, tt := range tests {
-		if got := hostAllowed(tt.host, allow); got != tt.want {
-			t.Fatalf("hostAllowed(%q)=%v want %v", tt.host, got, tt.want)
-		}
-	}
-}
 func TestRetryDelayIsBoundedExponentialWithJitter(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

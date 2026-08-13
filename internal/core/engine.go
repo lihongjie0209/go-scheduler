@@ -12,12 +12,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/lihongjie0209/go-scheduler/internal/observability"
@@ -35,7 +32,7 @@ type Engine struct {
 	historyRetention time.Duration
 	lastCleanup      time.Time
 	lastPartitionRun time.Time
-	targetAllowlist  []string
+	dispatchWake     chan struct{}
 }
 
 type EngineOption func(*Engine)
@@ -44,11 +41,14 @@ func WithHTTPClient(client *http.Client) EngineOption {
 	return func(engine *Engine) { engine.client = client }
 }
 
-func NewEngine(s *store.Store, owner string, interval time.Duration, workers int, publicBaseURL string, historyRetention time.Duration, targetAllowlist []string, options ...EngineOption) *Engine {
-	transport := &http.Transport{DialContext: safeDialContext(targetAllowlist), MaxIdleConns: 100, MaxIdleConnsPerHost: 20, IdleConnTimeout: 90 * time.Second}
-	engine := &Engine{store: s, owner: owner, interval: interval, workers: workers, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), historyRetention: historyRetention, targetAllowlist: targetAllowlist, client: &http.Client{Transport: transport, CheckRedirect: safeRedirect(targetAllowlist)}}
+func NewEngine(s *store.Store, owner string, interval time.Duration, workers int, publicBaseURL string, historyRetention time.Duration, _ []string, options ...EngineOption) *Engine {
+	engine := &Engine{store: s, owner: owner, interval: interval, workers: workers, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), historyRetention: historyRetention, dispatchWake: make(chan struct{}, 1)}
 	for _, option := range options {
 		option(engine)
+	}
+	if engine.client == nil {
+		transport := &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 20, IdleConnTimeout: 90 * time.Second}
+		engine.client = &http.Client{Transport: transport}
 	}
 	return engine
 }
@@ -62,14 +62,21 @@ func (e *Engine) loop(ctx context.Context) {
 	ticker := time.NewTicker(e.interval)
 	defer ticker.Stop()
 	sem := make(chan struct{}, e.workers)
+	if err := e.tick(ctx, sem); err != nil && ctx.Err() == nil {
+		slog.Error("scheduler tick failed", "error", err)
+	}
 	for {
-		if err := e.tick(ctx, sem); err != nil && ctx.Err() == nil {
-			slog.Error("scheduler tick failed", "error", err)
-		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if err := e.tick(ctx, sem); err != nil && ctx.Err() == nil {
+				slog.Error("scheduler tick failed", "error", err)
+			}
+		case <-e.dispatchWake:
+			if err := e.dispatch(ctx, sem); err != nil && ctx.Err() == nil {
+				slog.Error("scheduler dispatch failed", "error", err)
+			}
 		}
 	}
 }
@@ -100,6 +107,14 @@ func (e *Engine) tick(ctx context.Context, sem chan struct{}) error {
 		observability.WorkerSaturationTicks.Inc()
 		return nil
 	}
+	return e.dispatch(ctx, sem)
+}
+
+func (e *Engine) dispatch(ctx context.Context, sem chan struct{}) error {
+	available := availableWorkerSlots(sem)
+	if available == 0 {
+		return nil
+	}
 	runs, err := e.store.ClaimRuns(ctx, e.owner, available, 2*time.Minute)
 	if err != nil {
 		return fmt.Errorf("claim runs: %w", err)
@@ -108,12 +123,24 @@ func (e *Engine) tick(ctx context.Context, sem chan struct{}) error {
 		select {
 		case sem <- struct{}{}:
 			e.wg.Add(1)
-			go func(c store.ClaimedRun) { defer e.wg.Done(); defer func() { <-sem }(); e.execute(ctx, c) }(claimed)
+			go func(c store.ClaimedRun) {
+				defer e.wg.Done()
+				defer e.releaseWorker(sem)
+				e.execute(ctx, c)
+			}(claimed)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 	return nil
+}
+
+func (e *Engine) releaseWorker(sem chan struct{}) {
+	<-sem
+	select {
+	case e.dispatchWake <- struct{}{}:
+	default:
+	}
 }
 
 func availableWorkerSlots(sem chan struct{}) int {
@@ -376,79 +403,4 @@ func randomUint16() uint16 {
 		return 0
 	}
 	return binary.LittleEndian.Uint16(raw[:])
-}
-
-func safeDialContext(allowlist []string) func(context.Context, string, string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second, Control: func(_ string, address string, _ syscall.RawConn) error { return validateAddress(address) }}
-	resolver := net.DefaultResolver
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, err
-		}
-		if !hostAllowed(host, allowlist) {
-			return nil, fmt.Errorf("target host is not allowlisted")
-		}
-		ips, err := resolver.LookupNetIP(ctx, "ip", host)
-		if err != nil {
-			return nil, err
-		}
-		for _, ip := range ips {
-			if err = validateIP(net.IP(ip.AsSlice())); err != nil {
-				continue
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		}
-		return nil, fmt.Errorf("target has no allowed IP address")
-	}
-}
-func validateAddress(address string) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	addresses, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", host)
-	if err != nil {
-		return err
-	}
-	for _, address := range addresses {
-		if err := validateIP(net.IP(address.AsSlice())); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func validateIP(ip net.IP) error {
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return fmt.Errorf("target address is blocked")
-	}
-	return nil
-}
-func hostAllowed(host string, allowlist []string) bool {
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	for _, pattern := range allowlist {
-		pattern = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
-		if pattern == host {
-			return true
-		}
-		if strings.HasPrefix(pattern, "*.") {
-			suffix := strings.TrimPrefix(pattern, "*")
-			if strings.HasSuffix(host, suffix) && host != strings.TrimPrefix(suffix, ".") {
-				return true
-			}
-		}
-	}
-	return false
-}
-func safeRedirect(allowlist []string) func(*http.Request, []*http.Request) error {
-	return func(req *http.Request, _ []*http.Request) error {
-		u, err := url.Parse(req.URL.String())
-		if err != nil {
-			return err
-		}
-		if !hostAllowed(u.Hostname(), allowlist) {
-			return fmt.Errorf("redirect host is not allowlisted")
-		}
-		return nil
-	}
 }

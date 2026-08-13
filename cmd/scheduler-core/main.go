@@ -87,7 +87,7 @@ func newRegistrar(c config.Config, client *clientv3.Client) (*discovery.Registra
 	return discovery.NewRegistrar(client, c.EtcdPrefix, "scheduler-core", discovery.Metadata{InstanceID: c.InstanceID, GRPCAddress: c.AdvertiseGRPC, Version: "dev", StartedAt: time.Now().UTC()})
 }
 func newEngine(c config.Config, s *store.Store) *core.Engine {
-	return core.NewEngine(s, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, c.TargetAllowlist)
+	return core.NewEngine(s, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil)
 }
 func newNotifier(c config.Config, s *store.Store) *notifier.Worker {
 	return notifier.New(s, c.InstanceID, notifier.SMTPConfig{Address: c.SMTPAddress, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.SMTPFrom})

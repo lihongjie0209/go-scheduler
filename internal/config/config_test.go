@@ -42,37 +42,11 @@ func TestAppendContextPath(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresTargetAllowlist(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://test")
-	t.Setenv("SERVICE_TOKEN", "service-token")
-	t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
-	t.Setenv("TARGET_HOST_ALLOWLIST", "")
-	if _, err := Load("test"); err == nil {
-		t.Fatal("expected missing allowlist error")
-	}
-}
-func TestLoadParsesTargetAllowlist(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://test")
-	t.Setenv("SERVICE_TOKEN", "service-token")
-	t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
-	t.Setenv("TARGET_HOST_ALLOWLIST", " API.EXAMPLE.COM, *.jobs.example.org ")
-	config, err := Load("test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(config.TargetAllowlist) != 2 || config.TargetAllowlist[0] != "api.example.com" {
-		t.Fatalf("unexpected allowlist: %#v", config.TargetAllowlist)
-	}
-}
-
 func TestStandaloneLoadDoesNotRequireEtcdConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("SERVICE_TOKEN", "service-token")
 	t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
-	t.Setenv("TARGET_HOST_ALLOWLIST", "example.com")
 	t.Setenv("ETCD_CERT", "/unused/client.crt")
 	t.Setenv("ETCD_KEY", "")
 	if _, err := Load("scheduler-server"); err != nil {
@@ -97,7 +71,6 @@ func TestLoadRejectsNonPositiveSchedulerConcurrency(t *testing.T) {
 			t.Setenv("SERVICE_TOKEN", "service-token")
 			t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
 			t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
-			t.Setenv("TARGET_HOST_ALLOWLIST", "example.com")
 			t.Setenv(test.variable, test.value)
 			if _, err := Load("scheduler-server"); err == nil {
 				t.Fatalf("Load() accepted %s=%s", test.variable, test.value)
@@ -111,7 +84,6 @@ func TestLoadDatabasePoolConfiguration(t *testing.T) {
 	t.Setenv("SERVICE_TOKEN", "service-token")
 	t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
-	t.Setenv("TARGET_HOST_ALLOWLIST", "example.com")
 	t.Setenv("API_DATABASE_MAX_CONNS", "6")
 	t.Setenv("API_DATABASE_MIN_CONNS", "2")
 	t.Setenv("CORE_DATABASE_MAX_CONNS", "18")
@@ -142,7 +114,6 @@ func TestLoadRejectsInvalidDatabasePoolConfiguration(t *testing.T) {
 			t.Setenv("SERVICE_TOKEN", "service-token")
 			t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
 			t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
-			t.Setenv("TARGET_HOST_ALLOWLIST", "example.com")
 			t.Setenv(test.variable, test.value)
 			if _, err := Load("scheduler-server"); err == nil {
 				t.Fatalf("Load() accepted %s=%s", test.variable, test.value)

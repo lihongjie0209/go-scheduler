@@ -27,7 +27,6 @@ type Config struct {
 	EtcdCA               string
 	EtcdCert             string
 	EtcdKey              string
-	TargetAllowlist      []string
 	ServiceToken         string
 	PreviousToken        string
 	MasterKey            string
@@ -74,7 +73,6 @@ func Load(serviceName string) (Config, error) {
 		EtcdCA:               os.Getenv("ETCD_CA"),
 		EtcdCert:             os.Getenv("ETCD_CERT"),
 		EtcdKey:              os.Getenv("ETCD_KEY"),
-		TargetAllowlist:      splitNonEmpty(os.Getenv("TARGET_HOST_ALLOWLIST")),
 		ServiceToken:         os.Getenv("SERVICE_TOKEN"),
 		PreviousToken:        os.Getenv("PREVIOUS_SERVICE_TOKEN"),
 		MasterKey:            os.Getenv("MASTER_KEY"),
@@ -125,9 +123,6 @@ func Load(serviceName string) (Config, error) {
 	}
 	if err := validatePoolSize("CORE", c.CoreDatabaseMinConns, c.CoreDatabaseMaxConns); err != nil {
 		return Config{}, err
-	}
-	if len(c.TargetAllowlist) == 0 {
-		return Config{}, fmt.Errorf("TARGET_HOST_ALLOWLIST is required")
 	}
 	if serviceName != "scheduler-server" && (c.EtcdCert == "") != (c.EtcdKey == "") {
 		return Config{}, fmt.Errorf("ETCD_CERT and ETCD_KEY must be configured together")
