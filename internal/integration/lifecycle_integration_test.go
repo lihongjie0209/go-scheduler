@@ -1543,7 +1543,7 @@ func TestPowerShellScriptExecutorImageUseCaseThroughCLI(t *testing.T) {
 	t.Cleanup(func() { grpcServer.Stop() })
 	containerGRPCAddress := net.JoinHostPort(testcontainers.HostInternal, fmt.Sprint(grpcListener.Addr().(*net.TCPAddr).Port))
 
-	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{TenantID: fixture.tenantID, Name: "powershell-image-e2e", RouteStrategy: "round"})
+	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{TenantID: fixture.tenantID, Name: "powershell-image-e2e", RouteStrategy: "first"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1571,7 +1571,10 @@ func TestPowerShellScriptExecutorImageUseCaseThroughCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	executorURL := "grpc://" + net.JoinHostPort(host, mappedPort.Port())
-	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "powershell-image", executorURL, 30*time.Second); err != nil {
+	// The container advertises its compose-style address for real deployments. Add
+	// the host-mapped address under a lexically earlier node ID so this host-side
+	// integration test deterministically selects the reachable endpoint.
+	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "000-powershell-image-host", executorURL, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
 
