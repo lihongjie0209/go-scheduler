@@ -100,7 +100,7 @@ func quartzDayOfWeek(value string) (int, error) {
 	}
 	day, err := strconv.Atoi(value)
 	if err != nil || day < 1 || day > 7 {
-		return 0, fmt.Errorf("Quartz day-of-week must be between 1 and 7 or SUN-SAT")
+		return 0, fmt.Errorf("quartz day-of-week must be between 1 and 7 or SUN-SAT")
 	}
 	return day, nil
 }
@@ -124,7 +124,7 @@ func normalizeQuartzDayOfWeek(field string) (string, error) {
 			var err error
 			step, err = strconv.Atoi(parts[1])
 			if err != nil || step < 1 || step > 7 {
-				return "", fmt.Errorf("Quartz day-of-week step must be between 1 and 7")
+				return "", fmt.Errorf("quartz day-of-week step must be between 1 and 7")
 			}
 		}
 		start, end := 0, 0

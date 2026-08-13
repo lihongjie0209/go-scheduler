@@ -51,7 +51,7 @@ func ScriptHandler(options ScriptOptions) Handler {
 		if closeErr != nil {
 			return closeErr
 		}
-		command := exec.Command(path, scriptName) // #nosec G204 -- executable is selected from a fixed language map; source is passed as a file, never shell-concatenated.
+		command := exec.CommandContext(ctx, path, scriptName) // #nosec G204 -- executable is selected from a fixed language map; source is passed as a file, never shell-concatenated.
 		command.Env = append(os.Environ(), "SCHEDULER_INPUT="+task.Input, "SCHEDULER_RUN_ID="+task.RunID, "SCHEDULER_JOB_ID="+task.JobID, fmt.Sprintf("SCHEDULER_SHARD_INDEX=%d", task.BroadcastIndex), fmt.Sprintf("SCHEDULER_SHARD_TOTAL=%d", task.BroadcastTotal))
 		command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		stdout, stderr := &limitedBuffer{limit: maxScriptOutputBytes}, &limitedBuffer{limit: maxScriptOutputBytes}

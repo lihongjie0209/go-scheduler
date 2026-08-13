@@ -33,13 +33,24 @@ func TestServerRunsHandlerAndReportsBusyState(t *testing.T) {
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 	body, _ := json.Marshal(runRequest{RunID: "run-1", JobID: "job-1", Handler: "demo", Input: "payload", CallbackURL: "http://scheduler.test/api/v1/callbacks/run-1", LogURL: "http://scheduler.test/api/v1/runs/run-1/logs", CallbackToken: "token", TimeoutSeconds: 5, BroadcastIndex: 1, BroadcastTotal: 3})
-	done := make(chan *http.Response, 1)
+	done := make(chan int, 1)
 	go func() {
-		response, _ := http.Post(httpServer.URL+"/run", "application/json", bytes.NewReader(body))
-		done <- response
+		request, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/run", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response, requestErr := http.DefaultClient.Do(request)
+		if requestErr != nil {
+			done <- 0
+			return
+		}
+		defer func() { _ = response.Body.Close() }()
+		done <- response.StatusCode
 	}()
 	<-started
-	response, err := http.Get(httpServer.URL + "/idle?job_id=job-1")
+	idleRequest, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpServer.URL+"/idle?job_id=job-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(idleRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,12 +60,15 @@ func TestServerRunsHandlerAndReportsBusyState(t *testing.T) {
 	}
 	_ = response.Body.Close()
 	close(release)
-	response = <-done
-	if response.StatusCode != http.StatusNoContent {
-		t.Fatalf("run status=%d", response.StatusCode)
+	statusCode := <-done
+	if statusCode != http.StatusNoContent {
+		t.Fatalf("run status=%d", statusCode)
 	}
-	_ = response.Body.Close()
-	response, err = http.Get(httpServer.URL + "/idle?job_id=job-1")
+	idleRequest, err = http.NewRequestWithContext(t.Context(), http.MethodGet, httpServer.URL+"/idle?job_id=job-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = http.DefaultClient.Do(idleRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +108,12 @@ func TestAsyncHandlerUploadsLogsAndCompletesCallback(t *testing.T) {
 	defer httpServer.Close()
 	request := runRequest{RunID: "run-2", JobID: "job-2", Handler: "async", CallbackURL: scheduler.URL + "/api/v1/callbacks/run-2", LogURL: scheduler.URL + "/api/v1/runs/run-2/logs", CallbackToken: "secret", TimeoutSeconds: 5}
 	raw, _ := json.Marshal(request)
-	response, err := http.Post(httpServer.URL+"/run", "application/json", bytes.NewReader(raw))
+	httpRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/run", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(httpRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
