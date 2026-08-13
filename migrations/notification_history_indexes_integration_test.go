@@ -53,4 +53,11 @@ func TestNotificationHistoryIndexesMigration(t *testing.T) {
 	if lifecycleColumns != 3 {
 		t.Fatalf("notification channel lifecycle columns = %d, want 3", lifecycleColumns)
 	}
+	var leaseTokenType string
+	if err = conn.QueryRow(t.Context(), `SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='job_runs' AND column_name='lease_token'`).Scan(&leaseTokenType); err != nil {
+		t.Fatal(err)
+	}
+	if leaseTokenType != "uuid" {
+		t.Fatalf("job run lease token type = %q, want uuid", leaseTokenType)
+	}
 }

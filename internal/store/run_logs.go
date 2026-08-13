@@ -19,8 +19,11 @@ type RunLogEntry struct {
 	CreatedAt                time.Time
 }
 
-func (s *Store) ActivateRunToken(ctx context.Context, runID string, tokenHash []byte, deadline time.Time) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE job_runs SET callback_token_hash=$2,callback_deadline=$3 WHERE id=$1 AND status='running'`, runID, tokenHash, deadline)
+func (s *Store) ActivateClaimedRunToken(ctx context.Context, run Run, tokenHash []byte, deadline time.Time) error {
+	if err := requireRunLease(run); err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE job_runs SET callback_token_hash=$2,callback_deadline=$3 WHERE id=$1 AND status='running' AND lease_token=$4`, run.ID, tokenHash, deadline, run.LeaseToken)
 	if err != nil {
 		return fmt.Errorf("activate run token: %w", err)
 	}

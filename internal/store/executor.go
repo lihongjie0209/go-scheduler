@@ -352,8 +352,11 @@ func (s *Store) ExecutorRouteCandidates(ctx context.Context, tenantID, groupID, 
 	return strategy, nodes, nil
 }
 
-func (s *Store) AssignRunExecutor(ctx context.Context, runID, nodeID, address string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE job_runs SET executor_node_id=$2,executor_address=$3 WHERE id=$1 AND status='running'`, runID, nodeID, address)
+func (s *Store) AssignClaimedRunExecutor(ctx context.Context, run Run, nodeID, address string) error {
+	if err := requireRunLease(run); err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE job_runs SET executor_node_id=$2,executor_address=$3 WHERE id=$1 AND status='running' AND lease_token=$4`, run.ID, nodeID, address, run.LeaseToken)
 	if err != nil {
 		return err
 	}
@@ -363,20 +366,23 @@ func (s *Store) AssignRunExecutor(ctx context.Context, runID, nodeID, address st
 	return nil
 }
 
-func (s *Store) PrepareExecutorDispatch(ctx context.Context, runID, nodeID, address string, tokenHash []byte, deadline time.Time) error {
+func (s *Store) PrepareClaimedExecutorDispatch(ctx context.Context, run Run, nodeID, address string, tokenHash []byte, deadline time.Time) error {
+	if err := requireRunLease(run); err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	tag, err := tx.Exec(ctx, `UPDATE job_runs SET executor_node_id=$2,executor_address=$3,status='waiting_callback',response_status=202,callback_token_hash=$4,callback_deadline=$5,lease_owner=NULL,lease_until=NULL WHERE id=$1 AND status='running'`, runID, nodeID, address, tokenHash, deadline)
+	tag, err := tx.Exec(ctx, `UPDATE job_runs SET executor_node_id=$2,executor_address=$3,status='waiting_callback',response_status=202,callback_token_hash=$4,callback_deadline=$5,lease_owner=NULL,lease_token=NULL,lease_until=NULL WHERE id=$1 AND status='running' AND lease_token=$6`, run.ID, nodeID, address, tokenHash, deadline, run.LeaseToken)
 	if err != nil {
 		return fmt.Errorf("prepare executor dispatch: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrConflict
 	}
-	if err = emitRunLifecycleEventTx(ctx, tx, runID, "waiting_callback"); err != nil {
+	if err = emitRunLifecycleEventTx(ctx, tx, run.ID, "waiting_callback"); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

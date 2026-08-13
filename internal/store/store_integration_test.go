@@ -210,6 +210,43 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	fencedRun, err := one.TriggerJob(ctx, tenantID, claimJob.ID, "lease-fencing", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstLease, err := one.ClaimRuns(ctx, "stale-owner", 1, time.Minute)
+	if err != nil || len(firstLease) != 1 || firstLease[0].Run.ID != fencedRun.ID || firstLease[0].Run.LeaseToken == "" {
+		t.Fatalf("first fenced claim = %+v, %v", firstLease, err)
+	}
+	if _, err = one.pool.Exec(ctx, `UPDATE job_runs SET lease_until=now()-interval '1 second' WHERE id=$1`, fencedRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := two.ClaimRuns(ctx, "current-owner", 1, time.Minute)
+	if err != nil || len(secondLease) != 1 || secondLease[0].Run.ID != fencedRun.ID || secondLease[0].Run.LeaseToken == firstLease[0].Run.LeaseToken {
+		t.Fatalf("second fenced claim = %+v, %v", secondLease, err)
+	}
+	fencingToken := sha256.Sum256([]byte("stale-lease-token"))
+	if err = one.ActivateClaimedRunToken(ctx, firstLease[0].Run, fencingToken[:], time.Now().Add(time.Minute)); err != ErrConflict {
+		t.Fatalf("stale lease token activation error = %v, want %v", err, ErrConflict)
+	}
+	if err = one.AssignClaimedRunExecutor(ctx, firstLease[0].Run, "stale-node", "http://stale.invalid"); err != ErrConflict {
+		t.Fatalf("stale lease assignment error = %v, want %v", err, ErrConflict)
+	}
+	if err = one.MarkClaimedWaitingCallback(ctx, firstLease[0].Run, http.StatusAccepted, fencingToken[:], time.Now().Add(time.Minute)); err != ErrConflict {
+		t.Fatalf("stale lease callback transition error = %v, want %v", err, ErrConflict)
+	}
+	if err = one.PrepareClaimedExecutorDispatch(ctx, firstLease[0].Run, "stale-node", "127.0.0.1:1", fencingToken[:], time.Now().Add(time.Minute)); err != ErrConflict {
+		t.Fatalf("stale lease dispatch preparation error = %v, want %v", err, ErrConflict)
+	}
+	if _, err = one.FailRun(ctx, firstLease[0].Run, "failed", http.StatusInternalServerError, "stale", nil); err != ErrConflict {
+		t.Fatalf("stale lease failure error = %v, want %v", err, ErrConflict)
+	}
+	if err = one.CompleteRun(ctx, firstLease[0].Run, true, http.StatusOK, "stale", ""); err != ErrConflict {
+		t.Fatalf("stale lease completion error = %v, want %v", err, ErrConflict)
+	}
+	if err = two.CompleteRun(ctx, secondLease[0].Run, true, http.StatusOK, "current", ""); err != nil {
+		t.Fatalf("current lease completion: %v", err)
+	}
 	quartzJob, err := one.CreateJob(ctx, Job{TenantID: tenantID, Name: "quartz-last-day", ScheduleType: "cron", ScheduleExpression: "0 0 9 L * ?", Timezone: "UTC", TargetURL: "https://example.com/quartz", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, Enabled: true})
 	if err != nil || quartzJob.NextRunAt == nil {
 		t.Fatalf("quartz job = %+v, %v", quartzJob, err)
@@ -482,7 +519,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatalf("missing first shard in claims: %+v", broadcastClaims)
 	}
 	logToken := []byte("test-run-token-hash")
-	if err = one.ActivateRunToken(ctx, firstShard.ID, logToken, time.Now().Add(time.Minute)); err != nil {
+	if err = one.ActivateClaimedRunToken(ctx, *firstShard, logToken, time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = two.AppendRunLogs(ctx, firstShard.ID, []byte("wrong-token"), []RunLogInput{{EntryID: "line-1", Stream: "stdout", Content: "started"}}); err != ErrNotFound {
@@ -907,7 +944,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal("callback parent not claimed")
 	}
 	callbackTokenHash := sha256.Sum256([]byte("dependency-callback-token"))
-	if err = one.MarkWaitingCallback(ctx, callbackClaim.Run.ID, http.StatusAccepted, callbackTokenHash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = one.MarkClaimedWaitingCallback(ctx, callbackClaim.Run, http.StatusAccepted, callbackTokenHash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if err = two.CompleteCallback(ctx, callbackClaim.Run.ID, callbackTokenHash[:], true, "done"); err != nil {
@@ -1004,8 +1041,12 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if !hasClaimForJob(claims, cancelJob.ID) {
 		t.Fatal("callback run was not claimed")
 	}
+	waitingClaim, ok := claimForRun(claims, waitingRun.ID)
+	if !ok {
+		t.Fatal("callback run claim was not found")
+	}
 	callbackHash := sha256.Sum256([]byte("cancelled-callback-token"))
-	if err = one.MarkWaitingCallback(ctx, waitingRun.ID, http.StatusAccepted, callbackHash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = one.MarkClaimedWaitingCallback(ctx, waitingClaim.Run, http.StatusAccepted, callbackHash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = two.CancelRun(ctx, tenantID, waitingRun.ID, "cancel callback wait"); err != nil {
@@ -1279,14 +1320,14 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	target := claimed[0]
 	token := "one-time-token"
 	hash := sha256.Sum256([]byte(token))
-	if err = one.PrepareExecutorDispatch(ctx, target.Run.ID, "executor-fast-path", "127.0.0.1:19090", hash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = one.PrepareClaimedExecutorDispatch(ctx, target.Run, "executor-fast-path", "127.0.0.1:19090", hash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	prepared, err := two.GetRun(ctx, tenantID, target.Run.ID)
 	if err != nil || prepared.Status != "waiting_callback" || prepared.ExecutorNodeID != "executor-fast-path" || prepared.ExecutorAddress != "127.0.0.1:19090" || prepared.ResponseStatus != 202 {
 		t.Fatalf("prepared executor dispatch = %+v, %v", prepared, err)
 	}
-	if err = one.PrepareExecutorDispatch(ctx, target.Run.ID, "executor-fast-path", "127.0.0.1:19090", hash[:], time.Now().Add(time.Minute)); err != ErrConflict {
+	if err = one.PrepareClaimedExecutorDispatch(ctx, target.Run, "executor-fast-path", "127.0.0.1:19090", hash[:], time.Now().Add(time.Minute)); err != ErrConflict {
 		t.Fatalf("repeated executor dispatch preparation = %v, want ErrConflict", err)
 	}
 	if err = two.CompleteCallback(ctx, target.Run.ID, hash[:], true, "done"); err != nil {
@@ -1312,7 +1353,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal("callback retry attempt was not claimed")
 	}
 	failureHash := sha256.Sum256([]byte("callback-failure-token"))
-	if err = one.MarkWaitingCallback(ctx, failureCallbackClaim.Run.ID, http.StatusAccepted, failureHash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = one.MarkClaimedWaitingCallback(ctx, failureCallbackClaim.Run, http.StatusAccepted, failureHash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if err = two.CompleteCallback(ctx, failureCallbackClaim.Run.ID, failureHash[:], false, "async failure"); err != nil {
@@ -1353,7 +1394,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal("final callback attempt was not claimed")
 	}
 	finalFailureHash := sha256.Sum256([]byte("callback-final-failure-token"))
-	if err = two.MarkWaitingCallback(ctx, finalCallbackClaim.Run.ID, http.StatusAccepted, finalFailureHash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = two.MarkClaimedWaitingCallback(ctx, finalCallbackClaim.Run, http.StatusAccepted, finalFailureHash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if err = one.CompleteCallback(ctx, finalCallbackClaim.Run.ID, finalFailureHash[:], false, "final async failure"); err != nil {
@@ -1389,7 +1430,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal("callback timeout attempt was not claimed")
 	}
 	timeoutHash := sha256.Sum256([]byte("callback-timeout-token"))
-	if err = one.MarkWaitingCallback(ctx, timeoutClaim.Run.ID, http.StatusAccepted, timeoutHash[:], time.Now().Add(-time.Second)); err != nil {
+	if err = one.MarkClaimedWaitingCallback(ctx, timeoutClaim.Run, http.StatusAccepted, timeoutHash[:], time.Now().Add(-time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if err = two.ExpireCallbacks(ctx); err != nil {

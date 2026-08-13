@@ -41,6 +41,7 @@ type Job struct {
 type Run struct {
 	ID, TenantID, JobID, TriggerType, Status, RuntimeInput, ParentRunID, RetryOfRunID string
 	ExecutorNodeID, ExecutorAddress                                                   string
+	LeaseToken                                                                        string
 	BroadcastGroupID                                                                  string
 	ShardIndex, ShardTotal                                                            int32
 	RescheduleOnTerminal                                                              bool
@@ -50,6 +51,13 @@ type Run struct {
 	StartedAt, FinishedAt                                                             *time.Time
 	ResponseStatus                                                                    int32
 	ErrorMessage                                                                      string
+}
+
+func requireRunLease(run Run) error {
+	if run.ID == "" || run.LeaseToken == "" {
+		return ErrConflict
+	}
+	return nil
 }
 
 func (s *Store) SetJobDependencies(ctx context.Context, tenantID, parentJobID string, childJobIDs []string) error {
@@ -599,7 +607,7 @@ func applyBlockPolicy(ctx context.Context, tx pgx.Tx, jobID, policy string) (blo
 
 func applyBlockAction(ctx context.Context, tx pgx.Tx, jobID string, action blockAction) (blockAction, error) {
 	if action == blockCancelAndEnqueue {
-		rows, err := tx.Query(ctx, `UPDATE job_runs SET status='cancelled',finished_at=now(),error_message='block strategy: covered by newer trigger',lease_owner=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE job_id=$1 AND status IN ('pending','running','waiting_callback') RETURNING id,tenant_id,job_id,COALESCE(broadcast_group_id::text,''),reschedule_on_terminal,finished_at`, jobID)
+		rows, err := tx.Query(ctx, `UPDATE job_runs SET status='cancelled',finished_at=now(),error_message='block strategy: covered by newer trigger',lease_owner=NULL,lease_token=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE job_id=$1 AND status IN ('pending','running','waiting_callback') RETURNING id,tenant_id,job_id,COALESCE(broadcast_group_id::text,''),reschedule_on_terminal,finished_at`, jobID)
 		if err != nil {
 			return "", fmt.Errorf("cancel covered job runs: %w", err)
 		}
@@ -837,11 +845,11 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 	 WHERE c.job_rank<=GREATEST(c.max_concurrent_runs-c.job_active,0)
 	 AND c.tenant_rank<=GREATEST(c.tenant_max-c.tenant_active,0)
 	 ORDER BY r.available_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT $1
-	), claimed AS (UPDATE job_runs r SET status='running',lease_owner=$2,lease_until=now()+GREATEST($3,eligible.timeout_seconds+30)*interval '1 second',started_at=COALESCE(started_at,now()) FROM eligible WHERE r.id=eligible.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())) RETURNING r.id,r.tenant_id,r.job_id,r.trigger_type,r.status,r.attempt,r.scheduled_at,r.runtime_input,r.parent_run_id,r.retry_of_run_id,r.executor_node_id,r.executor_address,r.broadcast_group_id,r.shard_index,r.shard_total,r.reschedule_on_terminal,r.override_addresses,eligible.emit_running
+	), claimed AS (UPDATE job_runs r SET status='running',lease_owner=$2,lease_token=gen_random_uuid(),lease_until=now()+GREATEST($3,eligible.timeout_seconds+30)*interval '1 second',started_at=COALESCE(started_at,now()) FROM eligible WHERE r.id=eligible.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())) RETURNING r.id,r.tenant_id,r.job_id,r.trigger_type,r.status,r.attempt,r.scheduled_at,r.runtime_input,r.parent_run_id,r.retry_of_run_id,r.executor_node_id,r.executor_address,r.broadcast_group_id,r.shard_index,r.shard_total,r.reschedule_on_terminal,r.override_addresses,r.lease_token,eligible.emit_running
 	), emitted AS (INSERT INTO outbox_events(id,tenant_id,topic,payload)
 	 SELECT gen_random_uuid(),c.tenant_id,'job.run.running',jsonb_build_object('run_id',c.id::text,'job_id',c.job_id::text,'tenant_id',c.tenant_id::text,'status','running','attempt',c.attempt,'trigger_type',c.trigger_type,'scheduled_at',c.scheduled_at,'occurred_at',now())
 	 FROM claimed c WHERE c.emit_running)
-	 SELECT c.id,c.tenant_id,c.job_id,c.trigger_type,c.status,c.attempt,c.scheduled_at,c.runtime_input,COALESCE(c.parent_run_id::text,''),COALESCE(c.retry_of_run_id::text,''),COALESCE(c.executor_node_id,''),COALESCE(c.executor_address,''),COALESCE(c.broadcast_group_id::text,''),COALESCE(c.shard_index,0),COALESCE(c.shard_total,0),c.reschedule_on_terminal,c.override_addresses,`+jobColumnsWithAlias("j")+` FROM claimed c JOIN jobs j ON j.id=c.job_id`, limit, owner, lease.Seconds())
+	 SELECT c.id,c.tenant_id,c.job_id,c.trigger_type,c.status,c.attempt,c.scheduled_at,c.runtime_input,COALESCE(c.parent_run_id::text,''),COALESCE(c.retry_of_run_id::text,''),COALESCE(c.executor_node_id,''),COALESCE(c.executor_address,''),COALESCE(c.broadcast_group_id::text,''),COALESCE(c.shard_index,0),COALESCE(c.shard_total,0),c.reschedule_on_terminal,c.override_addresses,c.lease_token,`+jobColumnsWithAlias("j")+` FROM claimed c JOIN jobs j ON j.id=c.job_id`, limit, owner, lease.Seconds())
 	if err != nil {
 		return nil, err
 	}
@@ -851,7 +859,7 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 		var x ClaimedRun
 		var headers, encrypted []byte
 		var keyVersion *int
-		err = rows.Scan(&x.Run.ID, &x.Run.TenantID, &x.Run.JobID, &x.Run.TriggerType, &x.Run.Status, &x.Run.Attempt, &x.Run.ScheduledAt, &x.Run.RuntimeInput, &x.Run.ParentRunID, &x.Run.RetryOfRunID, &x.Run.ExecutorNodeID, &x.Run.ExecutorAddress, &x.Run.BroadcastGroupID, &x.Run.ShardIndex, &x.Run.ShardTotal, &x.Run.RescheduleOnTerminal, &x.Run.OverrideAddresses, &x.Job.ID, &x.Job.TenantID, &x.Job.Name, &x.Job.Description, &x.Job.ScheduleType, &x.Job.ScheduleExpression, &x.Job.Timezone, &x.Job.TargetURL, &x.Job.HTTPMethod, &headers, &encrypted, &keyVersion, &x.Job.BodyTemplate, &x.Job.TimeoutSeconds, &x.Job.MaxRetries, &x.Job.OverlapPolicy, &x.Job.MisfirePolicy, &x.Job.Enabled, &x.Job.NextRunAt, &x.Job.Version, &x.Job.MaxConcurrentRuns, &x.Job.MaxCatchUp, &x.Job.CallbackTimeoutSeconds, &x.Job.MaxQueueSize, &x.Job.ExecutorGroupID, &x.Job.ExecutorHandler, &x.Job.ScriptLanguage, &x.Job.ScriptSource, &x.Job.KubernetesClusterID)
+		err = rows.Scan(&x.Run.ID, &x.Run.TenantID, &x.Run.JobID, &x.Run.TriggerType, &x.Run.Status, &x.Run.Attempt, &x.Run.ScheduledAt, &x.Run.RuntimeInput, &x.Run.ParentRunID, &x.Run.RetryOfRunID, &x.Run.ExecutorNodeID, &x.Run.ExecutorAddress, &x.Run.BroadcastGroupID, &x.Run.ShardIndex, &x.Run.ShardTotal, &x.Run.RescheduleOnTerminal, &x.Run.OverrideAddresses, &x.Run.LeaseToken, &x.Job.ID, &x.Job.TenantID, &x.Job.Name, &x.Job.Description, &x.Job.ScheduleType, &x.Job.ScheduleExpression, &x.Job.Timezone, &x.Job.TargetURL, &x.Job.HTTPMethod, &headers, &encrypted, &keyVersion, &x.Job.BodyTemplate, &x.Job.TimeoutSeconds, &x.Job.MaxRetries, &x.Job.OverlapPolicy, &x.Job.MisfirePolicy, &x.Job.Enabled, &x.Job.NextRunAt, &x.Job.Version, &x.Job.MaxConcurrentRuns, &x.Job.MaxCatchUp, &x.Job.CallbackTimeoutSeconds, &x.Job.MaxQueueSize, &x.Job.ExecutorGroupID, &x.Job.ExecutorHandler, &x.Job.ScriptLanguage, &x.Job.ScriptSource, &x.Job.KubernetesClusterID)
 		if err != nil {
 			return nil, err
 		}
@@ -876,6 +884,9 @@ func jobColumnsWithAlias(a string) string {
 }
 
 func (s *Store) CompleteRun(ctx context.Context, r Run, success bool, status int, body, errorMessage string) error {
+	if err := requireRunLease(r); err != nil {
+		return err
+	}
 	state := "succeeded"
 	if !success {
 		state = "failed"
@@ -886,7 +897,7 @@ func (s *Store) CompleteRun(ctx context.Context, r Run, success bool, status int
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var finishedAt time.Time
-	err = tx.QueryRow(ctx, `UPDATE job_runs SET status=$2,response_status=$3,response_body=$4,error_message=$5,finished_at=now(),lease_owner=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE id=$1 AND status='running' RETURNING finished_at`, r.ID, state, status, body, errorMessage).Scan(&finishedAt)
+	err = tx.QueryRow(ctx, `UPDATE job_runs SET status=$2,response_status=$3,response_body=$4,error_message=$5,finished_at=now(),lease_owner=NULL,lease_token=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE id=$1 AND status='running' AND lease_token=$6 RETURNING finished_at`, r.ID, state, status, body, errorMessage, r.LeaseToken).Scan(&finishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrConflict
 	}
@@ -1036,20 +1047,23 @@ func enqueueDependentRuns(ctx context.Context, tx pgx.Tx, parent Run) error {
 	return nil
 }
 
-func (s *Store) MarkWaitingCallback(ctx context.Context, runID string, status int, tokenHash []byte, deadline time.Time) error {
+func (s *Store) MarkClaimedWaitingCallback(ctx context.Context, run Run, status int, tokenHash []byte, deadline time.Time) error {
+	if err := requireRunLease(run); err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	tag, err := tx.Exec(ctx, `UPDATE job_runs SET status='waiting_callback',response_status=$2,callback_token_hash=$3,callback_deadline=$4,lease_owner=NULL,lease_until=NULL WHERE id=$1 AND status='running'`, runID, status, tokenHash, deadline)
+	tag, err := tx.Exec(ctx, `UPDATE job_runs SET status='waiting_callback',response_status=$2,callback_token_hash=$3,callback_deadline=$4,lease_owner=NULL,lease_token=NULL,lease_until=NULL WHERE id=$1 AND status='running' AND lease_token=$5`, run.ID, status, tokenHash, deadline, run.LeaseToken)
 	if err != nil {
 		return fmt.Errorf("mark waiting callback: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrConflict
 	}
-	if err = emitRunLifecycleEventTx(ctx, tx, runID, "waiting_callback"); err != nil {
+	if err = emitRunLifecycleEventTx(ctx, tx, run.ID, "waiting_callback"); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -1303,13 +1317,16 @@ func (s *Store) FailRun(ctx context.Context, r Run, state string, status int, er
 	if state != "failed" && state != "timed_out" {
 		return nil, fmt.Errorf("invalid failure state %q", state)
 	}
+	if err := requireRunLease(r); err != nil {
+		return nil, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var finishedAt time.Time
-	err = tx.QueryRow(ctx, `UPDATE job_runs SET status=$2,response_status=$3,error_message=$4,finished_at=now(),lease_owner=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE id=$1 AND status='running' RETURNING finished_at`, r.ID, state, status, errorMessage).Scan(&finishedAt)
+	err = tx.QueryRow(ctx, `UPDATE job_runs SET status=$2,response_status=$3,error_message=$4,finished_at=now(),lease_owner=NULL,lease_token=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE id=$1 AND status='running' AND lease_token=$5 RETURNING finished_at`, r.ID, state, status, errorMessage, r.LeaseToken).Scan(&finishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrConflict
 	}
@@ -1360,7 +1377,7 @@ func (s *Store) CancelRun(ctx context.Context, tenantID, runID, reason string) (
 		return Run{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	run, err := scanRun(tx.QueryRow(ctx, `UPDATE job_runs SET status='cancelled',finished_at=COALESCE(finished_at,now()),error_message=$3,lease_owner=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE tenant_id=$1 AND id=$2 AND status IN ('pending','running','waiting_callback') RETURNING `+runSelectColumns, tenantID, runID, reason))
+	run, err := scanRun(tx.QueryRow(ctx, `UPDATE job_runs SET status='cancelled',finished_at=COALESCE(finished_at,now()),error_message=$3,lease_owner=NULL,lease_token=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE tenant_id=$1 AND id=$2 AND status IN ('pending','running','waiting_callback') RETURNING `+runSelectColumns, tenantID, runID, reason))
 	if err == nil {
 		if err = emitRunLifecycleEventTx(ctx, tx, run.ID, "cancelled"); err != nil {
 			return Run{}, err

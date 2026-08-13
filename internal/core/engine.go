@@ -205,7 +205,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 	logURL := e.publicBaseURL + "/api/v1/runs/" + c.Run.ID + "/logs"
 	callbackDeadline := time.Now().Add(time.Duration(c.Job.CallbackTimeoutSeconds) * time.Second)
 	if e.executorGRPC == nil {
-		if err = e.store.ActivateRunToken(ctx, c.Run.ID, tokenHash, callbackDeadline); err != nil {
+		if err = e.store.ActivateClaimedRunToken(ctx, c.Run, tokenHash, callbackDeadline); err != nil {
 			e.fail(parent, c, fmt.Errorf("activate run token: %w", err))
 			return
 		}
@@ -317,7 +317,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 				dispatchRequest.ExternalExecutionId = executionID
 				dispatchRequest.KubernetesCluster = &executorv1.KubernetesCluster{AuthMode: cluster.AuthMode, ApiServer: cluster.APIServer, Namespace: cluster.Namespace, Kubeconfig: cluster.Credentials.Kubeconfig, Token: cluster.Credentials.Token, CaData: cluster.Credentials.CAData, InsecureSkipTlsVerify: cluster.InsecureSkipTLSVerify}
 			}
-			if err := e.store.PrepareExecutorDispatch(ctx, c.Run.ID, node.NodeID, node.Address, tokenHash, callbackDeadline); err != nil {
+			if err := e.store.PrepareClaimedExecutorDispatch(ctx, c.Run, node.NodeID, node.Address, tokenHash, callbackDeadline); err != nil {
 				e.fail(parent, c, err)
 				return
 			}
@@ -328,7 +328,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			}
 			return
 		}
-		if routeErr = e.store.AssignRunExecutor(ctx, c.Run.ID, node.NodeID, node.Address); routeErr != nil {
+		if routeErr = e.store.AssignClaimedRunExecutor(ctx, c.Run, node.NodeID, node.Address); routeErr != nil {
 			e.fail(parent, c, fmt.Errorf("assign executor: %w", routeErr))
 			return
 		}
@@ -391,7 +391,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 	commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
 	defer cancelCommit()
 	if resp.StatusCode == http.StatusAccepted {
-		if err := e.store.MarkWaitingCallback(commitCtx, c.Run.ID, resp.StatusCode, tokenHash, callbackDeadline); err != nil {
+		if err := e.store.MarkClaimedWaitingCallback(commitCtx, c.Run, resp.StatusCode, tokenHash, callbackDeadline); err != nil {
 			slog.Error("mark waiting callback", "run_id", c.Run.ID, "error", err)
 		}
 		return

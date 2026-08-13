@@ -632,7 +632,7 @@ func TestCrossModuleRunLogsThroughGRPC(t *testing.T) {
 	}
 	token := "grpc-log-token"
 	hash := sha256.Sum256([]byte(token))
-	if err = fixture.store.ActivateRunToken(t.Context(), run.ID, hash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = fixture.store.ActivateClaimedRunToken(t.Context(), claims[0].Run, hash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	appended, err := fixture.client.AppendRunLogs(t.Context(), &schedulerv1.AppendRunLogsRequest{RunId: run.ID, Token: token, Entries: []*schedulerv1.RunLogInput{{EntryId: "grpc-1", Stream: "stdout", Content: "hello grpc"}}})
@@ -713,7 +713,7 @@ func TestCrossModuleAsyncCallbackRetryThroughGRPC(t *testing.T) {
 	}
 	token := "grpc-callback-token"
 	hash := sha256.Sum256([]byte(token))
-	if err = fixture.store.MarkWaitingCallback(t.Context(), claim.Run.ID, http.StatusAccepted, hash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = fixture.store.MarkClaimedWaitingCallback(t.Context(), claim.Run, http.StatusAccepted, hash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = fixture.client.CompleteCallback(t.Context(), &schedulerv1.CompleteCallbackRequest{RunId: claim.Run.ID, Token: token, Succeeded: false, Message: "async failed"}); err != nil {
