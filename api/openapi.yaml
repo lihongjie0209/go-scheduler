@@ -236,11 +236,30 @@ paths:
   /notification-channels:
     get: {summary: List notification channels, operationId: listNotificationChannels, parameters: [{$ref: '#/components/parameters/Tenant'}], responses: {'200': {description: Channels}, '401': {$ref: '#/components/responses/Unauthorized'}}}
     post:
-      summary: Create a webhook or email failure notification channel
+      summary: Create a webhook, email, or DingTalk lifecycle notification channel
       operationId: createNotificationChannel
       parameters: [{$ref: '#/components/parameters/Tenant'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateNotificationChannelRequest'}}}}
       responses: {'201': {description: Created}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /notification-channels/{id}:
+    put:
+      summary: Update a notification channel; omitted config preserves existing credentials
+      operationId: updateNotificationChannel
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateNotificationChannelRequest'}}}}
+      responses: {'200': {description: Updated}, '400': {$ref: '#/components/responses/BadRequest'}, '409': {description: Version conflict}}
+    delete:
+      summary: Delete a notification channel
+      operationId: deleteNotificationChannel
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}, {name: version, in: query, required: true, schema: {type: integer, format: int64, minimum: 1}}]
+      responses: {'200': {description: Deleted}, '409': {description: Version conflict}}
+  /notification-channels/{id}/enabled:
+    put:
+      summary: Enable or disable a notification channel
+      operationId: setNotificationChannelEnabled
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [enabled, version], properties: {enabled: {type: boolean}, version: {type: integer, format: int64, minimum: 1}}}}}}
+      responses: {'200': {description: Updated}, '409': {description: Version conflict}}
   /api-keys:
     get: {summary: List tenant API keys, operationId: listAPIKeys, parameters: [{$ref: '#/components/parameters/Tenant'}], responses: {'200': {description: API keys}, '403': {description: Tenant admin required}}}
     post:
@@ -322,13 +341,30 @@ components:
         - type: object
           required: [version]
           properties: {version: {type: integer, format: int64, minimum: 1}}
-    CreateNotificationChannelRequest:
+    NotificationChannelMutation:
       type: object
-      required: [kind, name, config]
       properties:
-        kind: {type: string, enum: [webhook, email]}
+        kind: {type: string, enum: [webhook, email, dingtalk]}
         name: {type: string, minLength: 1}
-        config: {type: object, description: "Webhook requires url and optional headers; email requires a non-empty to array"}
+        config: {type: object, writeOnly: true, description: "Webhook requires url and optional headers; email requires a non-empty to array; DingTalk supports none, access_token, or hmac_sha256 authentication. Omit on update to preserve the existing encrypted configuration."}
+        events: {type: array, uniqueItems: true, items: {type: string, enum: [pending, running, waiting_callback, succeeded, failed, timed_out, cancelled, skipped, exhausted]}}
+        all_jobs: {type: boolean}
+        job_ids: {type: array, uniqueItems: true, maxItems: 10000, items: {type: string, format: uuid}}
+        max_attempts: {type: integer, minimum: 1, maximum: 100, default: 8}
+        backoff_initial_seconds: {type: integer, minimum: 1, maximum: 3600, default: 2}
+        backoff_max_seconds: {type: integer, minimum: 1, maximum: 86400, default: 300}
+    CreateNotificationChannelRequest:
+      allOf:
+        - {$ref: '#/components/schemas/NotificationChannelMutation'}
+        - type: object
+          required: [kind, name, config]
+    UpdateNotificationChannelRequest:
+      allOf:
+        - {$ref: '#/components/schemas/NotificationChannelMutation'}
+        - type: object
+          required: [kind, name, version]
+          properties:
+            version: {type: integer, format: int64, minimum: 1}
     RegisterExecutorNodeRequest:
       type: object
       required: [address, ttl_seconds]

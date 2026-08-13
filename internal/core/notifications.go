@@ -135,12 +135,23 @@ func (s *Service) CreateNotificationChannel(ctx context.Context, req *schedulerv
 }
 
 func (s *Service) UpdateNotificationChannel(ctx context.Context, req *schedulerv1.UpdateNotificationChannelRequest) (*schedulerv1.NotificationChannel, error) {
-	channel, err := notificationChannelForWrite(req.GetTenantId(), req.GetId(), req.GetKind(), req.GetName(), req.GetConfigJson(), req.GetEvents(), req.GetAllJobs(), req.GetJobIds(), req.GetMaxAttempts(), req.GetBackoffInitialSeconds(), req.GetBackoffMaxSeconds(), req.GetVersion())
+	if req.GetTenantId() == "" || req.GetVersion() < 1 || uuid.Validate(req.GetId()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "UUID id and positive version are required")
+	}
+	config := json.RawMessage(req.GetConfigJson())
+	if len(config) == 0 {
+		current, loadErr := s.store.NotificationChannel(ctx, req.GetTenantId(), req.GetId())
+		if loadErr != nil {
+			return nil, toStatus(loadErr)
+		}
+		if current.Kind != req.GetKind() {
+			return nil, status.Error(codes.InvalidArgument, "config_json is required when changing notification channel kind")
+		}
+		config = current.Config
+	}
+	channel, err := notificationChannelForWrite(req.GetTenantId(), req.GetId(), req.GetKind(), req.GetName(), config, req.GetEvents(), req.GetAllJobs(), req.GetJobIds(), req.GetMaxAttempts(), req.GetBackoffInitialSeconds(), req.GetBackoffMaxSeconds(), req.GetVersion())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	if channel.ID == "" || channel.Version < 1 || uuid.Validate(channel.ID) != nil {
-		return nil, status.Error(codes.InvalidArgument, "UUID id and positive version are required")
 	}
 	channel, err = s.store.UpdateNotificationChannel(ctx, channel)
 	if err != nil {

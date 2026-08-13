@@ -644,18 +644,23 @@ func notificationsCommand(c *cliConfig) *cobra.Command {
 	var updateAllJobs bool
 	var updateMaxAttempts, updateInitialBackoff, updateMaxBackoff int
 	var updateVersion int64
-	update := &cobra.Command{Use: "update ID", Short: "Replace a notification channel configuration", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
-		if !json.Valid([]byte(updateConfig)) {
+	update := &cobra.Command{Use: "update ID", Short: "Update a notification channel", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		configChanged := command.Flags().Changed("config")
+		if configChanged && !json.Valid([]byte(updateConfig)) {
 			return errors.New("config must be valid JSON")
 		}
 		payload := func() ([]byte, error) {
-			return json.Marshal(map[string]any{"kind": updateKind, "name": updateName, "config": json.RawMessage(updateConfig), "events": updateEvents, "all_jobs": updateAllJobs, "job_ids": updateJobIDs, "max_attempts": updateMaxAttempts, "backoff_initial_seconds": updateInitialBackoff, "backoff_max_seconds": updateMaxBackoff, "version": updateVersion})
+			body := map[string]any{"kind": updateKind, "name": updateName, "events": updateEvents, "all_jobs": updateAllJobs, "job_ids": updateJobIDs, "max_attempts": updateMaxAttempts, "backoff_initial_seconds": updateInitialBackoff, "backoff_max_seconds": updateMaxBackoff, "version": updateVersion}
+			if configChanged {
+				body["config"] = json.RawMessage(updateConfig)
+			}
+			return json.Marshal(body)
 		}
 		return runAuthenticated(c, http.MethodPut, "/api/v1/notification-channels/"+url.PathEscape(args[0]), payload)(command, nil)
 	}}
 	update.Flags().StringVar(&updateKind, "kind", "", "channel kind: webhook, email, or dingtalk")
 	update.Flags().StringVar(&updateName, "name", "", "channel name")
-	update.Flags().StringVar(&updateConfig, "config", "", "replacement channel configuration JSON")
+	update.Flags().StringVar(&updateConfig, "config", "", "replacement channel configuration JSON (omit to preserve)")
 	update.Flags().StringSliceVar(&updateEvents, "events", []string{"exhausted"}, "run lifecycle events")
 	update.Flags().BoolVar(&updateAllJobs, "all-jobs", true, "subscribe to all jobs")
 	update.Flags().StringSliceVar(&updateJobIDs, "job-ids", nil, "specific job IDs when --all-jobs=false")
@@ -663,7 +668,7 @@ func notificationsCommand(c *cliConfig) *cobra.Command {
 	update.Flags().IntVar(&updateInitialBackoff, "backoff-initial-seconds", 2, "initial retry backoff")
 	update.Flags().IntVar(&updateMaxBackoff, "backoff-max-seconds", 300, "maximum retry backoff")
 	update.Flags().Int64Var(&updateVersion, "version", 0, "expected channel version")
-	for _, flag := range []string{"kind", "name", "config", "version"} {
+	for _, flag := range []string{"kind", "name", "version"} {
 		_ = update.MarkFlagRequired(flag)
 	}
 	cmd.AddCommand(update)

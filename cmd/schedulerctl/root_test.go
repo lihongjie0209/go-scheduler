@@ -538,6 +538,27 @@ func TestNotificationsHistoryUsesFilters(t *testing.T) {
 	}
 }
 
+func TestNotificationsUpdateOmitsUnchangedConfig(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := body["config"]; exists {
+			t.Error("unchanged notification config was included in the update request")
+		}
+		_, _ = w.Write([]byte(`{"id":"channel-1","version":"2"}`))
+	}))
+	t.Cleanup(server.Close)
+	command := newRootCommand("test")
+	command.SetOut(new(bytes.Buffer))
+	command.SetArgs([]string{"--server", server.URL, "--token", "gsk_test", "notifications", "update", "channel-1", "--kind", "webhook", "--name", "ops", "--version", "1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNotificationLifecycleCommands(t *testing.T) {
 	t.Parallel()
 	requests := make(chan string, 3)

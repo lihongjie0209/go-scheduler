@@ -743,15 +743,32 @@ func TestCrossModuleAsyncCallbackRetryThroughGRPC(t *testing.T) {
 }
 
 func TestCrossModuleNotificationChannelsThroughGRPC(t *testing.T) {
-	fixture := newLifecycleFixture(t)
+	fixture := newEncryptedLifecycleFixture(t)
 	defer fixture.close()
-	created, err := fixture.client.CreateNotificationChannel(t.Context(), &schedulerv1.CreateNotificationChannelRequest{TenantId: fixture.tenantID, Kind: "webhook", Name: "grpc-alerts", ConfigJson: []byte(`{"url":"https://alerts.example.com/hook"}`)})
+	const secretConfig = `{"url":"https://alerts.example.com/hook","headers":{"Authorization":"Bearer notification-secret"}}`
+	created, err := fixture.client.CreateNotificationChannel(t.Context(), &schedulerv1.CreateNotificationChannelRequest{TenantId: fixture.tenantID, Kind: "webhook", Name: "grpc-alerts", ConfigJson: []byte(secretConfig)})
 	if err != nil || created.Id == "" || created.Kind != "webhook" || !created.Configured || !created.Enabled || created.Version != 1 {
 		t.Fatalf("created channel = %+v, %v", created, err)
 	}
-	updated, err := fixture.client.UpdateNotificationChannel(t.Context(), &schedulerv1.UpdateNotificationChannelRequest{Id: created.Id, TenantId: fixture.tenantID, Kind: "webhook", Name: "grpc-alerts-updated", ConfigJson: []byte(`{"url":"https://alerts.example.com/updated"}`), Events: []string{"failed"}, AllJobs: true, MaxAttempts: 4, BackoffInitialSeconds: 3, BackoffMaxSeconds: 60, Version: created.Version})
+	updated, err := fixture.client.UpdateNotificationChannel(t.Context(), &schedulerv1.UpdateNotificationChannelRequest{Id: created.Id, TenantId: fixture.tenantID, Kind: "webhook", Name: "grpc-alerts-updated", Events: []string{"failed"}, AllJobs: true, MaxAttempts: 4, BackoffInitialSeconds: 3, BackoffMaxSeconds: 60, Version: created.Version})
 	if err != nil || updated.Name != "grpc-alerts-updated" || updated.Version != 2 {
 		t.Fatalf("updated channel = %+v, %v", updated, err)
+	}
+	stored, err := fixture.store.NotificationChannel(t.Context(), fixture.tenantID, created.Id)
+	if err != nil || string(stored.Config) != secretConfig {
+		t.Fatalf("preserved notification config = %s, %v", stored.Config, err)
+	}
+	connection, err := pgx.Connect(t.Context(), fixture.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close(t.Context())
+	var plaintextConfig, encryptedConfig []byte
+	if err = connection.QueryRow(t.Context(), `SELECT config,encrypted_config FROM notification_channels WHERE id=$1`, created.Id).Scan(&plaintextConfig, &encryptedConfig); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(plaintextConfig, []byte("notification-secret")) || bytes.Contains(encryptedConfig, []byte("notification-secret")) {
+		t.Fatal("notification credential was stored in plaintext")
 	}
 	disabled, err := fixture.client.SetNotificationChannelEnabled(t.Context(), &schedulerv1.SetNotificationChannelEnabledRequest{Id: created.Id, TenantId: fixture.tenantID, Enabled: false, Version: updated.Version})
 	if err != nil || disabled.Enabled || disabled.Version != 3 {
