@@ -1,0 +1,44 @@
+name: Code generation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - api/proto/**
+      - Makefile
+      - .github/workflows/codegen.yml
+
+permissions:
+  contents: read
+
+jobs:
+  protobuf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install --yes protobuf-compiler
+      - name: Install pinned generators
+        env:
+          GOBIN: ${{ runner.temp }}/bin
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Generate protobuf
+        run: make generate
+      - name: Verify generated files
+        if: github.event_name == 'pull_request'
+        run: git diff --exit-code -- gen
+      - name: Upload generated sources
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: protobuf-go
+          path: gen
+          retention-days: 1
