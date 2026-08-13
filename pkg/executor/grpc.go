@@ -42,7 +42,12 @@ const (
 	defaultCompletionReportTimeout   = 2 * time.Minute
 	defaultCompletionInitialBackoff  = 200 * time.Millisecond
 	defaultCompletionMaxBackoff      = 5 * time.Second
+	defaultMaxConcurrentExecutions   = 32
 )
+
+type GRPCServerOptions struct {
+	MaxConcurrentExecutions int
+}
 
 // GRPCServer is the executor-facing control plane. Dispatch acknowledges after
 // the task has been durably accepted into this process; completion is reported
@@ -61,11 +66,22 @@ type GRPCServer struct {
 	completionReportTimeout  time.Duration
 	completionInitialBackoff time.Duration
 	completionMaxBackoff     time.Duration
+	executionSlots           chan struct{}
 }
 
-func NewGRPCServer(server *Server, reporter Reporter) (*GRPCServer, error) {
+func NewGRPCServer(server *Server, reporter Reporter, options ...GRPCServerOptions) (*GRPCServer, error) {
 	if server == nil || reporter == nil {
 		return nil, errors.New("executor server and reporter are required")
+	}
+	configuration := GRPCServerOptions{MaxConcurrentExecutions: defaultMaxConcurrentExecutions}
+	if len(options) > 1 {
+		return nil, errors.New("at most one gRPC server options value is supported")
+	}
+	if len(options) == 1 {
+		configuration = options[0]
+	}
+	if configuration.MaxConcurrentExecutions < 1 {
+		return nil, errors.New("maximum concurrent executions must be positive")
 	}
 	return &GRPCServer{
 		server: server, reporter: reporter, runs: make(map[string]*execution),
@@ -73,6 +89,7 @@ func NewGRPCServer(server *Server, reporter Reporter) (*GRPCServer, error) {
 		completionMaxAttempts: defaultCompletionMaxAttempts, completionAttemptTimeout: defaultCompletionAttemptTimeout,
 		completionReportTimeout: defaultCompletionReportTimeout, completionInitialBackoff: defaultCompletionInitialBackoff,
 		completionMaxBackoff: defaultCompletionMaxBackoff,
+		executionSlots:       make(chan struct{}, configuration.MaxConcurrentExecutions),
 	}, nil
 }
 
@@ -93,6 +110,12 @@ func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchReq
 		s.mu.Unlock()
 		return response, nil
 	}
+	select {
+	case s.executionSlots <- struct{}{}:
+	default:
+		s.mu.Unlock()
+		return nil, status.Error(codes.ResourceExhausted, "executor concurrency limit reached")
+	}
 	executionID := request.GetExternalExecutionId()
 	if executionID == "" {
 		executionID = uuid.NewString()
@@ -106,8 +129,19 @@ func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchReq
 }
 
 func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRequest, handler Handler) {
+	s.server.markActive(request.GetJobId(), 1)
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		s.server.markActive(request.GetJobId(), -1)
+		<-s.executionSlots
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			release()
 			s.finish(request, fmt.Errorf("handler panic: %v", recovered))
 		}
 	}()
@@ -123,6 +157,7 @@ func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRe
 	}
 	logger := &grpcLogger{reporter: s.reporter, runID: request.GetRunId(), token: request.GetCallbackToken()}
 	err := invokeHandler(ctx, handler, Task{RunID: request.GetRunId(), ExternalExecutionID: request.GetExternalExecutionId(), JobID: request.GetJobId(), Input: request.GetInput(), BroadcastGroupID: request.GetBroadcastGroupId(), BroadcastIndex: request.GetBroadcastIndex(), BroadcastTotal: request.GetBroadcastTotal(), ScriptLanguage: request.GetScriptLanguage(), ScriptSource: request.GetScriptSource(), KubernetesCluster: kubernetes, HTTP: httpExecution, Logger: logger})
+	release()
 	s.finish(request, err)
 }
 

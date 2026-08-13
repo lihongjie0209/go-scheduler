@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -59,6 +60,10 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("parse EXECUTOR_TTL: %w", err)
 	}
+	maxConcurrency, err := positiveIntEnv("EXECUTOR_MAX_CONCURRENCY", 32)
+	if err != nil {
+		return err
+	}
 	schedulerTransport, err := rpc.ClientTransportCredentials(os.Getenv("SCHEDULER_GRPC_TLS_CA"), os.Getenv("SCHEDULER_GRPC_TLS_SERVER_NAME"))
 	if err != nil {
 		return err
@@ -73,7 +78,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	executorService, err := executor.NewGRPCServer(server, reporter)
+	executorService, err := executor.NewGRPCServer(server, reporter, executor.GRPCServerOptions{MaxConcurrentExecutions: maxConcurrency})
 	if err != nil {
 		return err
 	}
@@ -139,4 +144,13 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func positiveIntEnv(key string, fallback int) (int, error) {
+	value := envOr(key, strconv.Itoa(fallback))
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return parsed, nil
 }
