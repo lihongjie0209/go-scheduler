@@ -24,6 +24,16 @@ func HTTPHandler(client *http.Client) Handler {
 		for key, value := range task.HTTP.Headers {
 			request.Header.Set(key, value)
 		}
+		executionID := task.ExternalExecutionID
+		if executionID == "" {
+			executionID = task.RunID
+		}
+		// Scheduler-owned identity headers deliberately override job headers so a
+		// redelivered run cannot change its idempotency identity.
+		request.Header.Set("Idempotency-Key", executionID)
+		request.Header.Set("X-Go-Scheduler-Execution-ID", executionID)
+		request.Header.Set("X-Go-Scheduler-Run-ID", task.RunID)
+		request.Header.Set("X-Go-Scheduler-Job-ID", task.JobID)
 		response, err := client.Do(request)
 		if err != nil {
 			return err

@@ -3097,6 +3097,68 @@ func TestKubernetesExecutorLabelRoutingUseCase(t *testing.T) {
 	}
 }
 
+func TestExecutorRetryUsesDistinctExternalExecutionID(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+	executionIDs := make(chan string, 2)
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/run" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload struct {
+			RunID               string `json:"run_id"`
+			ExternalExecutionID string `json:"external_execution_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode executor dispatch: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if payload.ExternalExecutionID != payload.RunID {
+			t.Errorf("external execution ID %q does not match run ID %q", payload.ExternalExecutionID, payload.RunID)
+		}
+		executionIDs <- payload.ExternalExecutionID
+		http.Error(w, "force retry", http.StatusInternalServerError)
+	}))
+	defer node.Close()
+
+	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{TenantID: fixture.tenantID, Name: "retry-execution-id", RouteStrategy: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "retry-node", node.URL, 30*time.Second, nil); err != nil {
+		t.Fatal(err)
+	}
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "distinct-retry-execution", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, MaxRetries: 1, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, ExecutorGroupID: group.ID, ExecutorHandler: "retry", Enabled: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "distinct-retry-execution", ""); err != nil {
+		t.Fatal(err)
+	}
+	engineCtx, cancelEngine := context.WithCancel(t.Context())
+	engine := core.NewEngine(fixture.store, "retry-execution-core", 10*time.Millisecond, 1, "http://scheduler.test", 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine.Run(engineCtx)
+	defer func() { cancelEngine(); engine.Wait() }()
+
+	seen := make(map[string]struct{}, 2)
+	for len(seen) < 2 {
+		select {
+		case executionID := <-executionIDs:
+			if executionID == "" {
+				t.Fatal("executor received an empty external execution ID")
+			}
+			seen[executionID] = struct{}{}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("executor retry IDs = %+v", seen)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("business retry reused external execution ID: %+v", seen)
+	}
+}
+
 func TestShardingBroadcastUseCaseThroughCLI(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()

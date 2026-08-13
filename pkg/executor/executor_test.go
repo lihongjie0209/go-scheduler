@@ -23,7 +23,7 @@ func TestServerRunsHandlerAndReportsBusyState(t *testing.T) {
 	if err = server.Handle("demo", func(ctx context.Context, task Task) error {
 		close(started)
 		<-release
-		if task.Input != "payload" || task.BroadcastIndex != 1 || task.BroadcastTotal != 3 {
+		if task.Input != "payload" || task.ExternalExecutionID != "execution-1" || task.BroadcastIndex != 1 || task.BroadcastTotal != 3 || task.HTTP == nil || task.HTTP.URL != "https://target.test" {
 			t.Errorf("task=%+v", task)
 		}
 		return nil
@@ -32,7 +32,7 @@ func TestServerRunsHandlerAndReportsBusyState(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	body, _ := json.Marshal(runRequest{RunID: "run-1", JobID: "job-1", Handler: "demo", Input: "payload", CallbackURL: "http://scheduler.test/api/v1/callbacks/run-1", LogURL: "http://scheduler.test/api/v1/runs/run-1/logs", CallbackToken: "token", TimeoutSeconds: 5, BroadcastIndex: 1, BroadcastTotal: 3})
+	body, _ := json.Marshal(runRequest{RunID: "run-1", ExternalExecutionID: "execution-1", JobID: "job-1", Handler: "demo", Input: "payload", CallbackURL: "http://scheduler.test/api/v1/callbacks/run-1", LogURL: "http://scheduler.test/api/v1/runs/run-1/logs", CallbackToken: "token", TimeoutSeconds: 5, BroadcastIndex: 1, BroadcastTotal: 3, HTTP: &HTTPExecution{URL: "https://target.test", Method: http.MethodPost}})
 	done := make(chan int, 1)
 	go func() {
 		request, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/run", bytes.NewReader(body))

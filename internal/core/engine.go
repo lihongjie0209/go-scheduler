@@ -299,7 +299,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			return
 		}
 		if e.executorGRPC != nil {
-			dispatchRequest := &executorv1.DispatchRequest{RunId: c.Run.ID, JobId: c.Job.ID, Attempt: c.Run.Attempt, Handler: c.Job.ExecutorHandler, Input: c.Run.RuntimeInput, CallbackToken: callbackToken, TimeoutSeconds: c.Job.TimeoutSeconds, BroadcastGroupId: c.Run.BroadcastGroupID, BroadcastIndex: c.Run.ShardIndex, BroadcastTotal: c.Run.ShardTotal, ScriptLanguage: c.Job.ScriptLanguage, ScriptSource: c.Job.ScriptSource}
+			dispatchRequest := &executorv1.DispatchRequest{RunId: c.Run.ID, ExternalExecutionId: c.Run.ID, JobId: c.Job.ID, Attempt: c.Run.Attempt, Handler: c.Job.ExecutorHandler, Input: c.Run.RuntimeInput, CallbackToken: callbackToken, TimeoutSeconds: c.Job.TimeoutSeconds, BroadcastGroupId: c.Run.BroadcastGroupID, BroadcastIndex: c.Run.ShardIndex, BroadcastTotal: c.Run.ShardTotal, ScriptLanguage: c.Job.ScriptLanguage, ScriptSource: c.Job.ScriptSource}
 			if c.Job.TargetURL != "" {
 				dispatchRequest.Http = &executorv1.HttpExecution{Url: c.Job.TargetURL, Method: c.Job.HTTPMethod, Headers: c.Job.Headers, Body: body}
 			}
@@ -309,12 +309,6 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 					e.fail(parent, c, fmt.Errorf("load kubernetes cluster: %w", clusterErr))
 					return
 				}
-				executionID, executionErr := e.store.RootRunID(ctx, c.Job.TenantID, c.Run.ID)
-				if executionErr != nil {
-					e.fail(parent, c, fmt.Errorf("resolve external execution identity: %w", executionErr))
-					return
-				}
-				dispatchRequest.ExternalExecutionId = executionID
 				dispatchRequest.KubernetesCluster = &executorv1.KubernetesCluster{AuthMode: cluster.AuthMode, ApiServer: cluster.APIServer, Namespace: cluster.Namespace, Kubeconfig: cluster.Credentials.Kubeconfig, Token: cluster.Credentials.Token, CaData: cluster.Credentials.CAData, InsecureSkipTlsVerify: cluster.InsecureSkipTLSVerify}
 			}
 			if err := e.store.PrepareClaimedExecutorDispatch(ctx, c.Run, node.NodeID, node.Address, tokenHash, callbackDeadline); err != nil {
@@ -334,19 +328,16 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		}
 		targetURL = strings.TrimRight(node.Address, "/") + "/run"
 		method = http.MethodPost
-		runPayload := map[string]any{"run_id": c.Run.ID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource}
+		runPayload := map[string]any{"run_id": c.Run.ID, "external_execution_id": c.Run.ID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource}
+		if c.Job.TargetURL != "" {
+			runPayload["http"] = map[string]any{"url": c.Job.TargetURL, "method": c.Job.HTTPMethod, "headers": c.Job.Headers, "body": body}
+		}
 		if c.Job.KubernetesClusterID != "" {
 			cluster, clusterErr := e.store.GetKubernetesCluster(ctx, c.Job.TenantID, c.Job.KubernetesClusterID)
 			if clusterErr != nil {
 				e.fail(parent, c, fmt.Errorf("load kubernetes cluster: %w", clusterErr))
 				return
 			}
-			executionID, executionErr := e.store.RootRunID(ctx, c.Job.TenantID, c.Run.ID)
-			if executionErr != nil {
-				e.fail(parent, c, fmt.Errorf("resolve external execution identity: %w", executionErr))
-				return
-			}
-			runPayload["external_execution_id"] = executionID
 			runPayload["kubernetes_cluster"] = map[string]any{"auth_mode": cluster.AuthMode, "api_server": cluster.APIServer, "namespace": cluster.Namespace, "kubeconfig": cluster.Credentials.Kubeconfig, "token": cluster.Credentials.Token, "ca_data": cluster.Credentials.CAData, "insecure_skip_tls_verify": cluster.InsecureSkipTLSVerify}
 		}
 		payload, marshalErr := json.Marshal(runPayload)

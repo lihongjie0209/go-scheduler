@@ -250,6 +250,8 @@ make build
 
 执行器派发数据还包含 `log_url` 和 `callback_token`。执行器可在运行期间向 `log_url` POST `{"token":"...","entries":[{"entry_id":"唯一且可重试","stream":"stdout","content":"..."}]}` 追加 Rolling 日志；每批最多 100 条、单条最多 64 KiB。通过 `schedulerctl runs logs RUN_ID` 分页读取，或使用 `--follow` 持续跟随。
 
+HTTP 执行器向目标服务发送 `Idempotency-Key`、`X-Go-Scheduler-Execution-ID`、`X-Go-Scheduler-Run-ID` 和 `X-Go-Scheduler-Job-ID`。同一运行因网络中断或 Executor 重启而被重新派发时标识保持不变；业务失败产生的新 retry Run 使用新的标识，因此会真正发起下一次执行。Kubernetes Job 使用相同的单次 Run 身份恢复已有 Job，不会错误复用上一轮已失败的 Job。
+
 周期调度支持 `fixed_rate` 与 `fixed_delay`，表达式均为正整数秒。`fixed_rate` 按原计划时刻推进；`fixed_delay` 等当前计划运行及其全部 retry/广播分片终止后，再从最终完成时刻计算下一次。旧的 `fixed_interval` 继续作为 `fixed_rate` 兼容类型。
 
 Cron 使用包含秒字段的 6 字段表达式，并按任务配置的 IANA 时区计算。兼容 XXL-JOB 的 Quartz 日历语义：`?`、月末 `L/L-n`、最近工作日 `nW/LW/L-nW`、最后一个指定星期 `nL` 和第 n 个指定星期 `n#1..5`。数字星期采用 Quartz 编号 `1=SUN` 到 `7=SAT`，例如 `0 0 9 ? * 2#1` 表示每月第一个星期一 09:00。
