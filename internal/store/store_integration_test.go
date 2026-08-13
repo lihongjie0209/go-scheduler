@@ -275,8 +275,12 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil || loadedScript.ScriptLanguage != "shell" || loadedScript.ScriptSource != scriptJob.ScriptSource || loadedScript.ExecutorHandler != "__script__" {
 		t.Fatalf("script job = %+v, %v", loadedScript, err)
 	}
-	for _, language := range []string{"nodejs", "php", "powershell"} {
-		languageJob, createErr := one.CreateJob(ctx, Job{TenantID: tenantID, Name: language + "-persistence", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "__script__", ScriptLanguage: language, ScriptSource: "source", Enabled: false})
+	for _, language := range []string{"nodejs", "php", "powershell", "docker"} {
+		handler := "__script__"
+		if language == "docker" {
+			handler = "__docker__"
+		}
+		languageJob, createErr := one.CreateJob(ctx, Job{TenantID: tenantID, Name: language + "-persistence", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, ExecutorGroupID: routeGroup.ID, ExecutorHandler: handler, ScriptLanguage: language, ScriptSource: "source", Enabled: false})
 		if createErr != nil {
 			t.Fatalf("create %s script: %v", language, createErr)
 		}

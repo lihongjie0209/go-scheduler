@@ -138,3 +138,18 @@ func TestScriptExecutorImageContainsSupportedRuntimes(t *testing.T) {
 		t.Fatalf("script image output=%q err=%v", buffer.String(), err)
 	}
 }
+
+func TestDockerHandlerRunsAndRemovesContainer(t *testing.T) {
+	logger := &recordingLogger{}
+	handler := DockerHandler(DockerOptions{})
+	err := handler(t.Context(), Task{
+		RunID: "docker-integration", JobID: "job-docker", Input: "payload", Logger: logger,
+		ScriptSource: `{"image":"alpine:3.22","command":["sh","-c"],"args":["printf 'docker:%s' \"$SCHEDULER_INPUT\""],"pull_policy":"always"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(logger.info, ""), "docker:payload") {
+		t.Fatalf("stdout = %#v", logger.info)
+	}
+}

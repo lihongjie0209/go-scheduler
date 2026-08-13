@@ -99,6 +99,44 @@ docker run --rm -p 9999:9999 \
 
 脚本任务使用 `executor_handler: "__script__"`。默认允许 `shell,python,nodejs,php,powershell`，可通过 `SCRIPT_LANGUAGES` 收窄；源码及单次 stdout/stderr 总输出分别限制为 1 MiB，任务超时会终止整个脚本进程组。自建 Alpine 镜像固定安装 Python 3、Node.js 22、PHP 8.3 CLI 与 PowerShell 7.6.4；PowerShell 使用微软官方 Alpine tar.gz，构建时校验官方 SHA256。镜像和完整 use case Testcontainers 测试会真实执行这些运行时。
 
+## Docker Image Executor
+
+Docker Image 任务由独立 `docker-executor` 执行。任务定义使用 `script_language: "docker"`、`executor_handler: "__docker__"`，`script_source` 保存版本化 JSON 定义：
+
+```json
+{
+  "image": "registry.example.com/jobs/reconcile:v1.4.0",
+  "command": ["/app/reconcile"],
+  "args": ["--once"],
+  "env": {"LOG_LEVEL": "info"},
+  "pull_policy": "always",
+  "network": "none",
+  "read_only_root": true,
+  "memory_mb": 512,
+  "cpus": 1
+}
+```
+
+默认禁止容器网络、启用只读根文件系统、丢弃全部 Linux capabilities、禁止提权并限制为 256 个进程；如任务确实需要网络，只允许显式配置 `bridge`。不支持 privileged、host network、宿主目录挂载或 Docker socket 透传。
+
+私有仓库认证使用 Docker 标准 `config.json`，凭据只部署在 Docker Executor，不写入任务、PostgreSQL、gRPC 消息或日志：
+
+```bash
+docker build -f deploy/docker-executor/Dockerfile -t go-scheduler-docker-executor .
+docker run --rm -p 9999:9999 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$HOME/.docker:/docker-auth:ro" \
+  -e DOCKER_CONFIG=/docker-auth \
+  -e SCHEDULER_URL=http://scheduler-server:8080 \
+  -e SCHEDULER_TOKEN="$SCHEDULER_TOKEN" \
+  -e EXECUTOR_GROUP_ID="$GROUP_ID" \
+  -e EXECUTOR_NODE_ID=docker-1 \
+  -e EXECUTOR_ADVERTISE_URL=http://docker-executor:9999 \
+  go-scheduler-docker-executor
+```
+
+Kubernetes 中应把仓库凭据以 Secret 挂载为 `/docker-auth/config.json`。挂载宿主 Docker Socket 等价于授予执行器宿主机高权限，生产环境建议使用隔离的专用 Worker 节点或远程受限 Docker Engine。
+
 ## 命令行客户端
 
 ```bash

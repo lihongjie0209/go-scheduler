@@ -134,11 +134,15 @@ func validateJob(j *schedulerv1.Job) error {
 		return fmt.Errorf("executor_handler is required with executor_group_id")
 	}
 	if j.ScriptLanguage != "" || j.ScriptSource != "" {
-		if j.ExecutorGroupId == "" || j.ExecutorHandler != "__script__" {
-			return fmt.Errorf("script jobs require executor_group_id and __script__ handler")
+		expectedHandler := "__script__"
+		if j.ScriptLanguage == "docker" {
+			expectedHandler = "__docker__"
 		}
-		if j.ScriptLanguage != "shell" && j.ScriptLanguage != "python" && j.ScriptLanguage != "nodejs" && j.ScriptLanguage != "php" && j.ScriptLanguage != "powershell" {
-			return fmt.Errorf("script_language must be shell, python, nodejs, php or powershell")
+		if j.ExecutorGroupId == "" || j.ExecutorHandler != expectedHandler {
+			return fmt.Errorf("%s jobs require executor_group_id and %s handler", j.ScriptLanguage, expectedHandler)
+		}
+		if j.ScriptLanguage != "shell" && j.ScriptLanguage != "python" && j.ScriptLanguage != "nodejs" && j.ScriptLanguage != "php" && j.ScriptLanguage != "powershell" && j.ScriptLanguage != "docker" {
+			return fmt.Errorf("script_language must be shell, python, nodejs, php, powershell or docker")
 		}
 		if j.ScriptSource == "" || len(j.ScriptSource) > 1<<20 {
 			return fmt.Errorf("script_source must be between 1 byte and 1 MiB")

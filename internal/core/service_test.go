@@ -223,6 +223,23 @@ func TestValidateScriptJobAcceptsAdditionalLanguages(t *testing.T) {
 	}
 }
 
+func TestValidateDockerImageJob(t *testing.T) {
+	t.Parallel()
+	job := validJob()
+	job.TargetUrl = ""
+	job.ExecutorGroupId = "docker-group"
+	job.ExecutorHandler = "__docker__"
+	job.ScriptLanguage = "docker"
+	job.ScriptSource = `{"image":"alpine:3.22","command":["echo"],"args":["hello"]}`
+	if err := validateJob(job); err != nil {
+		t.Fatal(err)
+	}
+	job.ExecutorHandler = "__script__"
+	if err := validateJob(job); err == nil {
+		t.Fatal("Docker job accepted script handler")
+	}
+}
+
 func TestScriptVersionRequestsRejectInvalidInputBeforeStore(t *testing.T) {
 	t.Parallel()
 	service := NewService(nil)

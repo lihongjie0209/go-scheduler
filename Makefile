@@ -35,6 +35,7 @@ build:
 	go build -o bin/scheduler-core ./cmd/scheduler-core
 	go build -o bin/schedulerctl ./cmd/schedulerctl
 	go build -o bin/script-executor ./cmd/script-executor
+	go build -o bin/docker-executor ./cmd/docker-executor
 
 migrate-up:
 	go run ./cmd/migrate
