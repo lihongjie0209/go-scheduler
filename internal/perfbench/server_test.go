@@ -35,7 +35,11 @@ func TestServerLifecycle(t *testing.T) {
 		t.Fatalf("execute status = %d", status)
 	}
 	duplicateResponse := request(t, http.MethodPost, server.URL+"/execute?id=event-1", nil)
+	status = duplicateResponse.StatusCode
 	closeResponse(t, duplicateResponse)
+	if status != http.StatusOK {
+		t.Fatalf("duplicate execute status = %d", status)
+	}
 
 	reportResponse := request(t, http.MethodGet, server.URL+"/api/v1/report", nil)
 	var report Report
