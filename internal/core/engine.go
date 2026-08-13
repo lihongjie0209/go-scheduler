@@ -388,20 +388,22 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		e.fail(parent, c, readErr)
 		return
 	}
+	commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
+	defer cancelCommit()
 	if resp.StatusCode == http.StatusAccepted {
-		if err := e.store.MarkWaitingCallback(parent, c.Run.ID, resp.StatusCode, tokenHash, callbackDeadline); err != nil {
+		if err := e.store.MarkWaitingCallback(commitCtx, c.Run.ID, resp.StatusCode, tokenHash, callbackDeadline); err != nil {
 			slog.Error("mark waiting callback", "run_id", c.Run.ID, "error", err)
 		}
 		return
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		if err := e.store.CompleteRun(parent, c.Run, true, resp.StatusCode, string(payload), ""); err != nil {
+		if err := e.store.CompleteRun(commitCtx, c.Run, true, resp.StatusCode, string(payload), ""); err != nil {
 			slog.Error("complete run", "run_id", c.Run.ID, "error", err)
 		}
 		observability.Runs.WithLabelValues("succeeded").Inc()
 		return
 	}
-	e.failWithStatus(parent, c, resp.StatusCode, string(payload))
+	e.failWithStatus(commitCtx, c, resp.StatusCode, string(payload))
 }
 
 func truncateMessage(value string, limit int) string {
