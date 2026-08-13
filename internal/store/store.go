@@ -22,6 +22,7 @@ var ErrDependencyCycle = errors.New("job dependency would create a cycle")
 var ErrRegistrationMode = errors.New("executor group does not accept dynamic registration")
 var ErrExecutorGroupInUse = errors.New("executor group is referenced by a job")
 var ErrOverrideRequiresExecutorGroup = errors.New("executor address override requires an executor group job")
+var ErrNotificationLeaseLost = errors.New("notification delivery lease lost")
 
 type Job struct {
 	ID, TenantID, Name, Description, ScheduleType, ScheduleExpression, Timezone                     string

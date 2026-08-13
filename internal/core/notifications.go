@@ -207,6 +207,12 @@ func (s *Service) ListNotificationHistory(ctx context.Context, req *schedulerv1.
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	if req.GetChannelId() != "" && uuid.Validate(req.GetChannelId()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "channel_id must be a UUID")
+	}
+	if req.GetJobId() != "" && uuid.Validate(req.GetJobId()) != nil {
+		return nil, status.Error(codes.InvalidArgument, "job_id must be a UUID")
+	}
 	if req.GetStatus() != "" && req.GetStatus() != "pending" && req.GetStatus() != "delivered" && req.GetStatus() != "dead" {
 		return nil, status.Error(codes.InvalidArgument, "status must be pending, delivered, or dead")
 	}

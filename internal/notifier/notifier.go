@@ -83,18 +83,20 @@ func (w *Worker) tick(ctx context.Context) {
 		cancel()
 		if deliverErr != nil {
 			if delivery.Attempts >= delivery.Channel.MaxAttempts {
-				if err := w.store.DeadLetterNotificationDelivery(ctx, delivery.ID, delivery.EventID, deliverErr.Error()); err != nil {
+				if err := w.store.DeadLetterNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID, deliverErr.Error()); err != nil {
 					slog.Error("dead-letter notification delivery", "delivery_id", delivery.ID, "error", err)
 				}
 				return
 			}
 			delay := retryDelay(delivery.Attempts, time.Duration(delivery.Channel.BackoffInitialSeconds)*time.Second, time.Duration(delivery.Channel.BackoffMaxSeconds)*time.Second)
-			if err := w.store.RetryNotificationDelivery(ctx, delivery.ID, deliverErr.Error(), delay); err != nil {
+			if err := w.store.RetryNotificationDelivery(ctx, w.owner, delivery.ID, deliverErr.Error(), delay); err != nil {
 				slog.Error("retry notification delivery", "delivery_id", delivery.ID, "error", err)
 			}
 			return
 		}
-		_ = w.store.CompleteNotificationDelivery(ctx, delivery.ID, delivery.EventID)
+		if err := w.store.CompleteNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID); err != nil {
+			slog.Error("complete notification delivery", "delivery_id", delivery.ID, "error", err)
+		}
 	})
 }
 
@@ -159,7 +161,7 @@ func (w *Worker) webhook(ctx context.Context, channel store.NotificationChannel,
 	req.Header.Set("X-Go-Scheduler-Event-ID", event.ID)
 	resp, err := w.client.Do(req)
 	if err != nil {
-		return err
+		return redactedHTTPRequestError("webhook", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
@@ -216,7 +218,7 @@ func (w *Worker) dingtalk(ctx context.Context, channel store.NotificationChannel
 	req.Header.Set("X-Go-Scheduler-Event-ID", event.ID)
 	resp, err := w.client.Do(req)
 	if err != nil {
-		return err
+		return redactedHTTPRequestError("dingtalk", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -231,6 +233,16 @@ func (w *Worker) dingtalk(ctx context.Context, channel store.NotificationChannel
 		return fmt.Errorf("dingtalk error %d: %s", result.ErrCode, result.ErrMsg)
 	}
 	return nil
+}
+
+func redactedHTTPRequestError(provider string, err error) error {
+	if err == nil {
+		return nil
+	}
+	// net/http wraps transport failures in url.Error, whose Error method includes
+	// the complete request URL. Notification endpoints commonly carry tokens in
+	// the query string, so persisted retry errors must not wrap or format it.
+	return fmt.Errorf("%s request failed", provider)
 }
 
 func webhookBody(rawTemplate string, event store.OutboxEvent) ([]byte, error) {

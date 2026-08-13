@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +40,8 @@ type NotificationHistoryEntry struct {
 	CreatedAt                                                time.Time
 	DeliveredAt, DeadAt                                      *time.Time
 }
+
+const maxNotificationErrorBytes = 4096
 
 const runLifecycleEventSQL = `INSERT INTO outbox_events(id,tenant_id,topic,payload)
 		SELECT $4,tenant_id,'job.run.'||$3,jsonb_build_object(
@@ -221,22 +224,26 @@ func (s *Store) ClaimNotificationDeliveries(ctx context.Context, owner string, l
 	return deliveries, rows.Err()
 }
 
-func (s *Store) CompleteNotificationDelivery(ctx context.Context, deliveryID, eventID string) error {
-	return s.finishNotificationDelivery(ctx, deliveryID, eventID, "delivered", "")
+func (s *Store) CompleteNotificationDelivery(ctx context.Context, owner, deliveryID, eventID string) error {
+	return s.finishNotificationDelivery(ctx, owner, deliveryID, eventID, "delivered", "")
 }
 
-func (s *Store) DeadLetterNotificationDelivery(ctx context.Context, deliveryID, eventID, message string) error {
-	return s.finishNotificationDelivery(ctx, deliveryID, eventID, "dead", message)
+func (s *Store) DeadLetterNotificationDelivery(ctx context.Context, owner, deliveryID, eventID, message string) error {
+	return s.finishNotificationDelivery(ctx, owner, deliveryID, eventID, "dead", boundedNotificationError(message))
 }
 
-func (s *Store) finishNotificationDelivery(ctx context.Context, deliveryID, eventID, deliveryStatus, message string) error {
+func (s *Store) finishNotificationDelivery(ctx context.Context, owner, deliveryID, eventID, deliveryStatus, message string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `UPDATE notification_deliveries SET status=$3,delivered_at=CASE WHEN $3='delivered' THEN now() ELSE NULL END,dead_at=CASE WHEN $3='dead' THEN now() ELSE NULL END,locked_by=NULL,locked_until=NULL,last_error=NULLIF($4,'') WHERE id=$1 AND event_id=$2 AND status='pending'`, deliveryID, eventID, deliveryStatus, message); err != nil {
+	tag, err := tx.Exec(ctx, `UPDATE notification_deliveries SET status=$4,delivered_at=CASE WHEN $4='delivered' THEN now() ELSE NULL END,dead_at=CASE WHEN $4='dead' THEN now() ELSE NULL END,locked_by=NULL,locked_until=NULL,last_error=NULLIF($5,'') WHERE id=$1 AND event_id=$2 AND status='pending' AND locked_by=$3 AND locked_until>=now()`, deliveryID, eventID, owner, deliveryStatus, message)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotificationLeaseLost
 	}
 	var pending bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM notification_deliveries WHERE event_id=$1 AND status='pending')`, eventID).Scan(&pending); err != nil {
@@ -270,9 +277,27 @@ func (s *Store) NotificationHistory(ctx context.Context, tenantID, channelID, jo
 	return history, rows.Err()
 }
 
-func (s *Store) RetryNotificationDelivery(ctx context.Context, id, message string, delay time.Duration) error {
-	_, err := s.pool.Exec(ctx, `UPDATE notification_deliveries SET available_at=now()+$2*interval '1 second',locked_by=NULL,locked_until=NULL,last_error=$3 WHERE id=$1 AND status='pending'`, id, delay.Seconds(), message)
-	return err
+func (s *Store) RetryNotificationDelivery(ctx context.Context, owner, id, message string, delay time.Duration) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE notification_deliveries SET available_at=now()+$3*interval '1 second',locked_by=NULL,locked_until=NULL,last_error=$4 WHERE id=$1 AND status='pending' AND locked_by=$2 AND locked_until>=now()`, id, owner, delay.Seconds(), boundedNotificationError(message))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotificationLeaseLost
+	}
+	return nil
+}
+
+func boundedNotificationError(message string) string {
+	message = strings.ToValidUTF8(message, "�")
+	if len(message) <= maxNotificationErrorBytes {
+		return message
+	}
+	limit := maxNotificationErrorBytes
+	for limit > 0 && message[limit]&0xc0 == 0x80 {
+		limit--
+	}
+	return message[:limit]
 }
 func (s *Store) PublishOutbox(ctx context.Context, id string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE outbox_events SET published_at=now(),locked_by=NULL,locked_until=NULL,last_error=NULL WHERE id=$1`, id)

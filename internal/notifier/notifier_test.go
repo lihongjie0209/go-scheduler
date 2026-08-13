@@ -3,14 +3,20 @@ package notifier
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
 
 func TestRetryDelayIsBoundedExponential(t *testing.T) {
 	t.Parallel()
@@ -88,6 +94,32 @@ func TestWebhookSendsIdempotencyHeaders(t *testing.T) {
 	}
 	if gotContentType != "application/json" {
 		t.Fatalf("Content-Type = %q", gotContentType)
+	}
+}
+
+func TestNotificationHTTPErrorRedactsEndpointSecrets(t *testing.T) {
+	t.Parallel()
+	secret := "super-secret-token"
+	worker := New(nil, "test", SMTPConfig{})
+	worker.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("transport failure for " + req.URL.String())
+	})}
+	event := store.OutboxEvent{ID: "event-1", Topic: "job.run.failed", Payload: []byte(`{"run_id":"run-1"}`)}
+	channels := []struct {
+		name    string
+		channel store.NotificationChannel
+		send    func(context.Context, store.NotificationChannel, store.OutboxEvent) error
+	}{
+		{name: "webhook", channel: store.NotificationChannel{Config: json.RawMessage(`{"url":"https://example.test/hook?token=` + secret + `"}`)}, send: worker.webhook},
+		{name: "dingtalk", channel: store.NotificationChannel{Config: json.RawMessage(`{"url":"https://example.test/robot","auth_type":"access_token","access_token":"` + secret + `"}`)}, send: worker.dingtalk},
+	}
+	for _, tt := range channels {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.send(t.Context(), tt.channel, event)
+			if err == nil || strings.Contains(err.Error(), secret) {
+				t.Fatalf("error = %q, want redacted failure", err)
+			}
+		})
 	}
 }
 

@@ -1506,10 +1506,10 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil || len(secondDeliveries) != 1 || secondDeliveries[0].ID == firstDeliveries[0].ID {
 		t.Fatalf("second deliveries = %+v, %v", secondDeliveries, err)
 	}
-	if err = one.CompleteNotificationDelivery(ctx, firstDeliveries[0].ID, notificationEventID); err != nil {
+	if err = one.CompleteNotificationDelivery(ctx, "notifier-a", firstDeliveries[0].ID, notificationEventID); err != nil {
 		t.Fatal(err)
 	}
-	if err = two.RetryNotificationDelivery(ctx, secondDeliveries[0].ID, "temporary failure", 0); err != nil {
+	if err = two.RetryNotificationDelivery(ctx, "notifier-b", secondDeliveries[0].ID, "temporary failure", 0); err != nil {
 		t.Fatal(err)
 	}
 	var published bool
@@ -1520,7 +1520,17 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil || len(retryDeliveries) != 1 || retryDeliveries[0].ID != secondDeliveries[0].ID || retryDeliveries[0].Attempts != 2 {
 		t.Fatalf("retry deliveries = %+v, %v", retryDeliveries, err)
 	}
-	if err = one.CompleteNotificationDelivery(ctx, retryDeliveries[0].ID, notificationEventID); err != nil {
+	if _, err = one.pool.Exec(ctx, `UPDATE notification_deliveries SET locked_until=now()-interval '1 second' WHERE id=$1`, retryDeliveries[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	reclaimedDeliveries, err := two.ClaimNotificationDeliveries(ctx, "notifier-b", 10)
+	if err != nil || len(reclaimedDeliveries) != 1 || reclaimedDeliveries[0].ID != retryDeliveries[0].ID || reclaimedDeliveries[0].Attempts != 3 {
+		t.Fatalf("reclaimed deliveries = %+v, %v", reclaimedDeliveries, err)
+	}
+	if err = one.CompleteNotificationDelivery(ctx, "notifier-a", retryDeliveries[0].ID, notificationEventID); err != ErrNotificationLeaseLost {
+		t.Fatalf("stale notification owner completion error = %v, want ErrNotificationLeaseLost", err)
+	}
+	if err = two.CompleteNotificationDelivery(ctx, "notifier-b", reclaimedDeliveries[0].ID, notificationEventID); err != nil {
 		t.Fatal(err)
 	}
 	if err = one.pool.QueryRow(ctx, `SELECT published_at IS NOT NULL FROM outbox_events WHERE id=$1`, notificationEventID).Scan(&published); err != nil || !published {
@@ -1558,7 +1568,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil || len(deadDeliveries) != 1 {
 		t.Fatalf("dead-letter claim = %+v, %v", deadDeliveries, err)
 	}
-	if err = one.DeadLetterNotificationDelivery(ctx, deadDeliveries[0].ID, matchingEventID, "attempts exhausted"); err != nil {
+	if err = one.DeadLetterNotificationDelivery(ctx, "notifier-dead", deadDeliveries[0].ID, matchingEventID, "attempts exhausted"); err != nil {
 		t.Fatal(err)
 	}
 	history, err := one.NotificationHistory(ctx, tenantID, scoped.ID, queueLimited.ID, "dead", 10)

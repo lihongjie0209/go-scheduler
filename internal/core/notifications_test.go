@@ -1,8 +1,13 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+
+	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestNormalizeNotificationEvents(t *testing.T) {
@@ -16,6 +21,26 @@ func TestNormalizeNotificationEvents(t *testing.T) {
 	}
 	if _, err = normalizeNotificationEvents([]string{"unknown"}); err == nil {
 		t.Fatal("unknown event accepted")
+	}
+}
+
+func TestListNotificationHistoryRejectsInvalidFilters(t *testing.T) {
+	t.Parallel()
+	service := &Service{}
+	tests := []struct {
+		name string
+		req  *schedulerv1.ListNotificationHistoryRequest
+	}{
+		{name: "invalid channel", req: &schedulerv1.ListNotificationHistoryRequest{TenantId: "tenant", ChannelId: "not-a-uuid"}},
+		{name: "invalid job", req: &schedulerv1.ListNotificationHistoryRequest{TenantId: "tenant", JobId: "not-a-uuid"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := service.ListNotificationHistory(context.Background(), tt.req); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("status = %v, want InvalidArgument", status.Code(err))
+			}
+		})
 	}
 }
 

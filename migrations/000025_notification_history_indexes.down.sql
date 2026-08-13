@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS notification_deliveries_channel_history_idx;
