@@ -159,6 +159,8 @@ Kubernetes Job 名称使用整条重试链稳定不变的首个 run ID。执行�
 
 ## 命令行客户端
 
+调度性能与 XXL-JOB 的固定对比口径见 [调度性能基准与 XXL-JOB 对比](docs/performance-benchmark.md)。`/metrics` 提供 `scheduler_dispatch_delay_seconds`，用于观察运行从计划时间到引擎 worker 开始处理的延迟；正式对比仍以共同 HTTP sink 记录的端到端数据为准。
+
 ```bash
 make build
 

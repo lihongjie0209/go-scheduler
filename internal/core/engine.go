@@ -112,6 +112,8 @@ func (e *Engine) tick(ctx context.Context, sem chan struct{}) error {
 }
 func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 	started := time.Now()
+	delay := dispatchDelay(started, c.Run.ScheduledAt)
+	observability.DispatchDelay.WithLabelValues(c.Run.TriggerType).Observe(delay.Seconds())
 	defer func() { observability.RunDuration.Observe(time.Since(started).Seconds()) }()
 	timeout := time.Duration(c.Job.TimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
@@ -280,6 +282,14 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		return
 	}
 	e.failWithStatus(parent, c, resp.StatusCode, string(payload))
+}
+
+func dispatchDelay(startedAt, scheduledAt time.Time) time.Duration {
+	delay := startedAt.Sub(scheduledAt)
+	if delay < 0 {
+		return 0
+	}
+	return delay
 }
 
 func (e *Engine) watchCancellation(ctx context.Context, cancel context.CancelFunc, runID string, done chan<- struct{}) {
