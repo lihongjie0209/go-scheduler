@@ -855,7 +855,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retry == nil || retry.Attempt != 2 || retry.TriggerType != "retry" || retry.RetryOfRunID != firstAttempt.ID || retry.RuntimeInput != "payload" {
+	if retry == nil || retry.Attempt != 2 || retry.TriggerType != "retry" || retry.RetryOfRunID != firstAttempt.ID || retry.RuntimeInput != "payload" || retry.ExternalExecutionID != firstClaim.Run.ExternalExecutionID {
 		t.Fatalf("retry run = %+v", retry)
 	}
 	storedFirst, err := two.GetRun(ctx, tenantID, firstAttempt.ID)

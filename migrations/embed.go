@@ -92,9 +92,12 @@ var DockerRegistryAuthUp string
 //go:embed 000029_notification_queue_metrics_index.up.sql
 var NotificationQueueMetricsIndexUp string
 
+//go:embed 000030_external_execution_identity.up.sql
+var ExternalExecutionIdentityUp string
+
 type Migration struct {
 	Version int64
 	SQL     string
 }
 
-var All = []Migration{{Version: 1, SQL: Up}, {Version: 2, SQL: RuntimeFeaturesUp}, {Version: 3, SQL: ConsoleUp}, {Version: 4, SQL: BlockPoliciesUp}, {Version: 5, SQL: JobDependenciesUp}, {Version: 6, SQL: RetryLineageUp}, {Version: 7, SQL: ExecutorRoutingUp}, {Version: 8, SQL: AdvancedRoutingUp}, {Version: 9, SQL: ActiveRoutingUp}, {Version: 10, SQL: ShardingBroadcastUp}, {Version: 11, SQL: RunLogsUp}, {Version: 12, SQL: FixedDelayUp}, {Version: 13, SQL: ReliableNotificationsUp}, {Version: 14, SQL: ScriptJobsUp}, {Version: 15, SQL: ManualExecutorGroupsUp}, {Version: 16, SQL: TriggerAddressOverridesUp}, {Version: 17, SQL: ScriptVersionsUp}, {Version: 18, SQL: NodeJSPHPScriptsUp}, {Version: 19, SQL: PowerShellScriptsUp}, {Version: 20, SQL: DockerImageJobsUp}, {Version: 21, SQL: ExecutorLabelsUp}, {Version: 22, SQL: KubernetesJobsUp}, {Version: 23, SQL: HotPathIndexesUp}, {Version: 24, SQL: WebhookSubscriptionsUp}, {Version: 25, SQL: NotificationHistoryIndexesUp}, {Version: 26, SQL: NotificationChannelLifecycleUp}, {Version: 27, SQL: RunLeaseFencingUp}, {Version: 28, SQL: DockerRegistryAuthUp}, {Version: 29, SQL: NotificationQueueMetricsIndexUp}}
+var All = []Migration{{Version: 1, SQL: Up}, {Version: 2, SQL: RuntimeFeaturesUp}, {Version: 3, SQL: ConsoleUp}, {Version: 4, SQL: BlockPoliciesUp}, {Version: 5, SQL: JobDependenciesUp}, {Version: 6, SQL: RetryLineageUp}, {Version: 7, SQL: ExecutorRoutingUp}, {Version: 8, SQL: AdvancedRoutingUp}, {Version: 9, SQL: ActiveRoutingUp}, {Version: 10, SQL: ShardingBroadcastUp}, {Version: 11, SQL: RunLogsUp}, {Version: 12, SQL: FixedDelayUp}, {Version: 13, SQL: ReliableNotificationsUp}, {Version: 14, SQL: ScriptJobsUp}, {Version: 15, SQL: ManualExecutorGroupsUp}, {Version: 16, SQL: TriggerAddressOverridesUp}, {Version: 17, SQL: ScriptVersionsUp}, {Version: 18, SQL: NodeJSPHPScriptsUp}, {Version: 19, SQL: PowerShellScriptsUp}, {Version: 20, SQL: DockerImageJobsUp}, {Version: 21, SQL: ExecutorLabelsUp}, {Version: 22, SQL: KubernetesJobsUp}, {Version: 23, SQL: HotPathIndexesUp}, {Version: 24, SQL: WebhookSubscriptionsUp}, {Version: 25, SQL: NotificationHistoryIndexesUp}, {Version: 26, SQL: NotificationChannelLifecycleUp}, {Version: 27, SQL: RunLeaseFencingUp}, {Version: 28, SQL: DockerRegistryAuthUp}, {Version: 29, SQL: NotificationQueueMetricsIndexUp}, {Version: 30, SQL: ExternalExecutionIdentityUp}}

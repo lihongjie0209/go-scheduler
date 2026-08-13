@@ -155,13 +155,14 @@ func TestDockerHandlerRunsAndRemovesContainer(t *testing.T) {
 }
 
 func TestDockerHandlerResumesManagedContainerAfterExecutorRestart(t *testing.T) {
-	const name = "go-scheduler-docker-resume"
+	const name = "go-scheduler-stable-execution"
 	managed, err := testcontainers.GenericContainer(t.Context(), testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{
 		Image: "alpine:3.22", Name: name,
 		Labels: map[string]string{
-			"go-scheduler.managed-by": "lihongjie0209",
-			"go-scheduler.run-id":     "docker-resume",
-			"go-scheduler.job-id":     "job-docker-resume",
+			"go-scheduler.managed-by":   "lihongjie0209",
+			"go-scheduler.execution-id": "stable-execution",
+			"go-scheduler.run-id":       "first-attempt",
+			"go-scheduler.job-id":       "job-docker-resume",
 		},
 		Cmd: []string{"sh", "-c", "sleep 1; printf resumed-output"},
 	}, Started: true})
@@ -172,7 +173,7 @@ func TestDockerHandlerResumesManagedContainerAfterExecutorRestart(t *testing.T) 
 	logger := &recordingLogger{}
 	handler := DockerHandler(DockerOptions{})
 	err = handler(t.Context(), Task{
-		RunID: "docker-resume", JobID: "job-docker-resume", Logger: logger,
+		RunID: "retry-attempt", ExternalExecutionID: "stable-execution", JobID: "job-docker-resume", Logger: logger,
 		ScriptSource: `{"image":"alpine:3.22","pull_policy":"never"}`,
 	})
 	if err != nil {

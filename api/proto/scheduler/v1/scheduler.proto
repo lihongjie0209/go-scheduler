@@ -139,6 +139,7 @@ message Run {
   int32 shard_index = 17;
   int32 shard_total = 18;
   repeated string override_addresses = 19;
+  string external_execution_id = 20;
 }
 
 message GetRunRequest { string tenant_id = 1; string run_id = 2; }

@@ -47,6 +47,7 @@ type DockerRegistryAuth struct {
 
 type Run struct {
 	ID, TenantID, JobID, TriggerType, Status, RuntimeInput, ParentRunID, RetryOfRunID string
+	ExternalExecutionID                                                               string
 	ExecutorNodeID, ExecutorAddress                                                   string
 	LeaseToken                                                                        string
 	BroadcastGroupID                                                                  string
@@ -547,6 +548,7 @@ func (s *Store) TriggerJobWithOptions(ctx context.Context, tenantID, jobID, key,
 		options.OverrideAddresses = []string{}
 	}
 	r := Run{ID: uuid.NewString(), TenantID: tenantID, JobID: jobID, TriggerType: "manual", Status: "pending", Attempt: 1, ScheduledAt: time.Now().UTC(), RuntimeInput: input, OverrideAddresses: options.OverrideAddresses}
+	r.ExternalExecutionID = r.ID
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Run{}, fmt.Errorf("begin trigger: %w", err)
@@ -626,7 +628,7 @@ func (s *Store) TriggerJobWithOptions(ctx context.Context, tenantID, jobID, key,
 				runID = r.ID
 				idempotencyKey = key
 			}
-			_, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,runtime_input,idempotency_key,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,override_addresses) VALUES($1,$2,$3,'manual','pending',$4,$5,NULLIF($6,''),$7,$8,$9,$10,$11,$12)`, runID, tenantID, jobID, r.ScheduledAt, input, idempotencyKey, shard.NodeID, shard.Address, r.BroadcastGroupID, shard.Index, shard.Total, options.OverrideAddresses)
+			_, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,runtime_input,idempotency_key,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,override_addresses,external_execution_id) VALUES($1,$2,$3,'manual','pending',$4,$5,NULLIF($6,''),$7,$8,$9,$10,$11,$12,$1)`, runID, tenantID, jobID, r.ScheduledAt, input, idempotencyKey, shard.NodeID, shard.Address, r.BroadcastGroupID, shard.Index, shard.Total, options.OverrideAddresses)
 			if err != nil {
 				return Run{}, fmt.Errorf("insert broadcast shard: %w", err)
 			}
@@ -639,7 +641,7 @@ func (s *Store) TriggerJobWithOptions(ctx context.Context, tenantID, jobID, key,
 		r.ExecutorNodeID = shards[0].NodeID
 		r.ExecutorAddress = shards[0].Address
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,runtime_input,idempotency_key,error_message,override_addresses) VALUES($1,$2,$3,'manual',$4,$5,CASE WHEN $4='skipped' THEN now() END,$6,NULLIF($7,''),CASE WHEN $4='skipped' THEN 'block strategy: discard later' ELSE NULL END,$8) RETURNING id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,runtime_input`, r.ID, tenantID, jobID, status, r.ScheduledAt, input, key, options.OverrideAddresses).Scan(&r.ID, &r.TenantID, &r.JobID, &r.TriggerType, &r.Status, &r.Attempt, &r.ScheduledAt, &r.RuntimeInput)
+		err = tx.QueryRow(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,runtime_input,idempotency_key,error_message,override_addresses,external_execution_id) VALUES($1,$2,$3,'manual',$4,$5,CASE WHEN $4='skipped' THEN now() END,$6,NULLIF($7,''),CASE WHEN $4='skipped' THEN 'block strategy: discard later' ELSE NULL END,$8,$1) RETURNING id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,runtime_input`, r.ID, tenantID, jobID, status, r.ScheduledAt, input, key, options.OverrideAddresses).Scan(&r.ID, &r.TenantID, &r.JobID, &r.TriggerType, &r.Status, &r.Attempt, &r.ScheduledAt, &r.RuntimeInput)
 		if err != nil {
 			return Run{}, fmt.Errorf("insert run: %w", err)
 		}
@@ -787,7 +789,7 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 		for _, scheduledAt := range due {
 			if fastPath {
 				runID := uuid.NewString()
-				fastBatch.Queue(`INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,reschedule_on_terminal) VALUES($1,$2,$3,'schedule','pending',$4,$5)`, runID, j.TenantID, j.ID, scheduledAt, j.ScheduleType == "fixed_delay")
+				fastBatch.Queue(`INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,reschedule_on_terminal,external_execution_id) VALUES($1,$2,$3,'schedule','pending',$4,$5,$1)`, runID, j.TenantID, j.ID, scheduledAt, j.ScheduleType == "fixed_delay")
 				fastBatch.Queue(runLifecycleEventSQL, runID, "pending", "pending", uuid.NewString())
 				continue
 			}
@@ -823,7 +825,7 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 					groupID := uuid.NewString()
 					for _, shard := range shards {
 						runID := uuid.NewString()
-						if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,reschedule_on_terminal) VALUES($1,$2,$3,'schedule','pending',$4,$5,$6,$7,$8,$9,$10)`, runID, j.TenantID, j.ID, scheduledAt, shard.NodeID, shard.Address, groupID, shard.Index, shard.Total, j.ScheduleType == "fixed_delay"); err != nil {
+						if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,reschedule_on_terminal,external_execution_id) VALUES($1,$2,$3,'schedule','pending',$4,$5,$6,$7,$8,$9,$10,$1)`, runID, j.TenantID, j.ID, scheduledAt, shard.NodeID, shard.Address, groupID, shard.Index, shard.Total, j.ScheduleType == "fixed_delay"); err != nil {
 							return err
 						}
 						if err = emitRunLifecycleEventTx(ctx, tx, runID, "pending"); err != nil {
@@ -834,7 +836,7 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 				}
 			}
 			runID := uuid.NewString()
-			_, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,error_message,reschedule_on_terminal) VALUES($1,$2,$3,'schedule',$4,$5,CASE WHEN $4='skipped' THEN now() END,CASE WHEN $4='skipped' THEN 'block strategy: discard later or queue full' ELSE NULL END,$6)`, runID, j.TenantID, j.ID, status, scheduledAt, j.ScheduleType == "fixed_delay")
+			_, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,error_message,reschedule_on_terminal,external_execution_id) VALUES($1,$2,$3,'schedule',$4,$5,CASE WHEN $4='skipped' THEN now() END,CASE WHEN $4='skipped' THEN 'block strategy: discard later or queue full' ELSE NULL END,$6,$1)`, runID, j.TenantID, j.ID, status, scheduledAt, j.ScheduleType == "fixed_delay")
 			if err != nil {
 				return err
 			}
@@ -902,11 +904,11 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 	 WHERE c.job_rank<=GREATEST(c.max_concurrent_runs-c.job_active,0)
 	 AND c.tenant_rank<=GREATEST(c.tenant_max-c.tenant_active,0)
 	 ORDER BY r.available_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT $1
-	), claimed AS (UPDATE job_runs r SET status='running',lease_owner=$2,lease_token=gen_random_uuid(),lease_until=now()+GREATEST($3,eligible.timeout_seconds+30)*interval '1 second',started_at=COALESCE(started_at,now()) FROM eligible WHERE r.id=eligible.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())) RETURNING r.id,r.tenant_id,r.job_id,r.trigger_type,r.status,r.attempt,r.scheduled_at,r.runtime_input,r.parent_run_id,r.retry_of_run_id,r.executor_node_id,r.executor_address,r.broadcast_group_id,r.shard_index,r.shard_total,r.reschedule_on_terminal,r.override_addresses,r.lease_token,eligible.emit_running
+	), claimed AS (UPDATE job_runs r SET status='running',lease_owner=$2,lease_token=gen_random_uuid(),lease_until=now()+GREATEST($3,eligible.timeout_seconds+30)*interval '1 second',started_at=COALESCE(started_at,now()) FROM eligible WHERE r.id=eligible.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())) RETURNING r.id,r.tenant_id,r.job_id,r.trigger_type,r.status,r.attempt,r.scheduled_at,r.runtime_input,r.parent_run_id,r.retry_of_run_id,r.external_execution_id,r.executor_node_id,r.executor_address,r.broadcast_group_id,r.shard_index,r.shard_total,r.reschedule_on_terminal,r.override_addresses,r.lease_token,eligible.emit_running
 	), emitted AS (INSERT INTO outbox_events(id,tenant_id,topic,payload)
 	 SELECT gen_random_uuid(),c.tenant_id,'job.run.running',jsonb_build_object('run_id',c.id::text,'job_id',c.job_id::text,'tenant_id',c.tenant_id::text,'status','running','attempt',c.attempt,'trigger_type',c.trigger_type,'scheduled_at',c.scheduled_at,'occurred_at',now())
 	 FROM claimed c WHERE c.emit_running)
-	 SELECT c.id,c.tenant_id,c.job_id,c.trigger_type,c.status,c.attempt,c.scheduled_at,c.runtime_input,COALESCE(c.parent_run_id::text,''),COALESCE(c.retry_of_run_id::text,''),COALESCE(c.executor_node_id,''),COALESCE(c.executor_address,''),COALESCE(c.broadcast_group_id::text,''),COALESCE(c.shard_index,0),COALESCE(c.shard_total,0),c.reschedule_on_terminal,c.override_addresses,c.lease_token,`+jobColumnsWithAlias("j")+` FROM claimed c JOIN jobs j ON j.id=c.job_id`, limit, owner, lease.Seconds())
+	 SELECT c.id,c.tenant_id,c.job_id,c.trigger_type,c.status,c.attempt,c.scheduled_at,c.runtime_input,COALESCE(c.parent_run_id::text,''),COALESCE(c.retry_of_run_id::text,''),c.external_execution_id,COALESCE(c.executor_node_id,''),COALESCE(c.executor_address,''),COALESCE(c.broadcast_group_id::text,''),COALESCE(c.shard_index,0),COALESCE(c.shard_total,0),c.reschedule_on_terminal,c.override_addresses,c.lease_token,`+jobColumnsWithAlias("j")+` FROM claimed c JOIN jobs j ON j.id=c.job_id`, limit, owner, lease.Seconds())
 	if err != nil {
 		return nil, err
 	}
@@ -916,7 +918,7 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 		var x ClaimedRun
 		var headers, encrypted, dockerAuth []byte
 		var keyVersion, dockerAuthKeyVersion *int
-		err = rows.Scan(&x.Run.ID, &x.Run.TenantID, &x.Run.JobID, &x.Run.TriggerType, &x.Run.Status, &x.Run.Attempt, &x.Run.ScheduledAt, &x.Run.RuntimeInput, &x.Run.ParentRunID, &x.Run.RetryOfRunID, &x.Run.ExecutorNodeID, &x.Run.ExecutorAddress, &x.Run.BroadcastGroupID, &x.Run.ShardIndex, &x.Run.ShardTotal, &x.Run.RescheduleOnTerminal, &x.Run.OverrideAddresses, &x.Run.LeaseToken, &x.Job.ID, &x.Job.TenantID, &x.Job.Name, &x.Job.Description, &x.Job.ScheduleType, &x.Job.ScheduleExpression, &x.Job.Timezone, &x.Job.TargetURL, &x.Job.HTTPMethod, &headers, &encrypted, &keyVersion, &dockerAuth, &dockerAuthKeyVersion, &x.Job.BodyTemplate, &x.Job.TimeoutSeconds, &x.Job.MaxRetries, &x.Job.OverlapPolicy, &x.Job.MisfirePolicy, &x.Job.Enabled, &x.Job.NextRunAt, &x.Job.Version, &x.Job.MaxConcurrentRuns, &x.Job.MaxCatchUp, &x.Job.CallbackTimeoutSeconds, &x.Job.MaxQueueSize, &x.Job.ExecutorGroupID, &x.Job.ExecutorHandler, &x.Job.ScriptLanguage, &x.Job.ScriptSource, &x.Job.KubernetesClusterID)
+		err = rows.Scan(&x.Run.ID, &x.Run.TenantID, &x.Run.JobID, &x.Run.TriggerType, &x.Run.Status, &x.Run.Attempt, &x.Run.ScheduledAt, &x.Run.RuntimeInput, &x.Run.ParentRunID, &x.Run.RetryOfRunID, &x.Run.ExternalExecutionID, &x.Run.ExecutorNodeID, &x.Run.ExecutorAddress, &x.Run.BroadcastGroupID, &x.Run.ShardIndex, &x.Run.ShardTotal, &x.Run.RescheduleOnTerminal, &x.Run.OverrideAddresses, &x.Run.LeaseToken, &x.Job.ID, &x.Job.TenantID, &x.Job.Name, &x.Job.Description, &x.Job.ScheduleType, &x.Job.ScheduleExpression, &x.Job.Timezone, &x.Job.TargetURL, &x.Job.HTTPMethod, &headers, &encrypted, &keyVersion, &dockerAuth, &dockerAuthKeyVersion, &x.Job.BodyTemplate, &x.Job.TimeoutSeconds, &x.Job.MaxRetries, &x.Job.OverlapPolicy, &x.Job.MisfirePolicy, &x.Job.Enabled, &x.Job.NextRunAt, &x.Job.Version, &x.Job.MaxConcurrentRuns, &x.Job.MaxCatchUp, &x.Job.CallbackTimeoutSeconds, &x.Job.MaxQueueSize, &x.Job.ExecutorGroupID, &x.Job.ExecutorHandler, &x.Job.ScriptLanguage, &x.Job.ScriptSource, &x.Job.KubernetesClusterID)
 		if err != nil {
 			return nil, err
 		}
@@ -1087,7 +1089,7 @@ func enqueueDependentRuns(ctx context.Context, tx pgx.Tx, parent Run) error {
 					if index == 0 {
 						shardRunID = runID
 					}
-					if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,parent_run_id,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total) VALUES($1,$2,$3,'dependency','pending',$4,$5,$6,$7,$8,$9,$10)`, shardRunID, parent.TenantID, child.id, scheduledAt, parent.ID, shard.NodeID, shard.Address, groupID, shard.Index, shard.Total); err != nil {
+					if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,parent_run_id,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,external_execution_id) VALUES($1,$2,$3,'dependency','pending',$4,$5,$6,$7,$8,$9,$10,$1)`, shardRunID, parent.TenantID, child.id, scheduledAt, parent.ID, shard.NodeID, shard.Address, groupID, shard.Index, shard.Total); err != nil {
 						return err
 					}
 					if err = emitRunLifecycleEventTx(ctx, tx, shardRunID, "pending"); err != nil {
@@ -1097,7 +1099,7 @@ func enqueueDependentRuns(ctx context.Context, tx pgx.Tx, parent Run) error {
 				continue
 			}
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,error_message,parent_run_id) VALUES($1,$2,$3,'dependency',$4,$5,CASE WHEN $4='skipped' THEN now() END,NULLIF($6,''),$7)`, runID, parent.TenantID, child.id, state, scheduledAt, message, parent.ID); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,error_message,parent_run_id,external_execution_id) VALUES($1,$2,$3,'dependency',$4,$5,CASE WHEN $4='skipped' THEN now() END,NULLIF($6,''),$7,$1)`, runID, parent.TenantID, child.id, state, scheduledAt, message, parent.ID); err != nil {
 			return err
 		}
 		if err = emitRunLifecycleEventTx(ctx, tx, runID, state); err != nil {
@@ -1140,7 +1142,7 @@ func (s *Store) CompleteCallback(ctx context.Context, runID string, tokenHash []
 	err = tx.QueryRow(ctx, `WITH updated AS (
 	 UPDATE job_runs SET status=CASE WHEN $3 THEN 'succeeded' ELSE 'failed' END,error_message=CASE WHEN $3 THEN '' ELSE $4 END,finished_at=now(),callback_consumed_at=now(),callback_token_hash=NULL,callback_deadline=NULL
 	 WHERE id=$1 AND status='waiting_callback' AND callback_token_hash=$2 AND callback_deadline>now() RETURNING *
-	) SELECT `+runColumns("u")+`,j.max_retries FROM updated u JOIN jobs j ON j.id=u.job_id`, runID, tokenHash, succeeded, message).Scan(&terminal.ID, &terminal.TenantID, &terminal.JobID, &terminal.TriggerType, &terminal.Status, &terminal.Attempt, &terminal.ScheduledAt, &terminal.StartedAt, &terminal.FinishedAt, &terminal.ResponseStatus, &terminal.ErrorMessage, &terminal.RuntimeInput, &terminal.ParentRunID, &terminal.RetryOfRunID, &terminal.ExecutorNodeID, &terminal.ExecutorAddress, &terminal.BroadcastGroupID, &terminal.ShardIndex, &terminal.ShardTotal, &terminal.RescheduleOnTerminal, &terminal.OverrideAddresses, &maxRetries)
+	) SELECT `+runColumns("u")+`,j.max_retries FROM updated u JOIN jobs j ON j.id=u.job_id`, runID, tokenHash, succeeded, message).Scan(&terminal.ID, &terminal.TenantID, &terminal.JobID, &terminal.TriggerType, &terminal.Status, &terminal.Attempt, &terminal.ScheduledAt, &terminal.StartedAt, &terminal.FinishedAt, &terminal.ResponseStatus, &terminal.ErrorMessage, &terminal.RuntimeInput, &terminal.ParentRunID, &terminal.RetryOfRunID, &terminal.ExternalExecutionID, &terminal.ExecutorNodeID, &terminal.ExecutorAddress, &terminal.BroadcastGroupID, &terminal.ShardIndex, &terminal.ShardTotal, &terminal.RescheduleOnTerminal, &terminal.OverrideAddresses, &maxRetries)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -1186,8 +1188,8 @@ func callbackRetryDelay(attempt int32) time.Duration {
 }
 
 func insertRetryRunTx(ctx context.Context, tx pgx.Tx, previous Run, delay time.Duration) (Run, error) {
-	next := Run{ID: uuid.NewString(), TenantID: previous.TenantID, JobID: previous.JobID, TriggerType: "retry", Status: "pending", RuntimeInput: previous.RuntimeInput, ParentRunID: previous.ParentRunID, RetryOfRunID: previous.ID, Attempt: previous.Attempt + 1, ScheduledAt: time.Now().UTC(), ExecutorNodeID: previous.ExecutorNodeID, ExecutorAddress: previous.ExecutorAddress, BroadcastGroupID: previous.BroadcastGroupID, ShardIndex: previous.ShardIndex, ShardTotal: previous.ShardTotal, RescheduleOnTerminal: previous.RescheduleOnTerminal, OverrideAddresses: previous.OverrideAddresses}
-	_, err := tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,available_at,runtime_input,parent_run_id,retry_of_run_id,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,reschedule_on_terminal,override_addresses) VALUES($1,$2,$3,'retry','pending',$4,$5::timestamptz,$5::timestamptz+$6*interval '1 second',$7,NULLIF($8,'')::uuid,$9,NULLIF($10,''),NULLIF($11,''),NULLIF($12,'')::uuid,CASE WHEN $12='' THEN NULL ELSE $13::integer END,CASE WHEN $12='' THEN NULL ELSE $14::integer END,$15,$16)`, next.ID, next.TenantID, next.JobID, next.Attempt, next.ScheduledAt, delay.Seconds(), next.RuntimeInput, next.ParentRunID, next.RetryOfRunID, next.ExecutorNodeID, next.ExecutorAddress, next.BroadcastGroupID, next.ShardIndex, next.ShardTotal, next.RescheduleOnTerminal, next.OverrideAddresses)
+	next := Run{ID: uuid.NewString(), TenantID: previous.TenantID, JobID: previous.JobID, TriggerType: "retry", Status: "pending", RuntimeInput: previous.RuntimeInput, ParentRunID: previous.ParentRunID, RetryOfRunID: previous.ID, ExternalExecutionID: previous.ExternalExecutionID, Attempt: previous.Attempt + 1, ScheduledAt: time.Now().UTC(), ExecutorNodeID: previous.ExecutorNodeID, ExecutorAddress: previous.ExecutorAddress, BroadcastGroupID: previous.BroadcastGroupID, ShardIndex: previous.ShardIndex, ShardTotal: previous.ShardTotal, RescheduleOnTerminal: previous.RescheduleOnTerminal, OverrideAddresses: previous.OverrideAddresses}
+	_, err := tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,available_at,runtime_input,parent_run_id,retry_of_run_id,external_execution_id,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,reschedule_on_terminal,override_addresses) VALUES($1,$2,$3,'retry','pending',$4,$5::timestamptz,$5::timestamptz+$6*interval '1 second',$7,NULLIF($8,'')::uuid,$9,$10,NULLIF($11,''),NULLIF($12,''),NULLIF($13,'')::uuid,CASE WHEN $13='' THEN NULL ELSE $14::integer END,CASE WHEN $13='' THEN NULL ELSE $15::integer END,$16,$17)`, next.ID, next.TenantID, next.JobID, next.Attempt, next.ScheduledAt, delay.Seconds(), next.RuntimeInput, next.ParentRunID, next.RetryOfRunID, next.ExternalExecutionID, next.ExecutorNodeID, next.ExecutorAddress, next.BroadcastGroupID, next.ShardIndex, next.ShardTotal, next.RescheduleOnTerminal, next.OverrideAddresses)
 	if err != nil {
 		return Run{}, err
 	}
@@ -1198,7 +1200,7 @@ func insertRetryRunTx(ctx context.Context, tx pgx.Tx, previous Run, delay time.D
 }
 
 func runColumns(alias string) string {
-	return alias + `.id,` + alias + `.tenant_id,` + alias + `.job_id,` + alias + `.trigger_type,` + alias + `.status,` + alias + `.attempt,` + alias + `.scheduled_at,` + alias + `.started_at,` + alias + `.finished_at,COALESCE(` + alias + `.response_status,0),COALESCE(` + alias + `.error_message,''),` + alias + `.runtime_input,COALESCE(` + alias + `.parent_run_id::text,''),COALESCE(` + alias + `.retry_of_run_id::text,''),COALESCE(` + alias + `.executor_node_id,''),COALESCE(` + alias + `.executor_address,''),COALESCE(` + alias + `.broadcast_group_id::text,''),COALESCE(` + alias + `.shard_index,0),COALESCE(` + alias + `.shard_total,0),` + alias + `.reschedule_on_terminal,` + alias + `.override_addresses`
+	return alias + `.id,` + alias + `.tenant_id,` + alias + `.job_id,` + alias + `.trigger_type,` + alias + `.status,` + alias + `.attempt,` + alias + `.scheduled_at,` + alias + `.started_at,` + alias + `.finished_at,COALESCE(` + alias + `.response_status,0),COALESCE(` + alias + `.error_message,''),` + alias + `.runtime_input,COALESCE(` + alias + `.parent_run_id::text,''),COALESCE(` + alias + `.retry_of_run_id::text,''),` + alias + `.external_execution_id,COALESCE(` + alias + `.executor_node_id,''),COALESCE(` + alias + `.executor_address,''),COALESCE(` + alias + `.broadcast_group_id::text,''),COALESCE(` + alias + `.shard_index,0),COALESCE(` + alias + `.shard_total,0),` + alias + `.reschedule_on_terminal,` + alias + `.override_addresses`
 }
 
 func (s *Store) ExpireCallbacks(ctx context.Context) error {
@@ -1218,7 +1220,7 @@ func (s *Store) ExpireCallbacks(ctx context.Context) error {
 	var expired []expiredRun
 	for rows.Next() {
 		var item expiredRun
-		if err = rows.Scan(&item.run.ID, &item.run.TenantID, &item.run.JobID, &item.run.TriggerType, &item.run.Status, &item.run.Attempt, &item.run.ScheduledAt, &item.run.StartedAt, &item.run.FinishedAt, &item.run.ResponseStatus, &item.run.ErrorMessage, &item.run.RuntimeInput, &item.run.ParentRunID, &item.run.RetryOfRunID, &item.run.ExecutorNodeID, &item.run.ExecutorAddress, &item.run.BroadcastGroupID, &item.run.ShardIndex, &item.run.ShardTotal, &item.run.RescheduleOnTerminal, &item.run.OverrideAddresses, &item.maxRetries); err != nil {
+		if err = rows.Scan(&item.run.ID, &item.run.TenantID, &item.run.JobID, &item.run.TriggerType, &item.run.Status, &item.run.Attempt, &item.run.ScheduledAt, &item.run.StartedAt, &item.run.FinishedAt, &item.run.ResponseStatus, &item.run.ErrorMessage, &item.run.RuntimeInput, &item.run.ParentRunID, &item.run.RetryOfRunID, &item.run.ExternalExecutionID, &item.run.ExecutorNodeID, &item.run.ExecutorAddress, &item.run.BroadcastGroupID, &item.run.ShardIndex, &item.run.ShardTotal, &item.run.RescheduleOnTerminal, &item.run.OverrideAddresses, &item.maxRetries); err != nil {
 			rows.Close()
 			return err
 		}
@@ -1471,11 +1473,11 @@ func (s *Store) CancelRun(ctx context.Context, tenantID, runID, reason string) (
 	return Run{}, ErrNotCancellable
 }
 
-const runSelectColumns = `id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,started_at,finished_at,COALESCE(response_status,0),COALESCE(error_message,''),runtime_input,COALESCE(parent_run_id::text,''),COALESCE(retry_of_run_id::text,''),COALESCE(executor_node_id,''),COALESCE(executor_address,''),COALESCE(broadcast_group_id::text,''),COALESCE(shard_index,0),COALESCE(shard_total,0),reschedule_on_terminal,override_addresses`
+const runSelectColumns = `id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,started_at,finished_at,COALESCE(response_status,0),COALESCE(error_message,''),runtime_input,COALESCE(parent_run_id::text,''),COALESCE(retry_of_run_id::text,''),external_execution_id,COALESCE(executor_node_id,''),COALESCE(executor_address,''),COALESCE(broadcast_group_id::text,''),COALESCE(shard_index,0),COALESCE(shard_total,0),reschedule_on_terminal,override_addresses`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var r Run
-	err := row.Scan(&r.ID, &r.TenantID, &r.JobID, &r.TriggerType, &r.Status, &r.Attempt, &r.ScheduledAt, &r.StartedAt, &r.FinishedAt, &r.ResponseStatus, &r.ErrorMessage, &r.RuntimeInput, &r.ParentRunID, &r.RetryOfRunID, &r.ExecutorNodeID, &r.ExecutorAddress, &r.BroadcastGroupID, &r.ShardIndex, &r.ShardTotal, &r.RescheduleOnTerminal, &r.OverrideAddresses)
+	err := row.Scan(&r.ID, &r.TenantID, &r.JobID, &r.TriggerType, &r.Status, &r.Attempt, &r.ScheduledAt, &r.StartedAt, &r.FinishedAt, &r.ResponseStatus, &r.ErrorMessage, &r.RuntimeInput, &r.ParentRunID, &r.RetryOfRunID, &r.ExternalExecutionID, &r.ExecutorNodeID, &r.ExecutorAddress, &r.BroadcastGroupID, &r.ShardIndex, &r.ShardTotal, &r.RescheduleOnTerminal, &r.OverrideAddresses)
 	return r, err
 }
 
@@ -1503,7 +1505,7 @@ func (s *Store) ListRunsFiltered(ctx context.Context, tenantID, jobID, broadcast
 	var out []Run
 	for rows.Next() {
 		var r Run
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.JobID, &r.TriggerType, &r.Status, &r.Attempt, &r.ScheduledAt, &r.StartedAt, &r.FinishedAt, &r.ResponseStatus, &r.ErrorMessage, &r.RuntimeInput, &r.ParentRunID, &r.RetryOfRunID, &r.ExecutorNodeID, &r.ExecutorAddress, &r.BroadcastGroupID, &r.ShardIndex, &r.ShardTotal, &r.RescheduleOnTerminal, &r.OverrideAddresses); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.JobID, &r.TriggerType, &r.Status, &r.Attempt, &r.ScheduledAt, &r.StartedAt, &r.FinishedAt, &r.ResponseStatus, &r.ErrorMessage, &r.RuntimeInput, &r.ParentRunID, &r.RetryOfRunID, &r.ExternalExecutionID, &r.ExecutorNodeID, &r.ExecutorAddress, &r.BroadcastGroupID, &r.ShardIndex, &r.ShardTotal, &r.RescheduleOnTerminal, &r.OverrideAddresses); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

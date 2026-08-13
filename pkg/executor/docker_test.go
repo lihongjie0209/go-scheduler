@@ -39,7 +39,7 @@ func TestDockerRunArgumentsAreDeterministic(t *testing.T) {
 	readOnly := true
 	definition := DockerDefinition{Image: "alpine:3.22", Command: []string{"echo"}, Args: []string{"ok"}, Env: map[string]string{"B": "2", "A": "1"}, Network: "none", ReadOnlyRoot: &readOnly}
 	got := dockerRunArguments("run-1", Task{RunID: "run-1", JobID: "job-1", Input: "payload"}, definition)
-	wantPrefix := []string{"run", "--name", "run-1", "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.run-id=run-1", "--label", "go-scheduler.job-id=job-1", "--network", "none", "--read-only"}
+	wantPrefix := []string{"run", "--name", "run-1", "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.execution-id=run-1", "--label", "go-scheduler.run-id=run-1", "--label", "go-scheduler.job-id=job-1", "--network", "none", "--read-only"}
 	if !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("arguments prefix = %#v", got)
 	}
@@ -50,7 +50,7 @@ func TestDockerRunArgumentsAreDeterministic(t *testing.T) {
 
 func TestDockerRunArgumentsDefaultToDockerRuntimePolicy(t *testing.T) {
 	got := dockerRunArguments("run-1", Task{RunID: "run-1", JobID: "job-1"}, DockerDefinition{Image: "alpine:3.22"})
-	wantPrefix := []string{"run", "--name", "run-1", "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.run-id=run-1", "--label", "go-scheduler.job-id=job-1"}
+	wantPrefix := []string{"run", "--name", "run-1", "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.execution-id=run-1", "--label", "go-scheduler.run-id=run-1", "--label", "go-scheduler.job-id=job-1"}
 	if !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("arguments prefix = %#v", got)
 	}
@@ -65,14 +65,15 @@ func TestDockerRunArgumentsDefaultToDockerRuntimePolicy(t *testing.T) {
 
 func TestValidateManagedDockerInspection(t *testing.T) {
 	t.Parallel()
-	task := Task{RunID: "run-1", JobID: "job-1"}
+	task := Task{RunID: "retry-run", ExternalExecutionID: "stable-execution", JobID: "job-1"}
 	tests := []struct {
 		name string
 		raw  string
 		ok   bool
 	}{
-		{name: "matching", raw: `[{"Config":{"Labels":{"go-scheduler.managed-by":"lihongjie0209","go-scheduler.run-id":"run-1","go-scheduler.job-id":"job-1"}}}]`, ok: true},
-		{name: "different run", raw: `[{"Config":{"Labels":{"go-scheduler.managed-by":"lihongjie0209","go-scheduler.run-id":"run-2","go-scheduler.job-id":"job-1"}}}]`},
+		{name: "matching prior attempt", raw: `[{"Config":{"Labels":{"go-scheduler.managed-by":"lihongjie0209","go-scheduler.execution-id":"stable-execution","go-scheduler.run-id":"first-run","go-scheduler.job-id":"job-1"}}}]`, ok: true},
+		{name: "matching legacy prior attempt", raw: `[{"Config":{"Labels":{"go-scheduler.managed-by":"lihongjie0209","go-scheduler.run-id":"stable-execution","go-scheduler.job-id":"job-1"}}}]`, ok: true},
+		{name: "different execution", raw: `[{"Config":{"Labels":{"go-scheduler.managed-by":"lihongjie0209","go-scheduler.execution-id":"other-execution","go-scheduler.run-id":"retry-run","go-scheduler.job-id":"job-1"}}}]`},
 		{name: "unmanaged", raw: `[{"Config":{"Labels":{}}}]`},
 		{name: "malformed", raw: `{}`},
 	}

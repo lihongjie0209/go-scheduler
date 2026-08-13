@@ -3170,7 +3170,7 @@ func TestKubernetesExecutorLabelRoutingUseCase(t *testing.T) {
 	}
 }
 
-func TestExecutorRetryUsesDistinctExternalExecutionID(t *testing.T) {
+func TestExecutorRetryPreservesExternalExecutionIDUseCase(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
 	executionIDs := make(chan string, 2)
@@ -3188,9 +3188,6 @@ func TestExecutorRetryUsesDistinctExternalExecutionID(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if payload.ExternalExecutionID != payload.RunID {
-			t.Errorf("external execution ID %q does not match run ID %q", payload.ExternalExecutionID, payload.RunID)
-		}
 		executionIDs <- payload.ExternalExecutionID
 		http.Error(w, "force retry", http.StatusInternalServerError)
 	}))
@@ -3200,7 +3197,7 @@ func TestExecutorRetryUsesDistinctExternalExecutionID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "retry-node", node.URL, 30*time.Second, nil); err != nil {
+	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "retry-node", node.URL, 30*time.Second, []string{}); err != nil {
 		t.Fatal(err)
 	}
 	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "distinct-retry-execution", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, MaxRetries: 1, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, ExecutorGroupID: group.ID, ExecutorHandler: "retry", Enabled: false})
@@ -3215,20 +3212,20 @@ func TestExecutorRetryUsesDistinctExternalExecutionID(t *testing.T) {
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 
-	seen := make(map[string]struct{}, 2)
+	seen := make([]string, 0, 2)
 	for len(seen) < 2 {
 		select {
 		case executionID := <-executionIDs:
 			if executionID == "" {
 				t.Fatal("executor received an empty external execution ID")
 			}
-			seen[executionID] = struct{}{}
+			seen = append(seen, executionID)
 		case <-time.After(5 * time.Second):
 			t.Fatalf("executor retry IDs = %+v", seen)
 		}
 	}
-	if len(seen) != 2 {
-		t.Fatalf("business retry reused external execution ID: %+v", seen)
+	if seen[0] != seen[1] {
+		t.Fatalf("executor retry changed external execution ID: %+v", seen)
 	}
 }
 

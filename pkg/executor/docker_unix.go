@@ -49,7 +49,11 @@ func DockerHandler(options DockerOptions) Handler {
 		if _, err = exec.LookPath(binary); err != nil {
 			return fmt.Errorf("find docker client: %w", err)
 		}
-		name := "go-scheduler-" + strings.Trim(safeContainerName.ReplaceAllString(task.RunID, "-"), "-.")
+		executionID := task.ExternalExecutionID
+		if executionID == "" {
+			executionID = task.RunID
+		}
+		name := "go-scheduler-" + strings.Trim(safeContainerName.ReplaceAllString(executionID, "-"), "-.")
 		if name == "go-scheduler-" {
 			return errors.New("run ID cannot form a container name")
 		}
@@ -124,7 +128,12 @@ func validateManagedDockerInspection(raw []byte, task Task) error {
 		return errors.New("decode Docker container inspection")
 	}
 	labels := inspected[0].Config.Labels
-	if labels["go-scheduler.managed-by"] != "lihongjie0209" || labels["go-scheduler.run-id"] != task.RunID || labels["go-scheduler.job-id"] != task.JobID {
+	executionID := task.ExternalExecutionID
+	if executionID == "" {
+		executionID = task.RunID
+	}
+	identityMatches := labels["go-scheduler.execution-id"] == executionID || labels["go-scheduler.execution-id"] == "" && labels["go-scheduler.run-id"] == executionID
+	if labels["go-scheduler.managed-by"] != "lihongjie0209" || !identityMatches || labels["go-scheduler.job-id"] != task.JobID {
 		return errors.New("docker container name is occupied by an unmanaged or different execution")
 	}
 	return nil
@@ -187,7 +196,11 @@ func parseDockerDefinition(source string) (DockerDefinition, error) {
 }
 
 func dockerRunArguments(name string, task Task, definition DockerDefinition) []string {
-	arguments := []string{"run", "--name", name, "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.run-id=" + task.RunID, "--label", "go-scheduler.job-id=" + task.JobID}
+	executionID := task.ExternalExecutionID
+	if executionID == "" {
+		executionID = task.RunID
+	}
+	arguments := []string{"run", "--name", name, "--label", "go-scheduler.managed-by=lihongjie0209", "--label", "go-scheduler.execution-id=" + executionID, "--label", "go-scheduler.run-id=" + task.RunID, "--label", "go-scheduler.job-id=" + task.JobID}
 	if definition.Network != "" {
 		arguments = append(arguments, "--network", definition.Network)
 	}

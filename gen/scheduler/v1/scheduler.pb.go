@@ -1251,28 +1251,29 @@ func (x *PreviewScheduleResponse) GetTriggerTimes() []*timestamppb.Timestamp {
 }
 
 type Run struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	TenantId          string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	JobId             string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	Status            string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
-	Attempt           int32                  `protobuf:"varint,5,opt,name=attempt,proto3" json:"attempt,omitempty"`
-	ScheduledAt       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=scheduled_at,json=scheduledAt,proto3" json:"scheduled_at,omitempty"`
-	StartedAt         *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	FinishedAt        *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
-	ResponseStatus    int32                  `protobuf:"varint,9,opt,name=response_status,json=responseStatus,proto3" json:"response_status,omitempty"`
-	ErrorMessage      string                 `protobuf:"bytes,10,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	ParentRunId       string                 `protobuf:"bytes,11,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
-	RetryOfRunId      string                 `protobuf:"bytes,12,opt,name=retry_of_run_id,json=retryOfRunId,proto3" json:"retry_of_run_id,omitempty"`
-	TriggerType       string                 `protobuf:"bytes,13,opt,name=trigger_type,json=triggerType,proto3" json:"trigger_type,omitempty"`
-	ExecutorNodeId    string                 `protobuf:"bytes,14,opt,name=executor_node_id,json=executorNodeId,proto3" json:"executor_node_id,omitempty"`
-	ExecutorAddress   string                 `protobuf:"bytes,15,opt,name=executor_address,json=executorAddress,proto3" json:"executor_address,omitempty"`
-	BroadcastGroupId  string                 `protobuf:"bytes,16,opt,name=broadcast_group_id,json=broadcastGroupId,proto3" json:"broadcast_group_id,omitempty"`
-	ShardIndex        int32                  `protobuf:"varint,17,opt,name=shard_index,json=shardIndex,proto3" json:"shard_index,omitempty"`
-	ShardTotal        int32                  `protobuf:"varint,18,opt,name=shard_total,json=shardTotal,proto3" json:"shard_total,omitempty"`
-	OverrideAddresses []string               `protobuf:"bytes,19,rep,name=override_addresses,json=overrideAddresses,proto3" json:"override_addresses,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Id                  string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	TenantId            string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	JobId               string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Status              string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	Attempt             int32                  `protobuf:"varint,5,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	ScheduledAt         *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=scheduled_at,json=scheduledAt,proto3" json:"scheduled_at,omitempty"`
+	StartedAt           *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	FinishedAt          *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	ResponseStatus      int32                  `protobuf:"varint,9,opt,name=response_status,json=responseStatus,proto3" json:"response_status,omitempty"`
+	ErrorMessage        string                 `protobuf:"bytes,10,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ParentRunId         string                 `protobuf:"bytes,11,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
+	RetryOfRunId        string                 `protobuf:"bytes,12,opt,name=retry_of_run_id,json=retryOfRunId,proto3" json:"retry_of_run_id,omitempty"`
+	TriggerType         string                 `protobuf:"bytes,13,opt,name=trigger_type,json=triggerType,proto3" json:"trigger_type,omitempty"`
+	ExecutorNodeId      string                 `protobuf:"bytes,14,opt,name=executor_node_id,json=executorNodeId,proto3" json:"executor_node_id,omitempty"`
+	ExecutorAddress     string                 `protobuf:"bytes,15,opt,name=executor_address,json=executorAddress,proto3" json:"executor_address,omitempty"`
+	BroadcastGroupId    string                 `protobuf:"bytes,16,opt,name=broadcast_group_id,json=broadcastGroupId,proto3" json:"broadcast_group_id,omitempty"`
+	ShardIndex          int32                  `protobuf:"varint,17,opt,name=shard_index,json=shardIndex,proto3" json:"shard_index,omitempty"`
+	ShardTotal          int32                  `protobuf:"varint,18,opt,name=shard_total,json=shardTotal,proto3" json:"shard_total,omitempty"`
+	OverrideAddresses   []string               `protobuf:"bytes,19,rep,name=override_addresses,json=overrideAddresses,proto3" json:"override_addresses,omitempty"`
+	ExternalExecutionId string                 `protobuf:"bytes,20,opt,name=external_execution_id,json=externalExecutionId,proto3" json:"external_execution_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Run) Reset() {
@@ -1436,6 +1437,13 @@ func (x *Run) GetOverrideAddresses() []string {
 		return x.OverrideAddresses
 	}
 	return nil
+}
+
+func (x *Run) GetExternalExecutionId() string {
+	if x != nil {
+		return x.ExternalExecutionId
+	}
+	return ""
 }
 
 type GetRunRequest struct {
@@ -4415,7 +4423,7 @@ const file_scheduler_v1_scheduler_proto_rawDesc = "" +
 	"\x05after\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x05after\x12\x14\n" +
 	"\x05count\x18\x05 \x01(\x05R\x05count\"Z\n" +
 	"\x17PreviewScheduleResponse\x12?\n" +
-	"\rtrigger_times\x18\x01 \x03(\v2\x1a.google.protobuf.TimestampR\ftriggerTimes\"\xe2\x05\n" +
+	"\rtrigger_times\x18\x01 \x03(\v2\x1a.google.protobuf.TimestampR\ftriggerTimes\"\x96\x06\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x15\n" +
@@ -4440,7 +4448,8 @@ const file_scheduler_v1_scheduler_proto_rawDesc = "" +
 	"shardIndex\x12\x1f\n" +
 	"\vshard_total\x18\x12 \x01(\x05R\n" +
 	"shardTotal\x12-\n" +
-	"\x12override_addresses\x18\x13 \x03(\tR\x11overrideAddresses\"C\n" +
+	"\x12override_addresses\x18\x13 \x03(\tR\x11overrideAddresses\x122\n" +
+	"\x15external_execution_id\x18\x14 \x01(\tR\x13externalExecutionId\"C\n" +
 	"\rGetRunRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06run_id\x18\x02 \x01(\tR\x05runId\"\x89\x01\n" +

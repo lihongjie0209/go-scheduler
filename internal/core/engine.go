@@ -233,6 +233,8 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			} else {
 				node = store.ExecutorNode{NodeID: c.Run.ExecutorNodeID, Address: c.Run.ExecutorAddress}
 			}
+		} else if fixedExecutorForRecovery(c.Run, c.Job) {
+			node = store.ExecutorNode{NodeID: c.Run.ExecutorNodeID, Address: c.Run.ExecutorAddress}
 		} else if len(c.Run.OverrideAddresses) > 0 {
 			var labelErr error
 			requiredLabels, excludedLabels, labelErr = e.store.JobExecutorLabels(ctx, c.Job.ID)
@@ -307,7 +309,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			return
 		}
 		if e.executorGRPC != nil {
-			dispatchRequest := &executorv1.DispatchRequest{RunId: c.Run.ID, ExternalExecutionId: c.Run.ID, JobId: c.Job.ID, Attempt: c.Run.Attempt, Handler: c.Job.ExecutorHandler, Input: c.Run.RuntimeInput, CallbackToken: callbackToken, TimeoutSeconds: c.Job.TimeoutSeconds, BroadcastGroupId: c.Run.BroadcastGroupID, BroadcastIndex: c.Run.ShardIndex, BroadcastTotal: c.Run.ShardTotal, ScriptLanguage: c.Job.ScriptLanguage, ScriptSource: c.Job.ScriptSource}
+			dispatchRequest := &executorv1.DispatchRequest{RunId: c.Run.ID, ExternalExecutionId: c.Run.ExternalExecutionID, JobId: c.Job.ID, Attempt: c.Run.Attempt, Handler: c.Job.ExecutorHandler, Input: c.Run.RuntimeInput, CallbackToken: callbackToken, TimeoutSeconds: c.Job.TimeoutSeconds, BroadcastGroupId: c.Run.BroadcastGroupID, BroadcastIndex: c.Run.ShardIndex, BroadcastTotal: c.Run.ShardTotal, ScriptLanguage: c.Job.ScriptLanguage, ScriptSource: c.Job.ScriptSource}
 			if c.Job.DockerRegistryAuth.Configured {
 				dispatchRequest.DockerRegistryAuth = &executorv1.DockerRegistryAuth{Server: c.Job.DockerRegistryAuth.Server, Username: c.Job.DockerRegistryAuth.Username, Password: c.Job.DockerRegistryAuth.Password}
 			}
@@ -339,7 +341,7 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		}
 		targetURL = strings.TrimRight(node.Address, "/") + "/run"
 		method = http.MethodPost
-		runPayload := map[string]any{"run_id": c.Run.ID, "external_execution_id": c.Run.ID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource}
+		runPayload := map[string]any{"run_id": c.Run.ID, "external_execution_id": c.Run.ExternalExecutionID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource}
 		if c.Job.DockerRegistryAuth.Configured {
 			runPayload["docker_registry_auth"] = map[string]string{"server": c.Job.DockerRegistryAuth.Server, "username": c.Job.DockerRegistryAuth.Username, "password": c.Job.DockerRegistryAuth.Password}
 		}
@@ -478,6 +480,9 @@ func classifyRunFailure(err error) string {
 		return "timed_out"
 	}
 	return "failed"
+}
+func fixedExecutorForRecovery(run store.Run, job store.Job) bool {
+	return job.ScriptLanguage == "docker" && run.ExecutorAddress != ""
 }
 func shouldRetry(attempt, maxRetries int32) bool {
 	return attempt <= maxRetries

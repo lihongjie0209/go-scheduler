@@ -639,7 +639,7 @@ func toProto(j store.Job) *schedulerv1.Job {
 	return out
 }
 func runToProto(r store.Run) *schedulerv1.Run {
-	out := &schedulerv1.Run{Id: r.ID, TenantId: r.TenantID, JobId: r.JobID, Status: r.Status, Attempt: r.Attempt, ScheduledAt: timestamppb.New(r.ScheduledAt), ResponseStatus: r.ResponseStatus, ErrorMessage: r.ErrorMessage, ParentRunId: r.ParentRunID, RetryOfRunId: r.RetryOfRunID, TriggerType: r.TriggerType, ExecutorNodeId: r.ExecutorNodeID, ExecutorAddress: r.ExecutorAddress, BroadcastGroupId: r.BroadcastGroupID, ShardIndex: r.ShardIndex, ShardTotal: r.ShardTotal, OverrideAddresses: r.OverrideAddresses}
+	out := &schedulerv1.Run{Id: r.ID, TenantId: r.TenantID, JobId: r.JobID, Status: r.Status, Attempt: r.Attempt, ScheduledAt: timestamppb.New(r.ScheduledAt), ResponseStatus: r.ResponseStatus, ErrorMessage: r.ErrorMessage, ParentRunId: r.ParentRunID, RetryOfRunId: r.RetryOfRunID, TriggerType: r.TriggerType, ExecutorNodeId: r.ExecutorNodeID, ExecutorAddress: r.ExecutorAddress, BroadcastGroupId: r.BroadcastGroupID, ShardIndex: r.ShardIndex, ShardTotal: r.ShardTotal, OverrideAddresses: r.OverrideAddresses, ExternalExecutionId: r.ExternalExecutionID}
 	if r.StartedAt != nil {
 		out.StartedAt = timestamppb.New(*r.StartedAt)
 	}

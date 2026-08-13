@@ -44,3 +44,10 @@ func TestAllContainsEveryUpMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalExecutionIdentityMigrationBackfillsExistingRuns(t *testing.T) {
+	t.Parallel()
+	if !strings.Contains(ExternalExecutionIdentityUp, "UPDATE job_runs SET external_execution_id = id") || !strings.Contains(ExternalExecutionIdentityUp, "SET NOT NULL") {
+		t.Fatal("external execution identity migration must backfill and require every run identity")
+	}
+}

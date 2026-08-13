@@ -6,7 +6,32 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
+
+func TestFixedExecutorForRecovery(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		run  store.Run
+		job  store.Job
+		want bool
+	}{
+		{name: "Docker retry remains on owning node", run: store.Run{TriggerType: "retry", ExecutorAddress: "executor-a:9090"}, job: store.Job{ScriptLanguage: "docker"}, want: true},
+		{name: "reclaimed Docker run remains on owning node", run: store.Run{TriggerType: "manual", ExecutorAddress: "executor-a:9090"}, job: store.Job{ScriptLanguage: "docker"}, want: true},
+		{name: "new Docker run may be routed", run: store.Run{}, job: store.Job{ScriptLanguage: "docker"}},
+		{name: "Kubernetes recovery may move executors", run: store.Run{ExecutorAddress: "executor-a:9090"}, job: store.Job{ScriptLanguage: "kubernetes"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := fixedExecutorForRecovery(tt.run, tt.job); got != tt.want {
+				t.Fatalf("fixedExecutorForRecovery() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestClassifyRunFailure(t *testing.T) {
 	t.Parallel()
