@@ -16,6 +16,9 @@ func TestDockerfileRejectsArchitecturesWithoutPowerShellMuslBuild(t *testing.T) 
 	if !strings.Contains(content, `test "${TARGETARCH}" = "amd64"`) {
 		t.Fatal("executor Dockerfile does not reject unsupported PowerShell architectures")
 	}
+	if !strings.Contains(content, "ARG TARGETARCH=amd64") {
+		t.Fatal("executor Dockerfile does not default legacy builder architecture")
+	}
 	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "docker.yml"))
 	if err != nil {
 		t.Fatal(err)
