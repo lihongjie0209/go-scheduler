@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: scheduler-api}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: scheduler-api}}
+  template:
+    metadata: {labels: {app: scheduler-api}}
+    spec:
+      containers:
+        - name: api
+          image: scheduler-api:latest
+          ports: [{name: http, containerPort: 8080}]
+          envFrom: [{secretRef: {name: scheduler-secrets}}, {configMapRef: {name: scheduler-config}}]
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 10}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: scheduler-api}
+spec: {selector: {app: scheduler-api}, ports: [{name: http, port: 80, targetPort: http}]}

@@ -1,0 +1,219 @@
+syntax = "proto3";
+
+package scheduler.v1;
+
+option go_package = "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1;schedulerv1";
+
+import "google/protobuf/timestamp.proto";
+
+service SchedulerService {
+  rpc CreateJob(CreateJobRequest) returns (Job);
+  rpc GetJob(GetJobRequest) returns (Job);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc UpdateJob(UpdateJobRequest) returns (Job);
+  rpc ListJobScriptVersions(ListJobScriptVersionsRequest) returns (ListJobScriptVersionsResponse);
+  rpc RollbackJobScriptVersion(RollbackJobScriptVersionRequest) returns (Job);
+  rpc SetJobEnabled(SetJobEnabledRequest) returns (Job);
+  rpc DeleteJob(DeleteJobRequest) returns (DeleteJobResponse);
+  rpc TriggerJob(TriggerJobRequest) returns (Run);
+  rpc PreviewSchedule(PreviewScheduleRequest) returns (PreviewScheduleResponse);
+  rpc GetRun(GetRunRequest) returns (Run);
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+  rpc CancelRun(CancelRunRequest) returns (Run);
+  rpc SetJobDependencies(SetJobDependenciesRequest) returns (JobDependencies);
+  rpc GetJobDependencies(GetJobDependenciesRequest) returns (JobDependencies);
+  rpc CompleteCallback(CompleteCallbackRequest) returns (CompleteCallbackResponse);
+  rpc CreateExecutorGroup(CreateExecutorGroupRequest) returns (ExecutorGroup);
+  rpc UpdateExecutorGroup(UpdateExecutorGroupRequest) returns (ExecutorGroup);
+  rpc DeleteExecutorGroup(DeleteExecutorGroupRequest) returns (DeleteExecutorGroupResponse);
+  rpc ListExecutorGroups(ListExecutorGroupsRequest) returns (ListExecutorGroupsResponse);
+  rpc RegisterExecutorNode(RegisterExecutorNodeRequest) returns (ExecutorNode);
+  rpc UnregisterExecutorNode(UnregisterExecutorNodeRequest) returns (UnregisterExecutorNodeResponse);
+  rpc ListExecutorNodes(ListExecutorNodesRequest) returns (ListExecutorNodesResponse);
+  rpc AppendRunLogs(AppendRunLogsRequest) returns (AppendRunLogsResponse);
+  rpc ListRunLogs(ListRunLogsRequest) returns (ListRunLogsResponse);
+  rpc CreateNotificationChannel(CreateNotificationChannelRequest) returns (NotificationChannel);
+  rpc ListNotificationChannels(ListNotificationChannelsRequest) returns (ListNotificationChannelsResponse);
+  rpc GetRunReport(GetRunReportRequest) returns (RunReport);
+  rpc PurgeRunHistory(PurgeRunHistoryRequest) returns (PurgeRunHistoryResponse);
+}
+
+message Job {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string description = 4;
+  string schedule_type = 5;
+  string schedule_expression = 6;
+  string timezone = 7;
+  string target_url = 8;
+  string http_method = 9;
+  map<string, string> headers = 10;
+  string body_template = 11;
+  int32 timeout_seconds = 12;
+  int32 max_retries = 13;
+  string overlap_policy = 14;
+  string misfire_policy = 15;
+  bool enabled = 16;
+  google.protobuf.Timestamp next_run_at = 17;
+  int64 version = 18;
+  int32 max_concurrent_runs = 19;
+  int32 max_catch_up = 20;
+  int32 callback_timeout_seconds = 21;
+  int32 max_queue_size = 22;
+  string executor_group_id = 23;
+  string executor_handler = 24;
+  string script_language = 25;
+  string script_source = 26;
+}
+
+message CreateJobRequest { Job job = 1; }
+message GetJobRequest { string tenant_id = 1; string id = 2; }
+message ListJobsRequest { string tenant_id = 1; int32 limit = 2; string cursor = 3; }
+message ListJobsResponse { repeated Job jobs = 1; string next_cursor = 2; }
+message UpdateJobRequest { Job job = 1; }
+message JobScriptVersion {
+  string id = 1;
+  string job_id = 2;
+  int64 revision = 3;
+  string script_language = 4;
+  string script_source = 5;
+  string remark = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+message ListJobScriptVersionsRequest { string tenant_id = 1; string job_id = 2; }
+message ListJobScriptVersionsResponse { repeated JobScriptVersion versions = 1; }
+message RollbackJobScriptVersionRequest {
+  string tenant_id = 1;
+  string job_id = 2;
+  string version_id = 3;
+  int64 job_version = 4;
+  string remark = 5;
+}
+message SetJobEnabledRequest { string tenant_id = 1; string id = 2; bool enabled = 3; int64 version = 4; }
+message DeleteJobRequest { string tenant_id = 1; string id = 2; int64 version = 3; }
+message DeleteJobResponse {}
+message TriggerJobRequest { string tenant_id = 1; string job_id = 2; string idempotency_key = 3; string input = 4; repeated string override_addresses = 5; }
+message PreviewScheduleRequest {
+  string schedule_type = 1;
+  string schedule_expression = 2;
+  string timezone = 3;
+  google.protobuf.Timestamp after = 4;
+  int32 count = 5;
+}
+message PreviewScheduleResponse { repeated google.protobuf.Timestamp trigger_times = 1; }
+
+message Run {
+  string id = 1;
+  string tenant_id = 2;
+  string job_id = 3;
+  string status = 4;
+  int32 attempt = 5;
+  google.protobuf.Timestamp scheduled_at = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp finished_at = 8;
+  int32 response_status = 9;
+  string error_message = 10;
+  string parent_run_id = 11;
+  string retry_of_run_id = 12;
+  string trigger_type = 13;
+  string executor_node_id = 14;
+  string executor_address = 15;
+  string broadcast_group_id = 16;
+  int32 shard_index = 17;
+  int32 shard_total = 18;
+  repeated string override_addresses = 19;
+}
+
+message GetRunRequest { string tenant_id = 1; string run_id = 2; }
+message ListRunsRequest { string tenant_id = 1; string job_id = 2; int32 limit = 3; string broadcast_group_id = 4; }
+message ListRunsResponse { repeated Run runs = 1; }
+message CancelRunRequest { string tenant_id = 1; string run_id = 2; string reason = 3; }
+message SetJobDependenciesRequest { string tenant_id = 1; string parent_job_id = 2; repeated string child_job_ids = 3; }
+message GetJobDependenciesRequest { string tenant_id = 1; string parent_job_id = 2; }
+message JobDependencies { string parent_job_id = 1; repeated string child_job_ids = 2; }
+message CompleteCallbackRequest { string run_id = 1; string token = 2; bool succeeded = 3; string message = 4; }
+message CompleteCallbackResponse {}
+
+message ExecutorGroup {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string route_strategy = 4;
+  int64 version = 5;
+  string registration_mode = 6;
+  repeated string manual_addresses = 7;
+}
+message CreateExecutorGroupRequest { ExecutorGroup group = 1; }
+message UpdateExecutorGroupRequest { ExecutorGroup group = 1; }
+message DeleteExecutorGroupRequest { string tenant_id = 1; string id = 2; int64 version = 3; }
+message DeleteExecutorGroupResponse {}
+message ListExecutorGroupsRequest { string tenant_id = 1; }
+message ListExecutorGroupsResponse { repeated ExecutorGroup groups = 1; }
+message ExecutorNode {
+  string group_id = 1;
+  string node_id = 2;
+  string address = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  bool online = 6;
+  bool static = 7;
+}
+message RegisterExecutorNodeRequest {
+  string tenant_id = 1;
+  string group_id = 2;
+  string node_id = 3;
+  string address = 4;
+  int32 ttl_seconds = 5;
+}
+message UnregisterExecutorNodeRequest { string tenant_id = 1; string group_id = 2; string node_id = 3; }
+message UnregisterExecutorNodeResponse {}
+message ListExecutorNodesRequest { string tenant_id = 1; string group_id = 2; bool live_only = 3; }
+message ListExecutorNodesResponse { repeated ExecutorNode nodes = 1; }
+
+message RunLogInput { string entry_id = 1; string stream = 2; string content = 3; }
+message RunLogEntry {
+  int64 cursor = 1;
+  string entry_id = 2;
+  string stream = 3;
+  string content = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+message AppendRunLogsRequest { string run_id = 1; string token = 2; repeated RunLogInput entries = 3; }
+message AppendRunLogsResponse { int64 next_cursor = 1; }
+message ListRunLogsRequest { string tenant_id = 1; string run_id = 2; int64 after_cursor = 3; int32 limit = 4; }
+message ListRunLogsResponse { repeated RunLogEntry entries = 1; int64 next_cursor = 2; }
+
+message NotificationChannel { string id = 1; string tenant_id = 2; string kind = 3; string name = 4; bool configured = 5; }
+message CreateNotificationChannelRequest { string tenant_id = 1; string kind = 2; string name = 3; bytes config_json = 4; }
+message ListNotificationChannelsRequest { string tenant_id = 1; }
+message ListNotificationChannelsResponse { repeated NotificationChannel channels = 1; }
+
+message GetRunReportRequest {
+  string tenant_id = 1;
+  string from_date = 2;
+  string to_date = 3;
+  string timezone = 4;
+}
+message RunReportPoint {
+  string date = 1;
+  int64 total = 2;
+  int64 succeeded = 3;
+  int64 failed = 4;
+  int64 active = 5;
+  int64 cancelled = 6;
+  int64 skipped = 7;
+}
+message RunReport {
+  string from_date = 1;
+  string to_date = 2;
+  string timezone = 3;
+  repeated RunReportPoint points = 4;
+}
+message PurgeRunHistoryRequest {
+  string tenant_id = 1;
+  string job_id = 2;
+  google.protobuf.Timestamp before = 3;
+  int32 limit = 4;
+}
+message PurgeRunHistoryResponse { int64 deleted = 1; }

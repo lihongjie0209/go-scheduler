@@ -1,0 +1,360 @@
+openapi: 3.1.0
+info:
+  title: Go Scheduler API
+  version: 1.0.0
+  license: {name: Apache-2.0, identifier: Apache-2.0}
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /auth/login:
+    post:
+      summary: Log in with a local account
+      security: []
+      operationId: login
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginRequest'}}}}
+      responses: {'200': {description: Authenticated}, '401': {$ref: '#/components/responses/Unauthorized'}}
+  /auth/refresh:
+    post:
+      summary: Rotate the HttpOnly refresh session and issue an access token
+      security: []
+      operationId: refreshSession
+      responses: {'200': {description: Refreshed}, '401': {$ref: '#/components/responses/Unauthorized'}}
+  /auth/logout:
+    post: {summary: Revoke the refresh session, security: [], operationId: logout, responses: {'204': {description: Logged out}, '401': {$ref: '#/components/responses/Unauthorized'}}}
+  /auth/me:
+    get: {summary: Get the current user and accessible tenants, operationId: getCurrentUser, responses: {'200': {description: Current user}, '401': {$ref: '#/components/responses/Unauthorized'}}}
+  /dashboard:
+    get:
+      summary: Get tenant scheduling summary and upcoming jobs
+      operationId: getDashboard
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      responses: {'200': {description: Dashboard}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /reports/runs:
+    get:
+      operationId: getRunReport
+      summary: Daily run outcome trend
+      parameters:
+        - {name: from, in: query, schema: {type: string, format: date}}
+        - {name: to, in: query, schema: {type: string, format: date}}
+        - {name: timezone, in: query, schema: {type: string, default: UTC}}
+      responses: {'200': {description: Zero-filled daily run counts}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /jobs:
+    get:
+      summary: List tenant jobs
+      operationId: listJobs
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      responses: {'200': {description: Jobs}, '401': {$ref: '#/components/responses/Unauthorized'}}
+    post:
+      summary: Create a tenant job
+      operationId: createJob
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+      responses: {'201': {description: Created}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /jobs/{id}:
+    parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+    get: {summary: Get a tenant job, operationId: getJob, responses: {'200': {description: Job}, '404': {description: Not found}}}
+    put:
+      summary: Update a tenant job
+      operationId: updateJob
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+      responses: {'200': {description: Updated}, '409': {description: Version conflict}}
+    delete:
+      summary: Delete a tenant job
+      operationId: deleteJob
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [version], properties: {version: {type: integer, format: int64}}}}}}
+      responses: {'204': {description: Deleted}, '409': {description: Version conflict}}
+  /jobs/{id}/trigger:
+    post:
+      summary: Trigger a job manually
+      operationId: triggerJob
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {content: {application/json: {schema: {type: object, properties: {input: {type: string, maxLength: 1048576}, idempotency_key: {type: string, maxLength: 200}, override_addresses: {type: array, maxItems: 100, uniqueItems: true, items: {type: string, format: uri}, description: "Temporary executor addresses for this manual run"}}}}}}
+      responses: {'202': {description: Queued}, '404': {description: Job not found}}
+  /jobs/{id}/dependencies:
+    get:
+      summary: List child jobs triggered after this job succeeds
+      operationId: getJobDependencies
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Dependencies}, '404': {description: Parent job not found}}
+    put:
+      summary: Replace child job dependencies
+      description: Child jobs must belong to the same tenant. Self references and cycles are rejected.
+      operationId: setJobDependencies
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/JobDependenciesRequest'}}}}
+      responses: {'200': {description: Dependencies updated}, '404': {description: A job was not found}, '409': {description: Dependency cycle}}
+  /jobs/{id}/script-versions:
+    get:
+      summary: List immutable script source versions newest first
+      operationId: listJobScriptVersions
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: At most 100 script versions}, '404': {description: Script job not found}}
+  /jobs/{id}/script-versions/{versionID}/rollback:
+    post:
+      summary: Atomically restore a script version and create a new audit version
+      operationId: rollbackJobScriptVersion
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}, {name: versionID, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ScriptRollbackRequest'}}}}
+      responses: {'200': {description: Rolled back job}, '404': {description: Job or script version not found}, '409': {description: Job version conflict}}
+  /jobs/{id}/start:
+    post:
+      summary: Start scheduling a job without replacing its configuration
+      operationId: startJob
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/JobLifecycleRequest'}}}}
+      responses: {'200': {description: Started}, '404': {description: Job not found}, '409': {description: Version conflict}}
+  /jobs/{id}/stop:
+    post:
+      summary: Stop future scheduling without cancelling existing runs
+      operationId: stopJob
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/JobLifecycleRequest'}}}}
+      responses: {'200': {description: Stopped}, '404': {description: Job not found}, '409': {description: Version conflict}}
+  /runs:
+    get:
+      summary: List tenant runs
+      operationId: listRuns
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: job_id, in: query, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Runs}, '401': {$ref: '#/components/responses/Unauthorized'}}
+  /runs/purge:
+    post:
+      summary: Delete terminal run history in a bounded batch
+      description: Pending, running, and callback-waiting runs are never deleted. Associated rolling logs are removed atomically.
+      operationId: purgeRunHistory
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [before], properties: {before: {type: string, format: date-time}, job_id: {type: string, format: uuid}, limit: {type: integer, minimum: 1, maximum: 10000, default: 1000}}}}}}
+      responses: {'200': {description: Deleted count}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /runs/{id}:
+    get:
+      summary: Get one run including dependency and retry lineage
+      operationId: getRun
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Run}, '404': {description: Run not found}, '401': {$ref: '#/components/responses/Unauthorized'}}
+  /runs/{id}/cancel:
+    post:
+      summary: Cancel a pending, running, or callback-waiting run
+      description: Repeated cancellation is idempotent. Terminal runs cannot be changed.
+      operationId: cancelRun
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CancelRunRequest'}}}}
+      responses: {'200': {description: Cancelled}, '404': {description: Run not found}, '409': {description: Run is already terminal}}
+  /runs/{id}/logs:
+    get:
+      summary: Read rolling execution logs after a monotonic cursor
+      operationId: listRunLogs
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}, {name: after, in: query, schema: {type: integer, format: int64, minimum: 0, default: 0}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}]
+      responses: {'200': {description: Log page}, '404': {description: Run not found}}
+    post:
+      summary: Append executor log entries using the per-run token
+      operationId: appendRunLogs
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AppendRunLogsRequest'}}}}
+      responses: {'202': {description: Entries accepted}, '404': {description: Invalid or expired run token}}
+  /executor-groups:
+    get:
+      summary: List tenant executor groups
+      operationId: listExecutorGroups
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      responses: {'200': {description: Executor groups}}
+    post:
+      summary: Create an executor group
+      operationId: createExecutorGroup
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateExecutorGroupRequest'}}}}
+      responses: {'201': {description: Created}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /schedules/preview:
+    post:
+      summary: Preview future trigger times without persisting a job
+      operationId: previewSchedule
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PreviewScheduleRequest'}}}}
+      responses: {'200': {description: Future trigger times}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /executor-groups/{id}/nodes:
+    get:
+      summary: List live executor nodes
+      operationId: listExecutorNodes
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}, {name: live_only, in: query, schema: {type: boolean, default: true}}]
+      responses: {'200': {description: Executor nodes}}
+  /executor-groups/{id}:
+    put:
+      summary: Update an executor group and replace its manual addresses
+      operationId: updateExecutorGroup
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateExecutorGroupRequest'}}}}
+      responses: {'200': {description: Updated}, '400': {$ref: '#/components/responses/BadRequest'}, '409': {description: Version conflict}}
+    delete:
+      summary: Delete an unused executor group
+      operationId: deleteExecutorGroup
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}, {name: version, in: query, required: true, schema: {type: integer, format: int64, minimum: 1}}]
+      responses: {'204': {description: Deleted}, '409': {description: Version conflict or group is referenced by a job}}
+  /executor-groups/{id}/nodes/{nodeID}:
+    put:
+      summary: Register or heartbeat an executor node
+      operationId: registerExecutorNode
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}, {name: nodeID, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RegisterExecutorNodeRequest'}}}}
+      responses: {'200': {description: Registered}, '404': {description: Executor group not found}, '412': {description: Executor group uses manual registration}}
+    delete:
+      summary: Actively unregister a dynamic executor node
+      operationId: unregisterExecutorNode
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}, {name: nodeID, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: Unregistered or already absent}, '404': {description: Executor group not found}, '412': {description: Executor group uses manual registration}}
+  /callbacks/{runID}:
+    post:
+      summary: Complete an asynchronous run
+      security: []
+      operationId: completeCallback
+      parameters: [{name: runID, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Callback'}}}}
+      responses: {'200': {description: Completed}, '404': {description: "Invalid, expired, or consumed token"}}
+  /notification-channels:
+    get: {summary: List notification channels, operationId: listNotificationChannels, parameters: [{$ref: '#/components/parameters/Tenant'}], responses: {'200': {description: Channels}, '401': {$ref: '#/components/responses/Unauthorized'}}}
+    post:
+      summary: Create a webhook or email failure notification channel
+      operationId: createNotificationChannel
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateNotificationChannelRequest'}}}}
+      responses: {'201': {description: Created}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /api-keys:
+    get: {summary: List tenant API keys, operationId: listAPIKeys, parameters: [{$ref: '#/components/parameters/Tenant'}], responses: {'200': {description: API keys}, '403': {description: Tenant admin required}}}
+    post:
+      summary: Create a tenant API key
+      operationId: createAPIKey
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name, role], properties: {name: {type: string}, role: {type: string, enum: [owner, admin, developer, viewer]}}}}}}
+      responses: {'201': {description: Created; the token is returned only once}, '403': {description: Tenant admin required}}
+  /api-keys/{id}:
+    delete:
+      summary: Revoke a tenant API key
+      operationId: revokeAPIKey
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'204': {description: Revoked}, '404': {description: API key not found}}
+  /platform/users:
+    get: {summary: List local users, operationId: listUsers, responses: {'200': {description: Users}, '403': {description: Platform admin required}}}
+    post: {summary: Create a local user, operationId: createUser, responses: {'201': {description: Created}, '403': {description: Platform admin required}}}
+  /platform/users/{id}:
+    patch: {summary: Enable or disable a user, operationId: patchUser, parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'204': {description: Updated}, '403': {description: Platform admin required}}}
+  /platform/tenants:
+    get: {summary: List tenants, operationId: listTenants, responses: {'200': {description: Tenants}, '403': {description: Platform admin required}}}
+    post: {summary: Create a tenant, operationId: createTenant, responses: {'201': {description: Created}, '403': {description: Platform admin required}}}
+  /platform/instances:
+    get: {summary: List registered API and Core instances, operationId: listInstances, responses: {'200': {description: Instances}, '403': {description: Platform admin required}}}
+  /platform/tenants/{tenantID}/members:
+    get: {summary: List tenant members, operationId: listMembers, parameters: [{name: tenantID, in: path, required: true, schema: {type: string, format: uuid}}], responses: {'200': {description: Members}, '403': {description: Platform admin required}}}
+  /platform/tenants/{tenantID}/members/{userID}:
+    put:
+      summary: Set a tenant membership role
+      operationId: putMembership
+      parameters: [{name: tenantID, in: path, required: true, schema: {type: string, format: uuid}}, {name: userID, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'204': {description: Updated}, '403': {description: Platform admin required}}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, description: JWT access token or tenant API key}
+  parameters:
+    Tenant: {name: X-Tenant-ID, in: header, required: false, description: Required for JWT tenant operations; API keys imply a tenant, schema: {type: string, format: uuid}}
+  responses:
+    BadRequest: {description: Invalid request}
+    Unauthorized: {description: Invalid credentials}
+  schemas:
+    LoginRequest: {type: object, required: [email, password], properties: {email: {type: string, format: email}, password: {type: string, minLength: 12}}}
+    Callback: {type: object, required: [token, succeeded], properties: {token: {type: string}, succeeded: {type: boolean}, message: {type: string}}}
+    JobLifecycleRequest: {type: object, required: [version], properties: {version: {type: integer, format: int64, minimum: 1}}}
+    CancelRunRequest: {type: object, properties: {reason: {type: string, maxLength: 500, default: cancelled by operator}}}
+    AppendRunLogsRequest:
+      type: object
+      required: [token, entries]
+      properties:
+        token: {type: string}
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            required: [entry_id, stream, content]
+            properties: {entry_id: {type: string, minLength: 1, maxLength: 128}, stream: {type: string, enum: [stdout, stderr]}, content: {type: string, maxLength: 65536}}
+    CreateExecutorGroupRequest:
+      type: object
+      required: [name, route_strategy]
+      properties:
+        name: {type: string}
+        route_strategy: {type: string, enum: [first, last, round, random, hash, lfu, lru, failover, busyover, sharding_broadcast]}
+        registration_mode: {type: string, enum: [automatic, manual], default: automatic}
+        manual_addresses: {type: array, uniqueItems: true, items: {type: string, format: uri}}
+    PreviewScheduleRequest:
+      type: object
+      required: [schedule_type, schedule_expression]
+      properties:
+        schedule_type: {type: string, enum: [cron, once, fixed_interval, fixed_rate, fixed_delay]}
+        schedule_expression: {type: string}
+        timezone: {type: string, default: UTC}
+        after: {type: string, format: date-time}
+        count: {type: integer, minimum: 1, maximum: 100, default: 5}
+    UpdateExecutorGroupRequest:
+      allOf:
+        - {$ref: '#/components/schemas/CreateExecutorGroupRequest'}
+        - type: object
+          required: [version]
+          properties: {version: {type: integer, format: int64, minimum: 1}}
+    CreateNotificationChannelRequest:
+      type: object
+      required: [kind, name, config]
+      properties:
+        kind: {type: string, enum: [webhook, email]}
+        name: {type: string, minLength: 1}
+        config: {type: object, description: "Webhook requires url and optional headers; email requires a non-empty to array"}
+    RegisterExecutorNodeRequest:
+      type: object
+      required: [address, ttl_seconds]
+      properties: {address: {type: string, format: uri}, ttl_seconds: {type: integer, minimum: 5, maximum: 300}}
+    JobDependenciesRequest:
+      type: object
+      required: [child_job_ids]
+      properties:
+        child_job_ids: {type: array, maxItems: 100, uniqueItems: true, items: {type: string, format: uuid}}
+    ScriptRollbackRequest:
+      type: object
+      required: [version]
+      properties:
+        version: {type: integer, format: int64, minimum: 1, description: Expected current job version}
+        remark: {type: string, maxLength: 200}
+    JobScriptVersion:
+      type: object
+      required: [id, job_id, revision, script_language, script_source, remark, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        job_id: {type: string, format: uuid}
+        revision: {type: integer, format: int64, minimum: 1}
+        script_language: {type: string, enum: [shell, python, nodejs, php, powershell]}
+        script_source: {type: string, minLength: 1, maxLength: 1048576}
+        remark: {type: string, minLength: 1, maxLength: 200}
+        created_at: {type: string, format: date-time}
+    Job:
+      type: object
+      required: [name, schedule_type, schedule_expression]
+      properties:
+        id: {type: string, format: uuid, readOnly: true}
+        name: {type: string, maxLength: 200}
+        description: {type: string}
+        schedule_type: {type: string, enum: [cron, once, fixed_interval, fixed_rate, fixed_delay]}
+        schedule_expression: {type: string}
+        timezone: {type: string, default: UTC}
+        target_url: {type: string, format: uri}
+        executor_group_id: {type: string, format: uuid, description: When set, dispatch through a registered executor group instead of target_url}
+        executor_handler: {type: string, description: Required when executor_group_id is set}
+        script_language: {type: string, enum: [shell, python, nodejs, php, powershell], description: Script jobs require executor_handler=__script__}
+        script_source: {type: string, minLength: 1, maxLength: 1048576, description: Versioned script source dispatched only to a Script Executor}
+        http_method: {type: string, enum: [GET, POST, PUT, PATCH, DELETE]}
+        headers: {type: object, additionalProperties: {type: string}, writeOnly: true}
+        body_template: {type: string, description: "Supports only the '{{input}}' placeholder"}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 3600}
+        max_retries: {type: integer, minimum: 0, maximum: 20}
+        overlap_policy: {type: string, enum: [serial, discard_later, cover_early, parallel], description: "XXL-JOB-compatible blocking strategy; parallel is a Go Scheduler extension"}
+        misfire_policy: {type: string, enum: [skip, fire_once, catch_up]}
+        max_concurrent_runs: {type: integer, minimum: 1}
+        max_queue_size: {type: integer, minimum: 1, maximum: 100000}
+        max_catch_up: {type: integer, minimum: 1, maximum: 1000}
+        callback_timeout_seconds: {type: integer, minimum: 1, maximum: 86400}
+        enabled: {type: boolean}
+        version: {type: integer, format: int64}

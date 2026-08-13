@@ -1,0 +1,70 @@
+version: 2
+
+project_name: go-scheduler
+
+builds:
+  - id: scheduler-server
+    main: ./cmd/scheduler-server
+    binary: scheduler-server
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: [-s, -w]
+  - id: schedulerctl
+    main: ./cmd/schedulerctl
+    binary: schedulerctl
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: [-s, -w]
+  - id: api-server
+    main: ./cmd/api-server
+    binary: api-server
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: [-s, -w]
+  - id: scheduler-core
+    main: ./cmd/scheduler-core
+    binary: scheduler-core
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: [-s, -w]
+  - id: script-executor
+    main: ./cmd/script-executor
+    binary: script-executor
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: [-s, -w]
+  - id: migrate
+    main: ./cmd/migrate
+    binary: migrate
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: [-s, -w]
+  - id: bootstrap
+    main: ./cmd/bootstrap
+    binary: bootstrap
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: [-s, -w]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'

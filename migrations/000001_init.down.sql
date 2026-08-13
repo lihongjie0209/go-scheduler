@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS outbox_events;
+DROP TABLE IF EXISTS job_run_idempotency;
+DROP TABLE IF EXISTS job_runs;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS tenants;

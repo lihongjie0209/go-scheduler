@@ -1,0 +1,11 @@
+/bin/
+/dist/
+/scheduler-server
+/api-server
+/scheduler-core
+/schedulerctl
+/script-executor
+/migrate
+/bootstrap
+/.env
+/coverage.out

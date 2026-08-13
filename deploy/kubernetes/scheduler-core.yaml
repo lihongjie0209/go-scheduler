@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: scheduler-core}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: scheduler-core}}
+  template:
+    metadata: {labels: {app: scheduler-core}}
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: core
+          image: scheduler-core:latest
+          ports: [{name: grpc, containerPort: 9090}, {name: admin, containerPort: 8081}]
+          envFrom: [{secretRef: {name: scheduler-secrets}}, {configMapRef: {name: scheduler-config}}]
+          env:
+            - {name: INSTANCE_ID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}
+            - {name: ADVERTISE_GRPC_ADDRESS, value: scheduler-core:9090}
+          readinessProbe: {httpGet: {path: /health/ready, port: admin}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: admin}, periodSeconds: 10}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true}

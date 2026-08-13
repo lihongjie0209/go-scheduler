@@ -1,0 +1,36 @@
+services:
+  postgres:
+    build:
+      context: ..
+      dockerfile: deploy/postgres/Dockerfile
+      args: {POSTGRES_MAJOR: "16", PG_PARTMAN_VERSION: "5.5.0"}
+    image: go-scheduler-postgres:16-partman-5.5.0
+    environment: {POSTGRES_DB: scheduler, POSTGRES_USER: scheduler, POSTGRES_PASSWORD: scheduler}
+    healthcheck: {test: [CMD-SHELL, "pg_isready -U scheduler"], interval: 2s, timeout: 2s, retries: 20}
+    command: [postgres, -c, shared_preload_libraries=pg_partman_bgw, -c, pg_partman_bgw.dbname=scheduler, -c, pg_partman_bgw.role=scheduler, -c, pg_partman_bgw.interval=3600]
+  migrate:
+    build: {context: .., args: {TARGET: migrate}}
+    environment: {DATABASE_URL: "postgres://scheduler:scheduler@postgres:5432/scheduler?sslmode=disable"}
+    depends_on: {postgres: {condition: service_healthy}}
+  bootstrap:
+    build: {context: .., args: {TARGET: bootstrap}}
+    environment: &app-env
+      DATABASE_URL: "postgres://scheduler:scheduler@postgres:5432/scheduler?sslmode=disable"
+      SERVICE_TOKEN: "compose-internal-service-token-change-in-production"
+      MASTER_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      JWT_SECRET: "compose-jwt-secret-change-in-production-at-least-32-bytes"
+      TARGET_HOST_ALLOWLIST: "example.com,*.example.com"
+      TENANT_NAME: "演示租户"
+      ADMIN_EMAIL: "admin@example.com"
+      ADMIN_PASSWORD: "SchedulerDemo123!"
+    depends_on: {migrate: {condition: service_completed_successfully}}
+  scheduler-server:
+    build: {context: .., args: {TARGET: scheduler-server}}
+    environment:
+      <<: *app-env
+      HTTP_ADDRESS: ":8080"
+      PUBLIC_BASE_URL: "http://scheduler-server:8080"
+      COOKIE_SECURE: "false"
+      INSTANCE_ID: "standalone-compose-1"
+    depends_on: {bootstrap: {condition: service_completed_successfully}}
+    ports: ["18080:8080"]

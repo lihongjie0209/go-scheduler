@@ -1,0 +1,195 @@
+# Go Scheduler
+
+基于 Go、PostgreSQL 和 gRPC 的多租户 HTTP 定时任务平台后端。默认以单二进制模式运行，提供任务 CRUD、Cron/单次/固定间隔调度、手动触发、运行记录、执行租约和失败重试。
+
+## 组件
+
+- `scheduler-server`：默认部署入口；REST API 与调度 Core 位于同一进程，通过内存 gRPC 通信，不需要 etcd，也不开放 Core gRPC 端口。
+- `api-server` / `scheduler-core`：保留的分布式部署入口，需要 etcd 服务发现。
+- `schedulerctl`：面向开发和运维的 API 命令行客户端，支持账号密码、JWT 和 API Key 认证。
+- PostgreSQL：任务和运行状态的唯一事实来源。
+- etcd：仅在选择分布式入口时用于服务注册与发现。
+
+## 本地启动
+
+默认模式只需要 PostgreSQL。所有进程使用环境变量配置：
+
+```bash
+export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/scheduler?sslmode=disable'
+export SERVICE_TOKEN='replace-with-a-long-random-token'
+export MASTER_KEY="$(openssl rand -base64 32)"
+export JWT_SECRET="$(openssl rand -base64 48)"
+export TARGET_HOST_ALLOWLIST='example.com,*.example.org'
+
+make migrate-up
+TENANT_NAME=demo ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='replace-with-strong-password' go run ./cmd/bootstrap
+
+HTTP_ADDRESS=:8080 go run ./cmd/scheduler-server
+```
+
+项目不包含 Web UI，根路径返回 404；管理和运维使用 `schedulerctl` 或 `/api/v1` REST API。`make build` 会同时构建单进程服务、可选分布式服务、CLI 和 Script Executor。
+
+`bootstrap` 只显示一次 API Key。调用 REST API 时使用 `Authorization: Bearer <api_key>`。
+
+创建每 10 秒执行一次的任务：
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/jobs \
+  -H "Authorization: Bearer $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"demo","schedule_type":"cron","schedule_expression":"*/10 * * * * *","timezone":"Asia/Shanghai","target_url":"https://example.com/hook","http_method":"POST","enabled":true}'
+```
+
+## 关键配置
+
+| 环境变量 | 默认值 | 说明 |
+|---|---:|---|
+| `DATABASE_URL` | 必填 | PostgreSQL DSN |
+| `SERVICE_TOKEN` | 必填 | 内存或网络 gRPC 的 API/Core 共享令牌 |
+| `MASTER_KEY` | 必填 | Base64 编码的 32 字节 AES-GCM Header 加密主密钥 |
+| `MASTER_KEY_VERSION` | `1` | 主密钥版本号 |
+| `JWT_SECRET` | 必填 | 至少 32 字节的本地账号 JWT 签名密钥 |
+| `COOKIE_SECURE` | `true` | Refresh Cookie 是否仅通过 HTTPS 发送；仅本地 HTTP 开发设置为 `false` |
+| `PREVIOUS_SERVICE_TOKEN` | 空 | 轮换期间兼容旧令牌 |
+| `HTTP_ADDRESS` | `:8080` | API 监听地址 |
+| `PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | HTTP 任务异步回调使用的公开 API 地址 |
+| `WORKERS` | `16` | 单 Core 最大并发执行数 |
+| `HISTORY_RETENTION` | `2160h` | 历史记录和运行分区保留期，必须不超过 90 天 |
+| `TARGET_HOST_ALLOWLIST` | 必填 | 允许任务访问的精确域名或 `*.example.com` 通配域名 |
+| `SMTP_ADDRESS` | 空 | 邮件告警 SMTP 地址，例如 `smtp.example.com:587` |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | 空 | SMTP 凭据和发件人 |
+
+生产环境应为 PostgreSQL 和公开 HTTP API 配置 TLS；单进程模式的 gRPC 只走内存连接。任务目标默认拒绝私网、环回、链路本地和未指定地址，以降低 SSRF 风险。
+
+单进程模式仍保留 API/Core 的 protobuf 和 gRPC 边界，但使用 `bufconn` 内存传输，不涉及服务注册、网络监听和 TLS。需要 API/Core 独立扩缩容时可继续使用保留的分布式入口；它们通过 etcd 动态发现并依靠 PostgreSQL 行锁避免重复执行。
+
+`pg_partman` 是可选增强项。迁移会检测扩展是否存在且当前账号是否可安装：可用时配置月分区并由服务每小时调用 pg_partman maintenance；不可用时，迁移先创建近 90 天及未来 3 个月的月分区，Scheduler 再通过 PostgreSQL advisory lock 每小时续建并删除无活跃运行的过期分区。多个服务实例可以共享同一普通 PostgreSQL，不需要超级用户或 pg_partman。
+
+## Go Executor SDK
+
+`pkg/executor` 可将 Go 函数注册为命名 handler，并提供 Core 所需的 `/run`、`/health`、`/idle` 协议、TTL 心跳、同步或异步 callback 和 Rolling 日志。SDK 会隔离 handler panic，并限制 callback/log URL 与配置的 Scheduler 地址同源。
+
+```go
+server, _ := executor.NewServer(executor.Options{SchedulerURL: schedulerURL})
+_ = server.Handle("invoiceHandler", func(ctx context.Context, task executor.Task) error {
+    return task.Logger.Info("processing " + task.Input)
+})
+go http.ListenAndServe(":9999", server)
+```
+
+完整的 handler 与心跳注册示例见 [`pkg/executor`](pkg/executor)。
+
+## Script Executor
+
+Shell、Python、Node.js、PHP 与 PowerShell 脚本由独立 `script-executor` 执行，Scheduler Core 不加载解释器。脚本以版本化任务字段 `script_language`、`script_source` 保存，执行器使用固定解释器和 0700 临时文件，不拼接 shell 命令；任务输入通过 `SCHEDULER_INPUT` 环境变量传入。
+
+```bash
+docker build -f deploy/script-executor/Dockerfile -t go-scheduler-script-executor .
+docker run --rm -p 9999:9999 \
+  -e SCHEDULER_URL=http://scheduler-server:8080 \
+  -e SCHEDULER_TOKEN="$SCHEDULER_TOKEN" \
+  -e EXECUTOR_GROUP_ID="$GROUP_ID" \
+  -e EXECUTOR_NODE_ID=script-1 \
+  -e EXECUTOR_ADVERTISE_URL=http://script-executor:9999 \
+  go-scheduler-script-executor
+```
+
+脚本任务使用 `executor_handler: "__script__"`。默认允许 `shell,python,nodejs,php,powershell`，可通过 `SCRIPT_LANGUAGES` 收窄；源码及单次 stdout/stderr 总输出分别限制为 1 MiB，任务超时会终止整个脚本进程组。自建 Alpine 镜像固定安装 Python 3、Node.js 22、PHP 8.3 CLI 与 PowerShell 7.6.4；PowerShell 使用微软官方 Alpine tar.gz，构建时校验官方 SHA256。镜像和完整 use case Testcontainers 测试会真实执行这些运行时。
+
+## 命令行客户端
+
+```bash
+make build
+
+# 账号密码认证；JWT 仅保存在本次进程内
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --email admin@example.com --password 'SchedulerDemo123!' dashboard
+
+# API Key 或已有 JWT；API Key 自动携带所属租户
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs list
+
+# 主动摘除自动注册的执行器；SDK 正常退出时会自动执行，异常退出由 TTL 兜底
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" executors unregister "$GROUP_ID" "$NODE_ID"
+
+# 查询不可变脚本版本，并用任务乐观锁版本原子回滚
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs script-versions list "$JOB_ID"
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs script-versions rollback \
+  "$JOB_ID" "$SCRIPT_VERSION_ID" --version "$JOB_VERSION" --remark "restore stable"
+
+# 每日运行趋势；日期范围最多 90 天，默认最近 14 天 UTC
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" reports runs \
+  --from 2026-08-01 --to 2026-08-13 --timezone Asia/Shanghai
+
+# 分批清理指定任务的终态运行；不会删除 pending/running/waiting_callback
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" runs purge \
+  --before 2026-08-01T00:00:00Z --job "$JOB_ID" --limit 1000
+
+# 从 JSON 创建任务
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs create -f job.json
+
+# 使用 jobs get 返回的完整定义修改任务；version 用于乐观锁
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs update "$JOB_ID" -f updated-job.json
+
+# 原子启动/停止，不覆盖任务配置；version 来自 jobs get/list
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs start "$JOB_ID" --version 1
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs stop "$JOB_ID" --version 2
+
+# 终止待执行、运行中或等待异步回调的运行
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" runs cancel "$RUN_ID" --reason maintenance
+
+# 设置和查询父任务成功后的子任务
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs dependencies set "$PARENT_JOB_ID" \
+  --child "$CHILD_JOB_ID_1" --child "$CHILD_JOB_ID_2"
+./bin/schedulerctl --server http://127.0.0.1:18080 \
+  --token "$SCHEDULER_TOKEN" jobs dependencies get "$PARENT_JOB_ID"
+```
+
+调度核心采用四层测试：`make test` 运行代码级单元测试，`make integration-module` 运行 PostgreSQL/etcd 单模块 Testcontainers 测试，`make integration-cross` 运行 PostgreSQL + Core gRPC 跨模块测试，`make integration-usecase` 运行真实 `schedulerctl` 进程到 API、gRPC、Core 和 PostgreSQL 的完整用例。etcd 测试用于保留的分布式模式，默认单进程部署不启动 etcd。`make integration` 顺序执行后三层。
+
+任务的 `overlap_policy` 对齐 XXL-JOB 阻塞策略：`serial` 将后续运行排队，`discard_later` 将已有运行或排队时的新触发记为 `skipped`，`cover_early` 取消旧运行和队列后执行最新触发。`parallel` 是 Go Scheduler 保留的扩展策略。旧值 `queue`、`skip` 在 API 兼容期内分别规范化为 `serial`、`discard_later`。
+
+`runs cancel` 对取消操作保持幂等；运行中的 HTTP 请求会收到 context cancellation，等待异步回调的 token 会立即失效，已经成功、失败、超时或跳过的终态不会被改写。
+
+父任务只有在最终执行成功后才触发子任务，同步 HTTP 成功和异步 callback 成功采用相同语义。失败、取消或超时不会触发；每个父运行对每个子任务最多派发一次。依赖限制在同一租户内，并拒绝自依赖和有向环。子运行的 `trigger_type` 为 `dependency`，`parent_run_id` 可用于 CLI 链路追踪。
+
+失败重试与 XXL-JOB 一样为每次 attempt 创建独立运行记录，旧 attempt 保持 `failed` 或 `timed_out` 终态；新记录的 `trigger_type=retry`、`attempt` 递增，并通过 `retry_of_run_id` 连接。中间失败不产生最终告警，重试预算耗尽后才写入告警 outbox。可用 `schedulerctl runs get ID` 查询单次运行。
+
+任务可继续使用 `target_url` 直连，也可配置 `executor_group_id` 与 `executor_handler`。执行器通过 `schedulerctl executors register GROUP_ID NODE_ID --address URL --ttl 30` 周期心跳；Core 仅选择 TTL 内存活节点。组模式统一调用节点的 `POST /run`，运行记录包含 `executor_node_id` 和 `executor_address`。路由支持 FIRST、LAST、ROUND、RANDOM、HASH、LFU、LRU；HASH 与 XXL-JOB 一样使用 MD5 和每地址 100 个虚拟节点，ROUND/LFU/LRU 状态按 job 隔离并保存在 PostgreSQL，多个 Core 实例共享同一原子选路序列。
+
+执行器组也支持 XXL-JOB 的手工地址模式：`schedulerctl executors groups create --name static --strategy first --mode manual --address http://worker-a:9999 --address http://worker-b:9999`。手工地址会规范化、去重并持久化为静态节点，不需要心跳；使用 `executors groups update ID ... --version N` 原子替换地址，使用 `executors groups delete ID --version N` 删除未被任务引用的组。
+
+主动路由还支持 FAILOVER 和 BUSYOVER。执行器分别实现 `GET /health` 与 `POST /idle`（请求包含 `job_id`）：FAILOVER 选择首个健康节点，BUSYOVER 选择首个对该任务空闲的节点。探测按 node ID 稳定排序并逐节点限时执行，网络探测期间不持有 PostgreSQL 事务锁。
+
+分片广播使用 `sharding_broadcast` 路由策略。每次人工、定时或依赖触发都会对当前存活节点生成独立运行，下发 `broadcast_group_id`、`broadcast_index` 和 `broadcast_total`；动态节点按 node ID、手工节点按规范化地址稳定排序，失败重试固定在原节点和原分片。可通过 `schedulerctl runs --broadcast-group ID` 查看同一批广播及其重试轨迹。
+
+执行器派发数据还包含 `log_url` 和 `callback_token`。执行器可在运行期间向 `log_url` POST `{"token":"...","entries":[{"entry_id":"唯一且可重试","stream":"stdout","content":"..."}]}` 追加 Rolling 日志；每批最多 100 条、单条最多 64 KiB。通过 `schedulerctl runs logs RUN_ID` 分页读取，或使用 `--follow` 持续跟随。
+
+周期调度支持 `fixed_rate` 与 `fixed_delay`，表达式均为正整数秒。`fixed_rate` 按原计划时刻推进；`fixed_delay` 等当前计划运行及其全部 retry/广播分片终止后，再从最终完成时刻计算下一次。旧的 `fixed_interval` 继续作为 `fixed_rate` 兼容类型。
+
+Cron 使用包含秒字段的 6 字段表达式，并按任务配置的 IANA 时区计算。兼容 XXL-JOB 的 Quartz 日历语义：`?`、月末 `L/L-n`、最近工作日 `nW/LW/L-nW`、最后一个指定星期 `nL` 和第 n 个指定星期 `n#1..5`。数字星期采用 Quartz 编号 `1=SUN` 到 `7=SAT`，例如 `0 0 9 ? * 2#1` 表示每月第一个星期一 09:00。
+
+保存任务前可使用 `schedulerctl jobs preview --type cron --expression '0 0 9 L * ?' --timezone Asia/Shanghai --count 5` 预览未来触发时间。`--after` 接受 RFC3339；默认从当前时间开始，默认返回 5 次、最多 100 次，调用不会创建任务或运行记录。
+
+调度中心恢复时，`misfire_policy=skip` 忽略停机期间的计划，`fire_once` 在恢复时执行一次；扩展策略 `catch_up` 按原历史计划时刻补跑，并由 `max_catch_up` 限制单次恢复数量。所有策略都会把下一次计划推进到未来，避免反复处理同一批积压。
+
+人工触发可使用 `schedulerctl jobs trigger JOB_ID --idempotency-key KEY --input VALUE`。同一租户、任务和幂等键即使并发提交，也只创建并执行一次，后续请求返回首次运行及首次参数对应的结果；幂等键最多 200 字节，运行参数最多 1 MiB。
+
+需要临时绕过执行器组注册地址时，可重复传入 `--address`：`schedulerctl jobs trigger JOB_ID --address http://worker-a:9999 --address http://worker-b:9999`。覆盖地址只对该人工运行及其 retry 生效，不修改执行器组；仍按任务组的 FIRST/ROUND/LFU 等策略路由，分片广播会按覆盖地址生成分片。同一幂等键始终沿用首次提交的地址集合。
+
+执行目标返回 HTTP 202 时，Core 将运行置为 `waiting_callback`，目标随后使用派发头中的 callback URL 和一次性 token 报告结果。失败回调或超过 `callback_timeout_seconds` 未回调时，同样遵守 `max_retries`：每次创建独立 retry attempt 并指数退避，只有预算耗尽后的最终失败才告警。已消费、过期或取消运行的 token 返回 404。
+
+最终失败告警支持 webhook 和 email。使用 `schedulerctl notifications create --kind webhook --name ops --config '{"url":"https://hooks.example.com/job"}'` 创建渠道，或用 `--kind email --config '{"to":["ops@example.com"]}'` 创建邮件渠道。重试中的 attempt 不告警；耗尽重试后，每个渠道独立可靠投递和指数退避，已成功渠道不会因其他渠道失败而重发。
+
+所有全局参数都有同名环境变量：`SCHEDULER_URL`、`SCHEDULER_TOKEN`、`SCHEDULER_EMAIL`、`SCHEDULER_PASSWORD`、`SCHEDULER_TENANT`。自动化环境建议使用 `--password-stdin` 或 `SCHEDULER_TOKEN`，避免密码进入 shell 历史。运行 `schedulerctl --help` 查看任务、运行记录、触发、删除、健康检查和补全命令。
