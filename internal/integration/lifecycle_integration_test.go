@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
 	apihttp "github.com/lihongjie0209/go-scheduler/internal/api"
 	"github.com/lihongjie0209/go-scheduler/internal/auth"
@@ -58,6 +59,16 @@ type haCoreNode struct {
 	store *store.Store
 	calls atomic.Int32
 	stop  func()
+}
+
+type cancellationRecordingExecutor struct {
+	executorv1.UnimplementedExecutorServiceServer
+	requests chan *executorv1.CancelRequest
+}
+
+func (e *cancellationRecordingExecutor) Cancel(_ context.Context, request *executorv1.CancelRequest) (*executorv1.CancelResponse, error) {
+	e.requests <- request
+	return &executorv1.CancelResponse{Accepted: true}, nil
 }
 
 func newEtcdFixture(t *testing.T) *clientv3.Client {
@@ -832,6 +843,53 @@ func TestCrossModuleCancelRunThroughGRPC(t *testing.T) {
 	claims, err := fixture.store.ClaimRuns(t.Context(), "cross-cancel-core", 10, time.Minute)
 	if err != nil || len(claims) != 0 {
 		t.Fatalf("cancelled run was claimable: %+v, %v", claims, err)
+	}
+}
+
+func TestCancelRunStopsAssignedGRPCExecutor(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+	executorListener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executorServer := grpc.NewServer()
+	recorder := &cancellationRecordingExecutor{requests: make(chan *executorv1.CancelRequest, 1)}
+	executorv1.RegisterExecutorServiceServer(executorServer, recorder)
+	go func() { _ = executorServer.Serve(executorListener) }()
+	defer executorServer.Stop()
+	defer func() { _ = executorListener.Close() }()
+
+	controller := core.NewExecutorController("internal-token", insecure.NewCredentials())
+	defer controller.Close()
+	service := core.NewServiceWithExecutorController(fixture.store, fixture.store, controller)
+	job := createPolicyJob(t, fixture, "cancel-executor", "serial")
+	run, err := fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "cancel-executor", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := fixture.store.ClaimRuns(t.Context(), "cancel-core", 1, time.Minute)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim run: count=%d err=%v", len(claims), err)
+	}
+	tokenHash := sha256.Sum256([]byte("callback-token"))
+	if err = fixture.store.PrepareClaimedExecutorDispatch(t.Context(), claims[0].Run, "executor-1", executorListener.Addr().String(), tokenHash[:], time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := service.CancelRun(t.Context(), &schedulerv1.CancelRunRequest{TenantId: fixture.tenantID, RunId: run.ID, Reason: "operator requested"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.GetStatus() != "cancelled" {
+		t.Fatalf("cancelled status = %q", cancelled.GetStatus())
+	}
+	select {
+	case request := <-recorder.requests:
+		if request.GetRunId() != run.ID || request.GetReason() != "operator requested" {
+			t.Fatalf("cancel request = %+v", request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assigned executor did not receive cancellation")
 	}
 }
 

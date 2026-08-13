@@ -55,6 +55,14 @@ func WithExecutorGRPCTransport(token string, transport credentials.TransportCred
 	return func(engine *Engine) { engine.executorGRPC = newExecutorGRPCPoolWithTransport(token, transport) }
 }
 
+func WithExecutorController(controller *ExecutorController) EngineOption {
+	return func(engine *Engine) {
+		if controller != nil {
+			engine.executorGRPC = controller.pool
+		}
+	}
+}
+
 func NewEngine(s *store.Store, owner string, interval time.Duration, workers int, publicBaseURL string, historyRetention time.Duration, _ []string, options ...EngineOption) *Engine {
 	engine := &Engine{store: s, owner: owner, interval: interval, workers: workers, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), historyRetention: historyRetention, dispatchWake: make(chan struct{}, 1)}
 	for _, option := range options {

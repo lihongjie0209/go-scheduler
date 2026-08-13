@@ -111,6 +111,36 @@ func (p *executorGRPCPool) dispatch(ctx context.Context, address string, request
 	return nil
 }
 
+func (p *executorGRPCPool) cancel(ctx context.Context, address, runID, reason string) error {
+	client, release, err := p.acquire(address)
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = client.Cancel(ctx, &executorv1.CancelRequest{RunId: runID, Reason: reason})
+	if err != nil {
+		return fmt.Errorf("cancel executor run: %w", err)
+	}
+	return nil
+}
+
+// ExecutorController owns pooled gRPC connections to executor nodes. It is
+// shared by the scheduler API and engine so cancellation and dispatch use the
+// same authentication and transport settings.
+type ExecutorController struct {
+	pool *executorGRPCPool
+}
+
+func NewExecutorController(token string, transport credentials.TransportCredentials) *ExecutorController {
+	return &ExecutorController{pool: newExecutorGRPCPoolWithTransport(token, transport)}
+}
+
+func (c *ExecutorController) Cancel(ctx context.Context, address, runID, reason string) error {
+	return c.pool.cancel(ctx, address, runID, reason)
+}
+
+func (c *ExecutorController) Close() { c.pool.close() }
+
 func (p *executorGRPCPool) close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

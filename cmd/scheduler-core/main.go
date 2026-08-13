@@ -30,7 +30,7 @@ import (
 
 func Run() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	fx.New(fx.Provide(loadConfig, newStore, newEtcd, newExecutorRegistry, newCoreService, newGRPCServer, newRegistrar, newEngine, newNotifier, newCoreHTTPServer), fx.Invoke(registerDatabasePoolMetrics, run)).Run()
+	fx.New(fx.Provide(loadConfig, newStore, newEtcd, newExecutorRegistry, newExecutorController, newCoreService, newGRPCServer, newRegistrar, newEngine, newNotifier, newCoreHTTPServer), fx.Invoke(registerDatabasePoolMetrics, run)).Run()
 }
 func loadConfig() (config.Config, error) { return config.Load("scheduler-core") }
 func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
@@ -66,8 +66,15 @@ func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
 func newExecutorRegistry(c config.Config, client *clientv3.Client, s *store.Store) core.ExecutorRegistry {
 	return discovery.NewExecutorRegistry(client, c.EtcdPrefix, s)
 }
-func newCoreService(s *store.Store, registry core.ExecutorRegistry) *core.Service {
-	return core.NewService(s, registry)
+func newExecutorController(c config.Config) (*core.ExecutorController, error) {
+	transport, err := rpc.ClientTransportCredentials(c.ExecutorGRPCTLSCA, c.ExecutorGRPCTLSServerName)
+	if err != nil {
+		return nil, err
+	}
+	return core.NewExecutorController(c.ServiceToken, transport), nil
+}
+func newCoreService(s *store.Store, registry core.ExecutorRegistry, controller *core.ExecutorController) *core.Service {
+	return core.NewServiceWithExecutorController(s, registry, controller)
 }
 func newGRPCServer(c config.Config, svc *core.Service) (*grpc.Server, error) {
 	opts := []grpc.ServerOption{grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(c.ServiceToken, c.PreviousToken))}
@@ -88,12 +95,8 @@ func newGRPCServer(c config.Config, svc *core.Service) (*grpc.Server, error) {
 func newRegistrar(c config.Config, client *clientv3.Client) (*discovery.Registrar, error) {
 	return discovery.NewRegistrar(client, c.EtcdPrefix, "scheduler-core", discovery.Metadata{InstanceID: c.InstanceID, GRPCAddress: c.AdvertiseGRPC, Version: "dev", StartedAt: time.Now().UTC()})
 }
-func newEngine(c config.Config, s *store.Store) (*core.Engine, error) {
-	transport, err := rpc.ClientTransportCredentials(c.ExecutorGRPCTLSCA, c.ExecutorGRPCTLSServerName)
-	if err != nil {
-		return nil, err
-	}
-	return core.NewEngine(s, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorGRPCTransport(c.ServiceToken, transport)), nil
+func newEngine(c config.Config, s *store.Store, controller *core.ExecutorController) (*core.Engine, error) {
+	return core.NewEngine(s, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorController(controller)), nil
 }
 func newNotifier(c config.Config, s *store.Store) *notifier.Worker {
 	return notifier.New(s, c.InstanceID, notifier.SMTPConfig{Address: c.SMTPAddress, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.SMTPFrom, TLSMode: c.SMTPTLSMode})

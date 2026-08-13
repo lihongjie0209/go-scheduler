@@ -35,6 +35,7 @@ func Run() {
 			newStoreCipher,
 			newAPIStore,
 			newCoreStore,
+			newExecutorController,
 			newCoreService,
 			newGRPCServer,
 			newInProcessScheduler,
@@ -87,7 +88,17 @@ func newCoreStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher) (
 	return &coreStore{Store: s}, nil
 }
 
-func newCoreService(s *coreStore) *core.Service { return core.NewService(s.Store) }
+func newExecutorController(c config.Config) (*core.ExecutorController, error) {
+	transport, err := rpc.ClientTransportCredentials(c.ExecutorGRPCTLSCA, c.ExecutorGRPCTLSServerName)
+	if err != nil {
+		return nil, err
+	}
+	return core.NewExecutorController(c.ServiceToken, transport), nil
+}
+
+func newCoreService(s *coreStore, controller *core.ExecutorController) *core.Service {
+	return core.NewServiceWithExecutorController(s.Store, s.Store, controller)
+}
 
 func newGRPCServer(c config.Config, service *core.Service) (*grpc.Server, error) {
 	options := []grpc.ServerOption{grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(c.ServiceToken, c.PreviousToken))}
@@ -150,12 +161,8 @@ func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s
 	}
 }
 
-func newEngine(c config.Config, s *coreStore) (*core.Engine, error) {
-	transport, err := rpc.ClientTransportCredentials(c.ExecutorGRPCTLSCA, c.ExecutorGRPCTLSServerName)
-	if err != nil {
-		return nil, err
-	}
-	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorGRPCTransport(c.ServiceToken, transport)), nil
+func newEngine(c config.Config, s *coreStore, controller *core.ExecutorController) (*core.Engine, error) {
+	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorController(controller)), nil
 }
 
 func newNotifier(c config.Config, s *coreStore) *notifier.Worker {

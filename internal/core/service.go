@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -24,6 +25,7 @@ type Service struct {
 	schedulerv1.UnimplementedSchedulerServiceServer
 	store            *store.Store
 	executorRegistry ExecutorRegistry
+	executorControl  *ExecutorController
 }
 
 func NewService(s *store.Store, registries ...ExecutorRegistry) *Service {
@@ -32,6 +34,12 @@ func NewService(s *store.Store, registries ...ExecutorRegistry) *Service {
 		registry = registries[0]
 	}
 	return &Service{store: s, executorRegistry: registry}
+}
+
+func NewServiceWithExecutorController(s *store.Store, registry ExecutorRegistry, controller *ExecutorController) *Service {
+	service := NewService(s, registry)
+	service.executorControl = controller
+	return service
 }
 
 func (s *Service) CreateJob(ctx context.Context, req *schedulerv1.CreateJobRequest) (*schedulerv1.Job, error) {
@@ -399,6 +407,14 @@ func (s *Service) CancelRun(ctx context.Context, req *schedulerv1.CancelRunReque
 	run, err := s.store.CancelRun(ctx, req.GetTenantId(), req.GetRunId(), reason)
 	if err != nil {
 		return nil, toStatus(err)
+	}
+	if s.executorControl != nil && run.ExecutorAddress != "" {
+		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		cancelErr := s.executorControl.Cancel(cancelCtx, run.ExecutorAddress, run.ID, reason)
+		cancel()
+		if cancelErr != nil {
+			slog.Warn("cancel executor run failed", "run_id", run.ID, "executor_address", run.ExecutorAddress, "error", cancelErr)
+		}
 	}
 	return runToProto(run), nil
 }
