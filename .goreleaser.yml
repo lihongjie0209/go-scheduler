@@ -6,27 +6,48 @@ builds:
   - id: scheduler
     main: ./cmd/scheduler
     binary: scheduler
-    env: [CGO_ENABLED=0]
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
-    ldflags: [-s, -w, -X main.version={{.Version}}]
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s
+      - -w
+      - -X main.version={{.Version}}
   - id: schedulerctl
     main: ./cmd/schedulerctl
     binary: schedulerctl
-    env: [CGO_ENABLED=0]
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
-    ldflags: [-s, -w]
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s
+      - -w
 
 archives:
   - id: tools
-    builds: [scheduler, schedulerctl]
+    builds:
+      - scheduler
+      - schedulerctl
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    formats: [tar.gz]
+    formats:
+      - tar.gz
     format_overrides:
       - goos: windows
-        formats: [zip]
+        formats:
+          - zip
 
 checksum:
   name_template: checksums.txt
