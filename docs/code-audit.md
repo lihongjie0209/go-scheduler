@@ -105,6 +105,10 @@ Migration 23 增加：
 | 中 | 匿名登录请求可持续消耗 Argon2 CPU | 增加有界的来源 IP + 邮箱窗口限流，成功后重置 |
 | 高 | 并发 owner 删除破坏授权治理不变量 | PostgreSQL 事务和 tenant 行锁 |
 | 中 | 非法布尔/整数/Duration 环境变量静默回退 | 启动边界严格校验 |
+| 高 | `all_jobs=true` 携带其他租户 `job_ids` 可绕过任务归属校验并回显 UUID | Core/Store 双层拒绝矛盾范围，增加跨租户 Testcontainers 断言 |
+| 中 | 通知租约过期后旧 Worker 可覆盖新 Worker 状态 | 所有完成、重试和死信回写增加 owner + lease fencing |
+| 中 | Webhook/DingTalk 网络错误可能把 URL Token 持久化到通知历史 | 网络错误脱敏，持久化错误限制为合法 UTF-8 的 4 KiB |
+| 中 | 通知渠道无法更新、停用或删除，只能直接修改数据库 | migration 26 增加版本和软删除，提供 gRPC/REST/CLI 完整生命周期管理 |
 
 `govulncheck v1.6.0 ./...` 未发现可达漏洞。依赖图中存在 19 个模块级公告，但当前代码没有调用受影响符号；仍应由 CI 在每次依赖更新后复查。
 

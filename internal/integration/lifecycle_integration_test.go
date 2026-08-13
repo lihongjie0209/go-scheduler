@@ -746,12 +746,27 @@ func TestCrossModuleNotificationChannelsThroughGRPC(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
 	created, err := fixture.client.CreateNotificationChannel(t.Context(), &schedulerv1.CreateNotificationChannelRequest{TenantId: fixture.tenantID, Kind: "webhook", Name: "grpc-alerts", ConfigJson: []byte(`{"url":"https://alerts.example.com/hook"}`)})
-	if err != nil || created.Id == "" || created.Kind != "webhook" || !created.Configured {
+	if err != nil || created.Id == "" || created.Kind != "webhook" || !created.Configured || !created.Enabled || created.Version != 1 {
 		t.Fatalf("created channel = %+v, %v", created, err)
 	}
+	updated, err := fixture.client.UpdateNotificationChannel(t.Context(), &schedulerv1.UpdateNotificationChannelRequest{Id: created.Id, TenantId: fixture.tenantID, Kind: "webhook", Name: "grpc-alerts-updated", ConfigJson: []byte(`{"url":"https://alerts.example.com/updated"}`), Events: []string{"failed"}, AllJobs: true, MaxAttempts: 4, BackoffInitialSeconds: 3, BackoffMaxSeconds: 60, Version: created.Version})
+	if err != nil || updated.Name != "grpc-alerts-updated" || updated.Version != 2 {
+		t.Fatalf("updated channel = %+v, %v", updated, err)
+	}
+	disabled, err := fixture.client.SetNotificationChannelEnabled(t.Context(), &schedulerv1.SetNotificationChannelEnabledRequest{Id: created.Id, TenantId: fixture.tenantID, Enabled: false, Version: updated.Version})
+	if err != nil || disabled.Enabled || disabled.Version != 3 {
+		t.Fatalf("disabled channel = %+v, %v", disabled, err)
+	}
 	listed, err := fixture.client.ListNotificationChannels(t.Context(), &schedulerv1.ListNotificationChannelsRequest{TenantId: fixture.tenantID})
-	if err != nil || len(listed.Channels) != 1 || listed.Channels[0].Id != created.Id {
+	if err != nil || len(listed.Channels) != 1 || listed.Channels[0].Id != created.Id || listed.Channels[0].Enabled {
 		t.Fatalf("listed channels = %+v, %v", listed, err)
+	}
+	if _, err = fixture.client.DeleteNotificationChannel(t.Context(), &schedulerv1.DeleteNotificationChannelRequest{Id: created.Id, TenantId: fixture.tenantID, Version: disabled.Version}); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = fixture.client.ListNotificationChannels(t.Context(), &schedulerv1.ListNotificationChannelsRequest{TenantId: fixture.tenantID})
+	if err != nil || len(listed.Channels) != 0 {
+		t.Fatalf("channels after delete = %+v, %v", listed, err)
 	}
 }
 

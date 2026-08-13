@@ -19,36 +19,39 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SchedulerService_CreateJob_FullMethodName                 = "/scheduler.v1.SchedulerService/CreateJob"
-	SchedulerService_GetJob_FullMethodName                    = "/scheduler.v1.SchedulerService/GetJob"
-	SchedulerService_ListJobs_FullMethodName                  = "/scheduler.v1.SchedulerService/ListJobs"
-	SchedulerService_UpdateJob_FullMethodName                 = "/scheduler.v1.SchedulerService/UpdateJob"
-	SchedulerService_ListJobScriptVersions_FullMethodName     = "/scheduler.v1.SchedulerService/ListJobScriptVersions"
-	SchedulerService_RollbackJobScriptVersion_FullMethodName  = "/scheduler.v1.SchedulerService/RollbackJobScriptVersion"
-	SchedulerService_SetJobEnabled_FullMethodName             = "/scheduler.v1.SchedulerService/SetJobEnabled"
-	SchedulerService_DeleteJob_FullMethodName                 = "/scheduler.v1.SchedulerService/DeleteJob"
-	SchedulerService_TriggerJob_FullMethodName                = "/scheduler.v1.SchedulerService/TriggerJob"
-	SchedulerService_PreviewSchedule_FullMethodName           = "/scheduler.v1.SchedulerService/PreviewSchedule"
-	SchedulerService_GetRun_FullMethodName                    = "/scheduler.v1.SchedulerService/GetRun"
-	SchedulerService_ListRuns_FullMethodName                  = "/scheduler.v1.SchedulerService/ListRuns"
-	SchedulerService_CancelRun_FullMethodName                 = "/scheduler.v1.SchedulerService/CancelRun"
-	SchedulerService_SetJobDependencies_FullMethodName        = "/scheduler.v1.SchedulerService/SetJobDependencies"
-	SchedulerService_GetJobDependencies_FullMethodName        = "/scheduler.v1.SchedulerService/GetJobDependencies"
-	SchedulerService_CompleteCallback_FullMethodName          = "/scheduler.v1.SchedulerService/CompleteCallback"
-	SchedulerService_CreateExecutorGroup_FullMethodName       = "/scheduler.v1.SchedulerService/CreateExecutorGroup"
-	SchedulerService_UpdateExecutorGroup_FullMethodName       = "/scheduler.v1.SchedulerService/UpdateExecutorGroup"
-	SchedulerService_DeleteExecutorGroup_FullMethodName       = "/scheduler.v1.SchedulerService/DeleteExecutorGroup"
-	SchedulerService_ListExecutorGroups_FullMethodName        = "/scheduler.v1.SchedulerService/ListExecutorGroups"
-	SchedulerService_RegisterExecutorNode_FullMethodName      = "/scheduler.v1.SchedulerService/RegisterExecutorNode"
-	SchedulerService_UnregisterExecutorNode_FullMethodName    = "/scheduler.v1.SchedulerService/UnregisterExecutorNode"
-	SchedulerService_ListExecutorNodes_FullMethodName         = "/scheduler.v1.SchedulerService/ListExecutorNodes"
-	SchedulerService_AppendRunLogs_FullMethodName             = "/scheduler.v1.SchedulerService/AppendRunLogs"
-	SchedulerService_ListRunLogs_FullMethodName               = "/scheduler.v1.SchedulerService/ListRunLogs"
-	SchedulerService_CreateNotificationChannel_FullMethodName = "/scheduler.v1.SchedulerService/CreateNotificationChannel"
-	SchedulerService_ListNotificationChannels_FullMethodName  = "/scheduler.v1.SchedulerService/ListNotificationChannels"
-	SchedulerService_ListNotificationHistory_FullMethodName   = "/scheduler.v1.SchedulerService/ListNotificationHistory"
-	SchedulerService_GetRunReport_FullMethodName              = "/scheduler.v1.SchedulerService/GetRunReport"
-	SchedulerService_PurgeRunHistory_FullMethodName           = "/scheduler.v1.SchedulerService/PurgeRunHistory"
+	SchedulerService_CreateJob_FullMethodName                     = "/scheduler.v1.SchedulerService/CreateJob"
+	SchedulerService_GetJob_FullMethodName                        = "/scheduler.v1.SchedulerService/GetJob"
+	SchedulerService_ListJobs_FullMethodName                      = "/scheduler.v1.SchedulerService/ListJobs"
+	SchedulerService_UpdateJob_FullMethodName                     = "/scheduler.v1.SchedulerService/UpdateJob"
+	SchedulerService_ListJobScriptVersions_FullMethodName         = "/scheduler.v1.SchedulerService/ListJobScriptVersions"
+	SchedulerService_RollbackJobScriptVersion_FullMethodName      = "/scheduler.v1.SchedulerService/RollbackJobScriptVersion"
+	SchedulerService_SetJobEnabled_FullMethodName                 = "/scheduler.v1.SchedulerService/SetJobEnabled"
+	SchedulerService_DeleteJob_FullMethodName                     = "/scheduler.v1.SchedulerService/DeleteJob"
+	SchedulerService_TriggerJob_FullMethodName                    = "/scheduler.v1.SchedulerService/TriggerJob"
+	SchedulerService_PreviewSchedule_FullMethodName               = "/scheduler.v1.SchedulerService/PreviewSchedule"
+	SchedulerService_GetRun_FullMethodName                        = "/scheduler.v1.SchedulerService/GetRun"
+	SchedulerService_ListRuns_FullMethodName                      = "/scheduler.v1.SchedulerService/ListRuns"
+	SchedulerService_CancelRun_FullMethodName                     = "/scheduler.v1.SchedulerService/CancelRun"
+	SchedulerService_SetJobDependencies_FullMethodName            = "/scheduler.v1.SchedulerService/SetJobDependencies"
+	SchedulerService_GetJobDependencies_FullMethodName            = "/scheduler.v1.SchedulerService/GetJobDependencies"
+	SchedulerService_CompleteCallback_FullMethodName              = "/scheduler.v1.SchedulerService/CompleteCallback"
+	SchedulerService_CreateExecutorGroup_FullMethodName           = "/scheduler.v1.SchedulerService/CreateExecutorGroup"
+	SchedulerService_UpdateExecutorGroup_FullMethodName           = "/scheduler.v1.SchedulerService/UpdateExecutorGroup"
+	SchedulerService_DeleteExecutorGroup_FullMethodName           = "/scheduler.v1.SchedulerService/DeleteExecutorGroup"
+	SchedulerService_ListExecutorGroups_FullMethodName            = "/scheduler.v1.SchedulerService/ListExecutorGroups"
+	SchedulerService_RegisterExecutorNode_FullMethodName          = "/scheduler.v1.SchedulerService/RegisterExecutorNode"
+	SchedulerService_UnregisterExecutorNode_FullMethodName        = "/scheduler.v1.SchedulerService/UnregisterExecutorNode"
+	SchedulerService_ListExecutorNodes_FullMethodName             = "/scheduler.v1.SchedulerService/ListExecutorNodes"
+	SchedulerService_AppendRunLogs_FullMethodName                 = "/scheduler.v1.SchedulerService/AppendRunLogs"
+	SchedulerService_ListRunLogs_FullMethodName                   = "/scheduler.v1.SchedulerService/ListRunLogs"
+	SchedulerService_CreateNotificationChannel_FullMethodName     = "/scheduler.v1.SchedulerService/CreateNotificationChannel"
+	SchedulerService_UpdateNotificationChannel_FullMethodName     = "/scheduler.v1.SchedulerService/UpdateNotificationChannel"
+	SchedulerService_SetNotificationChannelEnabled_FullMethodName = "/scheduler.v1.SchedulerService/SetNotificationChannelEnabled"
+	SchedulerService_DeleteNotificationChannel_FullMethodName     = "/scheduler.v1.SchedulerService/DeleteNotificationChannel"
+	SchedulerService_ListNotificationChannels_FullMethodName      = "/scheduler.v1.SchedulerService/ListNotificationChannels"
+	SchedulerService_ListNotificationHistory_FullMethodName       = "/scheduler.v1.SchedulerService/ListNotificationHistory"
+	SchedulerService_GetRunReport_FullMethodName                  = "/scheduler.v1.SchedulerService/GetRunReport"
+	SchedulerService_PurgeRunHistory_FullMethodName               = "/scheduler.v1.SchedulerService/PurgeRunHistory"
 )
 
 // SchedulerServiceClient is the client API for SchedulerService service.
@@ -81,6 +84,9 @@ type SchedulerServiceClient interface {
 	AppendRunLogs(ctx context.Context, in *AppendRunLogsRequest, opts ...grpc.CallOption) (*AppendRunLogsResponse, error)
 	ListRunLogs(ctx context.Context, in *ListRunLogsRequest, opts ...grpc.CallOption) (*ListRunLogsResponse, error)
 	CreateNotificationChannel(ctx context.Context, in *CreateNotificationChannelRequest, opts ...grpc.CallOption) (*NotificationChannel, error)
+	UpdateNotificationChannel(ctx context.Context, in *UpdateNotificationChannelRequest, opts ...grpc.CallOption) (*NotificationChannel, error)
+	SetNotificationChannelEnabled(ctx context.Context, in *SetNotificationChannelEnabledRequest, opts ...grpc.CallOption) (*NotificationChannel, error)
+	DeleteNotificationChannel(ctx context.Context, in *DeleteNotificationChannelRequest, opts ...grpc.CallOption) (*DeleteNotificationChannelResponse, error)
 	ListNotificationChannels(ctx context.Context, in *ListNotificationChannelsRequest, opts ...grpc.CallOption) (*ListNotificationChannelsResponse, error)
 	ListNotificationHistory(ctx context.Context, in *ListNotificationHistoryRequest, opts ...grpc.CallOption) (*ListNotificationHistoryResponse, error)
 	GetRunReport(ctx context.Context, in *GetRunReportRequest, opts ...grpc.CallOption) (*RunReport, error)
@@ -355,6 +361,36 @@ func (c *schedulerServiceClient) CreateNotificationChannel(ctx context.Context, 
 	return out, nil
 }
 
+func (c *schedulerServiceClient) UpdateNotificationChannel(ctx context.Context, in *UpdateNotificationChannelRequest, opts ...grpc.CallOption) (*NotificationChannel, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotificationChannel)
+	err := c.cc.Invoke(ctx, SchedulerService_UpdateNotificationChannel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) SetNotificationChannelEnabled(ctx context.Context, in *SetNotificationChannelEnabledRequest, opts ...grpc.CallOption) (*NotificationChannel, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotificationChannel)
+	err := c.cc.Invoke(ctx, SchedulerService_SetNotificationChannelEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) DeleteNotificationChannel(ctx context.Context, in *DeleteNotificationChannelRequest, opts ...grpc.CallOption) (*DeleteNotificationChannelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteNotificationChannelResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_DeleteNotificationChannel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *schedulerServiceClient) ListNotificationChannels(ctx context.Context, in *ListNotificationChannelsRequest, opts ...grpc.CallOption) (*ListNotificationChannelsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListNotificationChannelsResponse)
@@ -425,6 +461,9 @@ type SchedulerServiceServer interface {
 	AppendRunLogs(context.Context, *AppendRunLogsRequest) (*AppendRunLogsResponse, error)
 	ListRunLogs(context.Context, *ListRunLogsRequest) (*ListRunLogsResponse, error)
 	CreateNotificationChannel(context.Context, *CreateNotificationChannelRequest) (*NotificationChannel, error)
+	UpdateNotificationChannel(context.Context, *UpdateNotificationChannelRequest) (*NotificationChannel, error)
+	SetNotificationChannelEnabled(context.Context, *SetNotificationChannelEnabledRequest) (*NotificationChannel, error)
+	DeleteNotificationChannel(context.Context, *DeleteNotificationChannelRequest) (*DeleteNotificationChannelResponse, error)
 	ListNotificationChannels(context.Context, *ListNotificationChannelsRequest) (*ListNotificationChannelsResponse, error)
 	ListNotificationHistory(context.Context, *ListNotificationHistoryRequest) (*ListNotificationHistoryResponse, error)
 	GetRunReport(context.Context, *GetRunReportRequest) (*RunReport, error)
@@ -516,6 +555,15 @@ func (UnimplementedSchedulerServiceServer) ListRunLogs(context.Context, *ListRun
 }
 func (UnimplementedSchedulerServiceServer) CreateNotificationChannel(context.Context, *CreateNotificationChannelRequest) (*NotificationChannel, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateNotificationChannel not implemented")
+}
+func (UnimplementedSchedulerServiceServer) UpdateNotificationChannel(context.Context, *UpdateNotificationChannelRequest) (*NotificationChannel, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateNotificationChannel not implemented")
+}
+func (UnimplementedSchedulerServiceServer) SetNotificationChannelEnabled(context.Context, *SetNotificationChannelEnabledRequest) (*NotificationChannel, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetNotificationChannelEnabled not implemented")
+}
+func (UnimplementedSchedulerServiceServer) DeleteNotificationChannel(context.Context, *DeleteNotificationChannelRequest) (*DeleteNotificationChannelResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteNotificationChannel not implemented")
 }
 func (UnimplementedSchedulerServiceServer) ListNotificationChannels(context.Context, *ListNotificationChannelsRequest) (*ListNotificationChannelsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListNotificationChannels not implemented")
@@ -1018,6 +1066,60 @@ func _SchedulerService_CreateNotificationChannel_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SchedulerService_UpdateNotificationChannel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateNotificationChannelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).UpdateNotificationChannel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_UpdateNotificationChannel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).UpdateNotificationChannel(ctx, req.(*UpdateNotificationChannelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_SetNotificationChannelEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetNotificationChannelEnabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).SetNotificationChannelEnabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_SetNotificationChannelEnabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).SetNotificationChannelEnabled(ctx, req.(*SetNotificationChannelEnabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_DeleteNotificationChannel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteNotificationChannelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).DeleteNotificationChannel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_DeleteNotificationChannel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).DeleteNotificationChannel(ctx, req.(*DeleteNotificationChannelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SchedulerService_ListNotificationChannels_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListNotificationChannelsRequest)
 	if err := dec(in); err != nil {
@@ -1200,6 +1302,18 @@ var SchedulerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateNotificationChannel",
 			Handler:    _SchedulerService_CreateNotificationChannel_Handler,
+		},
+		{
+			MethodName: "UpdateNotificationChannel",
+			Handler:    _SchedulerService_UpdateNotificationChannel_Handler,
+		},
+		{
+			MethodName: "SetNotificationChannelEnabled",
+			Handler:    _SchedulerService_SetNotificationChannelEnabled_Handler,
+		},
+		{
+			MethodName: "DeleteNotificationChannel",
+			Handler:    _SchedulerService_DeleteNotificationChannel_Handler,
 		},
 		{
 			MethodName: "ListNotificationChannels",

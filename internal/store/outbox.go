@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,11 +21,12 @@ type NotificationChannel struct {
 	ID, TenantID, Kind, Name string
 	Config                   json.RawMessage
 	Events                   []string
-	AllJobs                  bool
+	AllJobs, Enabled         bool
 	JobIDs                   []string
 	MaxAttempts              int
 	BackoffInitialSeconds    int
 	BackoffMaxSeconds        int
+	Version                  int64
 }
 type NotificationDelivery struct {
 	ID, EventID string
@@ -70,33 +72,19 @@ func (s *Store) CreateNotificationChannel(ctx context.Context, channel Notificat
 		return NotificationChannel{}, ErrInvalidNotificationScope
 	}
 	channel.ID = uuid.NewString()
-	storedConfig := channel.Config
-	var encrypted []byte
-	var version *int
-	if s.headerCipher != nil {
-		ciphertext, keyVersion, err := s.headerCipher.Encrypt(channel.Config)
-		if err != nil {
-			return NotificationChannel{}, fmt.Errorf("encrypt notification config: %w", err)
-		}
-		encrypted = ciphertext
-		version = &keyVersion
-		storedConfig = json.RawMessage(`{}`)
+	storedConfig, encrypted, keyVersion, err := s.encodeNotificationConfig(channel.Config)
+	if err != nil {
+		return NotificationChannel{}, err
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return NotificationChannel{}, fmt.Errorf("begin notification channel creation: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if !channel.AllJobs {
-		var count int
-		if err = tx.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE tenant_id=$1 AND id=ANY($2::uuid[])`, channel.TenantID, channel.JobIDs).Scan(&count); err != nil {
-			return NotificationChannel{}, fmt.Errorf("validate notification jobs: %w", err)
-		}
-		if count != len(channel.JobIDs) {
-			return NotificationChannel{}, ErrNotFound
-		}
+	if err = validateNotificationChannelJobs(ctx, tx, channel); err != nil {
+		return NotificationChannel{}, err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO notification_channels(id,tenant_id,kind,name,config,encrypted_config,encryption_key_version,event_types,all_jobs,max_attempts,backoff_initial_seconds,backoff_max_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, channel.ID, channel.TenantID, channel.Kind, channel.Name, storedConfig, encrypted, version, channel.Events, channel.AllJobs, channel.MaxAttempts, channel.BackoffInitialSeconds, channel.BackoffMaxSeconds)
+	_, err = tx.Exec(ctx, `INSERT INTO notification_channels(id,tenant_id,kind,name,config,encrypted_config,encryption_key_version,event_types,all_jobs,max_attempts,backoff_initial_seconds,backoff_max_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, channel.ID, channel.TenantID, channel.Kind, channel.Name, storedConfig, encrypted, keyVersion, channel.Events, channel.AllJobs, channel.MaxAttempts, channel.BackoffInitialSeconds, channel.BackoffMaxSeconds)
 	if err != nil {
 		return NotificationChannel{}, fmt.Errorf("create notification channel: %w", err)
 	}
@@ -108,7 +96,131 @@ func (s *Store) CreateNotificationChannel(ctx context.Context, channel Notificat
 	if err = tx.Commit(ctx); err != nil {
 		return NotificationChannel{}, fmt.Errorf("commit notification channel creation: %w", err)
 	}
+	channel.Enabled = true
+	channel.Version = 1
 	return channel, nil
+}
+
+func (s *Store) UpdateNotificationChannel(ctx context.Context, channel NotificationChannel) (NotificationChannel, error) {
+	if channel.AllJobs == (len(channel.JobIDs) > 0) {
+		return NotificationChannel{}, ErrInvalidNotificationScope
+	}
+	storedConfig, encrypted, keyVersion, err := s.encodeNotificationConfig(channel.Config)
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return NotificationChannel{}, fmt.Errorf("begin notification channel update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err = validateNotificationChannelJobs(ctx, tx, channel); err != nil {
+		return NotificationChannel{}, err
+	}
+	err = tx.QueryRow(ctx, `UPDATE notification_channels SET kind=$4,name=$5,config=$6,encrypted_config=$7,encryption_key_version=$8,event_types=$9,all_jobs=$10,max_attempts=$11,backoff_initial_seconds=$12,backoff_max_seconds=$13,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 AND version=$3 AND deleted_at IS NULL RETURNING enabled,version`, channel.TenantID, channel.ID, channel.Version, channel.Kind, channel.Name, storedConfig, encrypted, keyVersion, channel.Events, channel.AllJobs, channel.MaxAttempts, channel.BackoffInitialSeconds, channel.BackoffMaxSeconds).Scan(&channel.Enabled, &channel.Version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NotificationChannel{}, ErrConflict
+	}
+	if err != nil {
+		return NotificationChannel{}, fmt.Errorf("update notification channel: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM notification_channel_jobs WHERE channel_id=$1`, channel.ID); err != nil {
+		return NotificationChannel{}, err
+	}
+	for _, jobID := range channel.JobIDs {
+		if _, err = tx.Exec(ctx, `INSERT INTO notification_channel_jobs(channel_id,job_id) VALUES($1,$2)`, channel.ID, jobID); err != nil {
+			return NotificationChannel{}, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return NotificationChannel{}, err
+	}
+	return channel, nil
+}
+
+func (s *Store) SetNotificationChannelEnabled(ctx context.Context, tenantID, id string, enabled bool, version int64) (NotificationChannel, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE notification_channels SET enabled=$4,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 AND version=$3 AND deleted_at IS NULL`, tenantID, id, version, enabled)
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+	if tag.RowsAffected() != 1 {
+		return NotificationChannel{}, ErrConflict
+	}
+	if !enabled {
+		if err = terminalizePendingNotificationDeliveries(ctx, tx, id, "notification channel disabled"); err != nil {
+			return NotificationChannel{}, err
+		}
+	}
+	row := tx.QueryRow(ctx, `SELECT n.id,n.kind,n.name,n.config,n.encrypted_config,n.encryption_key_version,n.event_types,n.all_jobs,n.max_attempts,n.backoff_initial_seconds,n.backoff_max_seconds,n.enabled,n.version,COALESCE(array_agg(j.job_id::text ORDER BY j.job_id) FILTER (WHERE j.job_id IS NOT NULL),'{}') FROM notification_channels n LEFT JOIN notification_channel_jobs j ON j.channel_id=n.id WHERE n.tenant_id=$1 AND n.id=$2 AND n.deleted_at IS NULL GROUP BY n.id`, tenantID, id)
+	channel, err := s.scanNotificationChannel(row, tenantID)
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return NotificationChannel{}, err
+	}
+	return channel, nil
+}
+
+func (s *Store) DeleteNotificationChannel(ctx context.Context, tenantID, id string, version int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE notification_channels SET enabled=false,deleted_at=now(),version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 AND version=$3 AND deleted_at IS NULL`, tenantID, id, version)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	if err = terminalizePendingNotificationDeliveries(ctx, tx, id, "notification channel deleted"); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) encodeNotificationConfig(config json.RawMessage) (json.RawMessage, []byte, *int, error) {
+	if s.headerCipher == nil {
+		return config, nil, nil, nil
+	}
+	ciphertext, keyVersion, err := s.headerCipher.Encrypt(config)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("encrypt notification config: %w", err)
+	}
+	return json.RawMessage(`{}`), ciphertext, &keyVersion, nil
+}
+
+func validateNotificationChannelJobs(ctx context.Context, tx pgx.Tx, channel NotificationChannel) error {
+	if channel.AllJobs {
+		return nil
+	}
+	var count int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE tenant_id=$1 AND id=ANY($2::uuid[])`, channel.TenantID, channel.JobIDs).Scan(&count); err != nil {
+		return fmt.Errorf("validate notification jobs: %w", err)
+	}
+	if count != len(channel.JobIDs) {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func terminalizePendingNotificationDeliveries(ctx context.Context, tx pgx.Tx, channelID, message string) error {
+	_, err := tx.Exec(ctx, `WITH terminalized AS (
+		UPDATE notification_deliveries SET status='dead',dead_at=now(),locked_by=NULL,locked_until=NULL,last_error=$2
+		WHERE channel_id=$1 AND status='pending' RETURNING event_id
+	), affected AS (SELECT DISTINCT event_id FROM terminalized)
+	UPDATE outbox_events e SET published_at=now(),locked_by=NULL,locked_until=NULL,last_error=NULL
+	FROM affected a WHERE e.id=a.event_id AND NOT EXISTS (
+		SELECT 1 FROM notification_deliveries pending WHERE pending.event_id=e.id AND pending.status='pending' AND pending.channel_id<>$1
+	)`, channelID, boundedNotificationError(message))
+	return err
 }
 
 func (s *Store) ClaimOutbox(ctx context.Context, owner string, limit int) ([]OutboxEvent, error) {
@@ -128,33 +240,55 @@ func (s *Store) ClaimOutbox(ctx context.Context, owner string, limit int) ([]Out
 	return events, rows.Err()
 }
 func (s *Store) NotificationChannels(ctx context.Context, tenantID string) ([]NotificationChannel, error) {
-	rows, err := s.pool.Query(ctx, `SELECT n.id,n.kind,n.name,n.config,n.encrypted_config,n.encryption_key_version,n.event_types,n.all_jobs,n.max_attempts,n.backoff_initial_seconds,n.backoff_max_seconds,COALESCE(array_agg(j.job_id::text ORDER BY j.job_id) FILTER (WHERE j.job_id IS NOT NULL),'{}') FROM notification_channels n LEFT JOIN notification_channel_jobs j ON j.channel_id=n.id WHERE n.tenant_id=$1 AND n.enabled GROUP BY n.id ORDER BY n.created_at,n.id`, tenantID)
+	rows, err := s.pool.Query(ctx, `SELECT n.id,n.kind,n.name,n.config,n.encrypted_config,n.encryption_key_version,n.event_types,n.all_jobs,n.max_attempts,n.backoff_initial_seconds,n.backoff_max_seconds,n.enabled,n.version,COALESCE(array_agg(j.job_id::text ORDER BY j.job_id) FILTER (WHERE j.job_id IS NOT NULL),'{}') FROM notification_channels n LEFT JOIN notification_channel_jobs j ON j.channel_id=n.id WHERE n.tenant_id=$1 AND n.deleted_at IS NULL GROUP BY n.id ORDER BY n.created_at,n.id`, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []NotificationChannel
 	for rows.Next() {
-		var c NotificationChannel
-		var encrypted []byte
-		var version *int
-		c.TenantID = tenantID
-		if err = rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Config, &encrypted, &version, &c.Events, &c.AllJobs, &c.MaxAttempts, &c.BackoffInitialSeconds, &c.BackoffMaxSeconds, &c.JobIDs); err != nil {
-			return nil, err
-		}
-		if len(encrypted) > 0 {
-			if s.headerCipher == nil || version == nil {
-				return nil, fmt.Errorf("encrypted notification config requires store cipher")
-			}
-			plain, decryptErr := s.headerCipher.Decrypt(encrypted, *version)
-			if decryptErr != nil {
-				return nil, fmt.Errorf("decrypt notification config: %w", decryptErr)
-			}
-			c.Config = plain
+		c, scanErr := s.scanNotificationChannel(rows, tenantID)
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) NotificationChannel(ctx context.Context, tenantID, id string) (NotificationChannel, error) {
+	row := s.pool.QueryRow(ctx, `SELECT n.id,n.kind,n.name,n.config,n.encrypted_config,n.encryption_key_version,n.event_types,n.all_jobs,n.max_attempts,n.backoff_initial_seconds,n.backoff_max_seconds,n.enabled,n.version,COALESCE(array_agg(j.job_id::text ORDER BY j.job_id) FILTER (WHERE j.job_id IS NOT NULL),'{}') FROM notification_channels n LEFT JOIN notification_channel_jobs j ON j.channel_id=n.id WHERE n.tenant_id=$1 AND n.id=$2 AND n.deleted_at IS NULL GROUP BY n.id`, tenantID, id)
+	channel, err := s.scanNotificationChannel(row, tenantID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NotificationChannel{}, ErrNotFound
+	}
+	return channel, err
+}
+
+type notificationChannelScanner interface {
+	Scan(dest ...any) error
+}
+
+func (s *Store) scanNotificationChannel(row notificationChannelScanner, tenantID string) (NotificationChannel, error) {
+	var channel NotificationChannel
+	var encrypted []byte
+	var encryptionVersion *int
+	channel.TenantID = tenantID
+	if err := row.Scan(&channel.ID, &channel.Kind, &channel.Name, &channel.Config, &encrypted, &encryptionVersion, &channel.Events, &channel.AllJobs, &channel.MaxAttempts, &channel.BackoffInitialSeconds, &channel.BackoffMaxSeconds, &channel.Enabled, &channel.Version, &channel.JobIDs); err != nil {
+		return NotificationChannel{}, err
+	}
+	if len(encrypted) == 0 {
+		return channel, nil
+	}
+	if s.headerCipher == nil || encryptionVersion == nil {
+		return NotificationChannel{}, fmt.Errorf("encrypted notification config requires store cipher")
+	}
+	plain, err := s.headerCipher.Decrypt(encrypted, *encryptionVersion)
+	if err != nil {
+		return NotificationChannel{}, fmt.Errorf("decrypt notification config: %w", err)
+	}
+	channel.Config = plain
+	return channel, nil
 }
 
 func (s *Store) PrepareNotificationDeliveries(ctx context.Context, limit int) error {
@@ -182,21 +316,41 @@ func (s *Store) PrepareNotificationDeliveries(ctx context.Context, limit int) er
 		return err
 	}
 	for _, event := range events {
-		tag, insertErr := tx.Exec(ctx, `INSERT INTO notification_deliveries(event_id,channel_id)
-			SELECT e.id,n.id FROM notification_channels n JOIN outbox_events e ON e.id=$1
-			WHERE n.tenant_id=$2 AND n.enabled AND e.topic=ANY(n.event_types)
-			AND (n.all_jobs OR EXISTS(SELECT 1 FROM notification_channel_jobs j WHERE j.channel_id=n.id AND j.job_id=NULLIF(e.payload->>'job_id','')::uuid))
-			ON CONFLICT DO NOTHING`, event.id, event.tenantID)
-		if insertErr != nil {
-			return insertErr
+		channelIDs, matchErr := matchingNotificationChannelIDs(ctx, tx, event.id, event.tenantID)
+		if matchErr != nil {
+			return matchErr
 		}
-		if tag.RowsAffected() == 0 {
+		if len(channelIDs) == 0 {
 			if _, err = tx.Exec(ctx, `UPDATE outbox_events SET published_at=now(),locked_by=NULL,locked_until=NULL,last_error=NULL WHERE id=$1`, event.id); err != nil {
 				return err
 			}
+			continue
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO notification_deliveries(event_id,channel_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING`, event.id, channelIDs); err != nil {
+			return err
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func matchingNotificationChannelIDs(ctx context.Context, tx pgx.Tx, eventID, tenantID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT n.id FROM notification_channels n JOIN outbox_events e ON e.id=$1
+		WHERE n.tenant_id=$2 AND n.enabled AND n.deleted_at IS NULL AND e.topic=ANY(n.event_types)
+		AND (n.all_jobs OR EXISTS(SELECT 1 FROM notification_channel_jobs j WHERE j.channel_id=n.id AND j.job_id=NULLIF(e.payload->>'job_id','')::uuid))
+		ORDER BY n.id FOR NO KEY UPDATE OF n`, eventID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (s *Store) ClaimNotificationDeliveries(ctx context.Context, owner string, limit int) ([]NotificationDelivery, error) {

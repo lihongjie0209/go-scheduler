@@ -639,6 +639,61 @@ func notificationsCommand(c *cliConfig) *cobra.Command {
 	_ = create.MarkFlagRequired("name")
 	_ = create.MarkFlagRequired("config")
 	cmd.AddCommand(create)
+	var updateKind, updateName, updateConfig string
+	var updateEvents, updateJobIDs []string
+	var updateAllJobs bool
+	var updateMaxAttempts, updateInitialBackoff, updateMaxBackoff int
+	var updateVersion int64
+	update := &cobra.Command{Use: "update ID", Short: "Replace a notification channel configuration", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		if !json.Valid([]byte(updateConfig)) {
+			return errors.New("config must be valid JSON")
+		}
+		payload := func() ([]byte, error) {
+			return json.Marshal(map[string]any{"kind": updateKind, "name": updateName, "config": json.RawMessage(updateConfig), "events": updateEvents, "all_jobs": updateAllJobs, "job_ids": updateJobIDs, "max_attempts": updateMaxAttempts, "backoff_initial_seconds": updateInitialBackoff, "backoff_max_seconds": updateMaxBackoff, "version": updateVersion})
+		}
+		return runAuthenticated(c, http.MethodPut, "/api/v1/notification-channels/"+url.PathEscape(args[0]), payload)(command, nil)
+	}}
+	update.Flags().StringVar(&updateKind, "kind", "", "channel kind: webhook, email, or dingtalk")
+	update.Flags().StringVar(&updateName, "name", "", "channel name")
+	update.Flags().StringVar(&updateConfig, "config", "", "replacement channel configuration JSON")
+	update.Flags().StringSliceVar(&updateEvents, "events", []string{"exhausted"}, "run lifecycle events")
+	update.Flags().BoolVar(&updateAllJobs, "all-jobs", true, "subscribe to all jobs")
+	update.Flags().StringSliceVar(&updateJobIDs, "job-ids", nil, "specific job IDs when --all-jobs=false")
+	update.Flags().IntVar(&updateMaxAttempts, "max-attempts", 8, "maximum delivery attempts")
+	update.Flags().IntVar(&updateInitialBackoff, "backoff-initial-seconds", 2, "initial retry backoff")
+	update.Flags().IntVar(&updateMaxBackoff, "backoff-max-seconds", 300, "maximum retry backoff")
+	update.Flags().Int64Var(&updateVersion, "version", 0, "expected channel version")
+	for _, flag := range []string{"kind", "name", "config", "version"} {
+		_ = update.MarkFlagRequired(flag)
+	}
+	cmd.AddCommand(update)
+	var enabledVersion int64
+	setEnabled := func(enabled bool) *cobra.Command {
+		name := "disable ID"
+		short := "Disable a notification channel"
+		if enabled {
+			name = "enable ID"
+			short = "Enable a notification channel"
+		}
+		command := &cobra.Command{Use: name, Short: short, Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+			payload := func() ([]byte, error) {
+				return json.Marshal(map[string]any{"enabled": enabled, "version": enabledVersion})
+			}
+			return runAuthenticated(c, http.MethodPut, "/api/v1/notification-channels/"+url.PathEscape(args[0])+"/enabled", payload)(command, nil)
+		}}
+		command.Flags().Int64Var(&enabledVersion, "version", 0, "expected channel version")
+		_ = command.MarkFlagRequired("version")
+		return command
+	}
+	cmd.AddCommand(setEnabled(true), setEnabled(false))
+	var deleteVersion int64
+	remove := &cobra.Command{Use: "delete ID", Short: "Delete a notification channel while preserving its history", Args: cobra.ExactArgs(1), RunE: func(command *cobra.Command, args []string) error {
+		path := "/api/v1/notification-channels/" + url.PathEscape(args[0]) + "?version=" + strconv.FormatInt(deleteVersion, 10)
+		return runAuthenticated(c, http.MethodDelete, path, nil)(command, nil)
+	}}
+	remove.Flags().Int64Var(&deleteVersion, "version", 0, "expected channel version")
+	_ = remove.MarkFlagRequired("version")
+	cmd.AddCommand(remove)
 	var historyChannelID, historyJobID, historyStatus, historyCursor string
 	var historyLimit int
 	history := &cobra.Command{Use: "history", Short: "Query notification delivery history", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {

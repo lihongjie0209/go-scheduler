@@ -270,4 +270,6 @@ Cron 使用包含秒字段的 6 字段表达式，并按任务配置的 IANA 时
 
 使用 `schedulerctl notifications history` 查询投递历史，可用 `--channel-id`、`--job-id`、`--status pending|delivered|dead` 和 `--limit` 过滤。响应包含更多记录时会返回 `next_cursor`，通过 `--cursor <next_cursor>` 稳定读取下一页。投递语义为 at-least-once；通用 Webhook 会携带 `Idempotency-Key` 和 `X-Go-Scheduler-Event-ID`，接收方应按事件 ID 幂等。
 
+通知渠道支持完整生命周期管理：`notifications update ID --version N ...` 全量替换配置，`notifications enable|disable ID --version N` 启停，`notifications delete ID --version N` 软删除并保留投递历史。所有修改都使用列表返回的 `version` 做乐观锁；停用或删除会把尚未完成的投递置为 `dead`，已经发出的外部请求仍遵循 at-least-once 语义。
+
 所有全局参数都有同名环境变量：`SCHEDULER_URL`、`SCHEDULER_TOKEN`、`SCHEDULER_EMAIL`、`SCHEDULER_PASSWORD`、`SCHEDULER_TENANT`。自动化环境建议使用 `--password-stdin` 或 `SCHEDULER_TOKEN`，避免密码进入 shell 历史。运行 `schedulerctl --help` 查看任务、运行记录、触发、删除、健康检查和补全命令。

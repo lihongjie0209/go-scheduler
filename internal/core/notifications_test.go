@@ -102,6 +102,20 @@ func TestCreateNotificationChannelRejectsAmbiguousJobScope(t *testing.T) {
 	}
 }
 
+func TestNotificationChannelLifecycleRejectsInvalidIdentity(t *testing.T) {
+	t.Parallel()
+	service := &Service{}
+	if _, err := service.UpdateNotificationChannel(t.Context(), &schedulerv1.UpdateNotificationChannelRequest{TenantId: "tenant", Id: "bad", Kind: "webhook", Name: "name", ConfigJson: []byte(`{"url":"https://example.com"}`), AllJobs: true, Version: 1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("update status = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := service.SetNotificationChannelEnabled(t.Context(), &schedulerv1.SetNotificationChannelEnabledRequest{TenantId: "tenant", Id: "bad", Version: 1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("enable status = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := service.DeleteNotificationChannel(t.Context(), &schedulerv1.DeleteNotificationChannelRequest{TenantId: "tenant", Id: "bad", Version: 1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("delete status = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	payload, err := json.Marshal(value)

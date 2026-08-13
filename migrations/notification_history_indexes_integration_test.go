@@ -43,4 +43,14 @@ func TestNotificationHistoryIndexesMigration(t *testing.T) {
 	if len(definition) < len(want) || definition[len(definition)-len(want):] != want {
 		t.Fatalf("unexpected notification history index: %s", definition)
 	}
+	if err = conn.QueryRow(t.Context(), `SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='notification_channels_tenant_active_idx'`).Scan(&definition); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycleColumns int
+	if err = conn.QueryRow(t.Context(), `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='notification_channels' AND column_name=ANY(ARRAY['version','updated_at','deleted_at'])`).Scan(&lifecycleColumns); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycleColumns != 3 {
+		t.Fatalf("notification channel lifecycle columns = %d, want 3", lifecycleColumns)
+	}
 }

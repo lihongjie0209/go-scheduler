@@ -126,6 +126,9 @@ func (s *Server) Routes() http.Handler {
 		r.Delete("/kubernetes-clusters/{id}", s.deleteKubernetesCluster)
 		r.Get("/notification-channels", s.listNotificationChannels)
 		r.Post("/notification-channels", s.createNotificationChannel)
+		r.Put("/notification-channels/{id}", s.updateNotificationChannel)
+		r.Put("/notification-channels/{id}/enabled", s.setNotificationChannelEnabled)
+		r.Delete("/notification-channels/{id}", s.deleteNotificationChannel)
 		r.Get("/notification-history", s.listNotificationHistory)
 		r.Get("/api-keys", s.listAPIKeys)
 		r.Post("/api-keys", s.createAPIKey)
@@ -310,21 +313,25 @@ func (s *Server) listNotificationChannels(w http.ResponseWriter, r *http.Request
 	out, err := s.client.ListNotificationChannels(r.Context(), &schedulerv1.ListNotificationChannelsRequest{TenantId: tenantID(r.Context())})
 	respond(w, out, err, http.StatusOK)
 }
+
+type notificationChannelRequest struct {
+	Kind                  string          `json:"kind"`
+	Name                  string          `json:"name"`
+	Config                json.RawMessage `json:"config"`
+	Events                []string        `json:"events"`
+	AllJobs               *bool           `json:"all_jobs"`
+	JobIDs                []string        `json:"job_ids"`
+	MaxAttempts           int32           `json:"max_attempts"`
+	BackoffInitialSeconds int32           `json:"backoff_initial_seconds"`
+	BackoffMaxSeconds     int32           `json:"backoff_max_seconds"`
+	Version               int64           `json:"version"`
+}
+
 func (s *Server) createNotificationChannel(w http.ResponseWriter, r *http.Request) {
 	if !requireTenantWrite(w, r) {
 		return
 	}
-	var body struct {
-		Kind                  string          `json:"kind"`
-		Name                  string          `json:"name"`
-		Config                json.RawMessage `json:"config"`
-		Events                []string        `json:"events"`
-		AllJobs               *bool           `json:"all_jobs"`
-		JobIDs                []string        `json:"job_ids"`
-		MaxAttempts           int32           `json:"max_attempts"`
-		BackoffInitialSeconds int32           `json:"backoff_initial_seconds"`
-		BackoffMaxSeconds     int32           `json:"backoff_max_seconds"`
-	}
+	var body notificationChannelRequest
 	if !decode(w, r, &body) {
 		return
 	}
@@ -334,6 +341,50 @@ func (s *Server) createNotificationChannel(w http.ResponseWriter, r *http.Reques
 	}
 	out, err := s.client.CreateNotificationChannel(r.Context(), &schedulerv1.CreateNotificationChannelRequest{TenantId: tenantID(r.Context()), Kind: body.Kind, Name: body.Name, ConfigJson: body.Config, Events: body.Events, AllJobs: allJobs, JobIds: body.JobIDs, MaxAttempts: body.MaxAttempts, BackoffInitialSeconds: body.BackoffInitialSeconds, BackoffMaxSeconds: body.BackoffMaxSeconds})
 	respond(w, out, err, http.StatusCreated)
+}
+
+func (s *Server) updateNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	if !requireTenantWrite(w, r) {
+		return
+	}
+	var body notificationChannelRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	allJobs := len(body.JobIDs) == 0
+	if body.AllJobs != nil {
+		allJobs = *body.AllJobs
+	}
+	out, err := s.client.UpdateNotificationChannel(r.Context(), &schedulerv1.UpdateNotificationChannelRequest{Id: chi.URLParam(r, "id"), TenantId: tenantID(r.Context()), Kind: body.Kind, Name: body.Name, ConfigJson: body.Config, Events: body.Events, AllJobs: allJobs, JobIds: body.JobIDs, MaxAttempts: body.MaxAttempts, BackoffInitialSeconds: body.BackoffInitialSeconds, BackoffMaxSeconds: body.BackoffMaxSeconds, Version: body.Version})
+	respond(w, out, err, http.StatusOK)
+}
+
+func (s *Server) setNotificationChannelEnabled(w http.ResponseWriter, r *http.Request) {
+	if !requireTenantWrite(w, r) {
+		return
+	}
+	var body struct {
+		Enabled bool  `json:"enabled"`
+		Version int64 `json:"version"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	out, err := s.client.SetNotificationChannelEnabled(r.Context(), &schedulerv1.SetNotificationChannelEnabledRequest{Id: chi.URLParam(r, "id"), TenantId: tenantID(r.Context()), Enabled: body.Enabled, Version: body.Version})
+	respond(w, out, err, http.StatusOK)
+}
+
+func (s *Server) deleteNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	if !requireTenantWrite(w, r) {
+		return
+	}
+	version, err := strconv.ParseInt(r.URL.Query().Get("version"), 10, 64)
+	if err != nil || version < 1 {
+		writeError(w, http.StatusBadRequest, "positive version is required")
+		return
+	}
+	out, callErr := s.client.DeleteNotificationChannel(r.Context(), &schedulerv1.DeleteNotificationChannelRequest{Id: chi.URLParam(r, "id"), TenantId: tenantID(r.Context()), Version: version})
+	respond(w, out, callErr, http.StatusOK)
 }
 func (s *Server) listNotificationHistory(w http.ResponseWriter, r *http.Request) {
 	if tenantID(r.Context()) == "" {

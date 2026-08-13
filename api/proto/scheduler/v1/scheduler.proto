@@ -33,6 +33,9 @@ service SchedulerService {
   rpc AppendRunLogs(AppendRunLogsRequest) returns (AppendRunLogsResponse);
   rpc ListRunLogs(ListRunLogsRequest) returns (ListRunLogsResponse);
   rpc CreateNotificationChannel(CreateNotificationChannelRequest) returns (NotificationChannel);
+  rpc UpdateNotificationChannel(UpdateNotificationChannelRequest) returns (NotificationChannel);
+  rpc SetNotificationChannelEnabled(SetNotificationChannelEnabledRequest) returns (NotificationChannel);
+  rpc DeleteNotificationChannel(DeleteNotificationChannelRequest) returns (DeleteNotificationChannelResponse);
   rpc ListNotificationChannels(ListNotificationChannelsRequest) returns (ListNotificationChannelsResponse);
   rpc ListNotificationHistory(ListNotificationHistoryRequest) returns (ListNotificationHistoryResponse);
   rpc GetRunReport(GetRunReportRequest) returns (RunReport);
@@ -202,6 +205,8 @@ message NotificationChannel {
   int32 max_attempts = 9;
   int32 backoff_initial_seconds = 10;
   int32 backoff_max_seconds = 11;
+  bool enabled = 12;
+  int64 version = 13;
 }
 message CreateNotificationChannelRequest {
   string tenant_id = 1;
@@ -215,6 +220,32 @@ message CreateNotificationChannelRequest {
   int32 backoff_initial_seconds = 9;
   int32 backoff_max_seconds = 10;
 }
+message UpdateNotificationChannelRequest {
+  string id = 1;
+  string tenant_id = 2;
+  string kind = 3;
+  string name = 4;
+  bytes config_json = 5;
+  repeated string events = 6;
+  bool all_jobs = 7;
+  repeated string job_ids = 8;
+  int32 max_attempts = 9;
+  int32 backoff_initial_seconds = 10;
+  int32 backoff_max_seconds = 11;
+  int64 version = 12;
+}
+message SetNotificationChannelEnabledRequest {
+  string id = 1;
+  string tenant_id = 2;
+  bool enabled = 3;
+  int64 version = 4;
+}
+message DeleteNotificationChannelRequest {
+  string id = 1;
+  string tenant_id = 2;
+  int64 version = 3;
+}
+message DeleteNotificationChannelResponse {}
 message ListNotificationChannelsRequest { string tenant_id = 1; }
 message ListNotificationChannelsResponse { repeated NotificationChannel channels = 1; }
 message NotificationHistoryEntry {

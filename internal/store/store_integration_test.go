@@ -1547,6 +1547,92 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil || len(remainingDeliveries) != 0 {
 		t.Fatalf("completed delivery reclaimed = %+v, %v", remainingDeliveries, err)
 	}
+	managedChannel, err := one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "webhook", Name: "managed-alerts", Config: json.RawMessage(`{"url":"https://alerts.example.com/managed"}`), Events: []string{"job.run.failed"}, AllJobs: true, MaxAttempts: 3, BackoffInitialSeconds: 2, BackoffMaxSeconds: 30})
+	if err != nil || managedChannel.Version != 1 || !managedChannel.Enabled {
+		t.Fatalf("managed channel = %+v, %v", managedChannel, err)
+	}
+	var managedEventID string
+	if err = one.pool.QueryRow(ctx, `INSERT INTO outbox_events(tenant_id,topic,payload) VALUES($1,'job.run.failed','{"run_id":"managed-run"}') RETURNING id`, tenantID).Scan(&managedEventID); err != nil {
+		t.Fatal(err)
+	}
+	lockTx, err := one.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockedChannels, err := matchingNotificationChannelIDs(ctx, lockTx, managedEventID, tenantID)
+	if err != nil || len(lockedChannels) != 1 || lockedChannels[0] != managedChannel.ID {
+		_ = lockTx.Rollback(ctx)
+		t.Fatalf("locked notification channels = %v, %v", lockedChannels, err)
+	}
+	type channelResult struct {
+		channel NotificationChannel
+		err     error
+	}
+	disableResult := make(chan channelResult, 1)
+	go func() {
+		channel, disableErr := two.SetNotificationChannelEnabled(ctx, tenantID, managedChannel.ID, false, managedChannel.Version)
+		disableResult <- channelResult{channel: channel, err: disableErr}
+	}()
+	select {
+	case result := <-disableResult:
+		_ = lockTx.Rollback(ctx)
+		t.Fatalf("channel disable did not wait for delivery preparation lock: %+v", result)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err = lockTx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-disableResult:
+		managedChannel, err = result.channel, result.err
+	case <-time.After(5 * time.Second):
+		t.Fatal("channel disable remained blocked after delivery preparation rollback")
+	}
+	if err != nil || managedChannel.Enabled || managedChannel.Version != 2 {
+		t.Fatalf("serialized channel disable = %+v, %v", managedChannel, err)
+	}
+	managedChannel, err = one.SetNotificationChannelEnabled(ctx, tenantID, managedChannel.ID, true, managedChannel.Version)
+	if err != nil || !managedChannel.Enabled || managedChannel.Version != 3 {
+		t.Fatalf("serialized channel re-enable = %+v, %v", managedChannel, err)
+	}
+	if err = one.PrepareNotificationDeliveries(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	managedChannel, err = two.SetNotificationChannelEnabled(ctx, tenantID, managedChannel.ID, false, managedChannel.Version)
+	if err != nil || managedChannel.Enabled || managedChannel.Version != 4 {
+		t.Fatalf("disabled managed channel = %+v, %v", managedChannel, err)
+	}
+	var managedStatus, managedError string
+	if err = one.pool.QueryRow(ctx, `SELECT status,COALESCE(last_error,'') FROM notification_deliveries WHERE event_id=$1 AND channel_id=$2`, managedEventID, managedChannel.ID).Scan(&managedStatus, &managedError); err != nil || managedStatus != "dead" || managedError != "notification channel disabled" {
+		t.Fatalf("disabled delivery status=%q error=%q err=%v", managedStatus, managedError, err)
+	}
+	if err = one.pool.QueryRow(ctx, `SELECT published_at IS NOT NULL FROM outbox_events WHERE id=$1`, managedEventID).Scan(&published); err != nil || !published {
+		t.Fatalf("disabled channel event published=%v err=%v", published, err)
+	}
+	managedChannel, err = one.SetNotificationChannelEnabled(ctx, tenantID, managedChannel.ID, true, managedChannel.Version)
+	if err != nil || !managedChannel.Enabled || managedChannel.Version != 5 {
+		t.Fatalf("enabled managed channel = %+v, %v", managedChannel, err)
+	}
+	staleManagedChannel := managedChannel
+	managedChannel.Name = "managed-alerts-updated"
+	managedChannel.Config = json.RawMessage(`{"url":"https://alerts.example.com/managed-v2"}`)
+	managedChannel, err = two.UpdateNotificationChannel(ctx, managedChannel)
+	if err != nil || managedChannel.Name != "managed-alerts-updated" || managedChannel.Version != 6 {
+		t.Fatalf("updated managed channel = %+v, %v", managedChannel, err)
+	}
+	if _, err = one.UpdateNotificationChannel(ctx, staleManagedChannel); err != ErrConflict {
+		t.Fatalf("stale managed channel update error = %v, want ErrConflict", err)
+	}
+	if err = two.DeleteNotificationChannel(ctx, tenantID, managedChannel.ID, managedChannel.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = one.NotificationChannel(ctx, tenantID, managedChannel.ID); err != ErrNotFound {
+		t.Fatalf("deleted managed channel lookup error = %v, want ErrNotFound", err)
+	}
+	managedHistory, err := one.NotificationHistory(ctx, tenantID, managedChannel.ID, "", "dead", nil, nil, 10)
+	if err != nil || len(managedHistory) != 1 || managedHistory[0].EventID != managedEventID {
+		t.Fatalf("deleted managed channel history = %+v, %v", managedHistory, err)
+	}
 	if _, err = one.pool.Exec(ctx, `UPDATE notification_channels SET enabled=false WHERE tenant_id=$1`, tenantID); err != nil {
 		t.Fatal(err)
 	}

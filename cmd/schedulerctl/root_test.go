@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -534,5 +535,41 @@ func TestNotificationsHistoryUsesFilters(t *testing.T) {
 	command.SetArgs([]string{"--server", server.URL, "--token", "gsk_test", "notifications", "history", "--channel-id", "channel-1", "--job-id", "job-1", "--status", "dead", "--limit", "25", "--cursor", "next-page"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNotificationLifecycleCommands(t *testing.T) {
+	t.Parallel()
+	requests := make(chan string, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		requests <- r.Method + " " + r.URL.RequestURI() + " " + fmt.Sprint(body["version"])
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "update", args: []string{"notifications", "update", "channel-1", "--kind", "webhook", "--name", "ops", "--config", `{"url":"https://hooks.example.com"}`, "--version", "4"}, want: "PUT /api/v1/notification-channels/channel-1 4"},
+		{name: "disable", args: []string{"notifications", "disable", "channel-1", "--version", "5"}, want: "PUT /api/v1/notification-channels/channel-1/enabled 5"},
+		{name: "delete", args: []string{"notifications", "delete", "channel-1", "--version", "6"}, want: "DELETE /api/v1/notification-channels/channel-1?version=6 <nil>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			command := newRootCommand("test")
+			command.SetOut(new(bytes.Buffer))
+			command.SetArgs(append([]string{"--server", server.URL, "--token", "gsk_test"}, tt.args...))
+			if err := command.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if got := <-requests; got != tt.want {
+				t.Fatalf("request = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

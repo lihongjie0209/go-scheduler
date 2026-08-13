@@ -54,7 +54,7 @@ func validateNotificationConfig(kind string, raw json.RawMessage) error {
 		}
 		for key, value := range config.Headers {
 			if len(key) > 256 || len(value) > 8192 || !httpguts.ValidHeaderFieldName(key) || !httpguts.ValidHeaderFieldValue(value) {
-				return fmt.Errorf("invalid webhook header size")
+				return fmt.Errorf("invalid webhook header")
 			}
 		}
 		if len(config.Template) > maxNotificationTemplateBytes {
@@ -123,47 +123,92 @@ func validateNotificationConfig(kind string, raw json.RawMessage) error {
 }
 
 func (s *Service) CreateNotificationChannel(ctx context.Context, req *schedulerv1.CreateNotificationChannelRequest) (*schedulerv1.NotificationChannel, error) {
-	if req.GetTenantId() == "" || strings.TrimSpace(req.GetName()) == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id and name are required")
-	}
-	if len(strings.TrimSpace(req.GetName())) > 200 {
-		return nil, status.Error(codes.InvalidArgument, "name must not exceed 200 bytes")
-	}
-	if err := validateNotificationConfig(req.GetKind(), req.GetConfigJson()); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	events, err := normalizeNotificationEvents(req.GetEvents())
+	channel, err := notificationChannelForWrite(req.GetTenantId(), "", req.GetKind(), req.GetName(), req.GetConfigJson(), req.GetEvents(), req.GetAllJobs(), req.GetJobIds(), req.GetMaxAttempts(), req.GetBackoffInitialSeconds(), req.GetBackoffMaxSeconds(), 0)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	jobIDs, err := normalizeNotificationJobIDs(req.GetJobIds())
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	if req.GetAllJobs() && len(jobIDs) > 0 {
-		return nil, status.Error(codes.InvalidArgument, "all_jobs cannot be combined with job_ids")
-	}
-	allJobs := req.GetAllJobs() || len(jobIDs) == 0
-	maxAttempts := int(req.GetMaxAttempts())
-	if maxAttempts == 0 {
-		maxAttempts = 8
-	}
-	initialBackoff := int(req.GetBackoffInitialSeconds())
-	if initialBackoff == 0 {
-		initialBackoff = 2
-	}
-	maxBackoff := int(req.GetBackoffMaxSeconds())
-	if maxBackoff == 0 {
-		maxBackoff = 300
-	}
-	if maxAttempts < 1 || maxAttempts > 100 || initialBackoff < 1 || initialBackoff > 3600 || maxBackoff < initialBackoff || maxBackoff > 86400 {
-		return nil, status.Error(codes.InvalidArgument, "invalid retry policy")
-	}
-	channel, err := s.store.CreateNotificationChannel(ctx, store.NotificationChannel{TenantID: req.TenantId, Kind: req.Kind, Name: strings.TrimSpace(req.Name), Config: req.ConfigJson, Events: events, AllJobs: allJobs, JobIDs: jobIDs, MaxAttempts: maxAttempts, BackoffInitialSeconds: initialBackoff, BackoffMaxSeconds: maxBackoff})
+	channel, err = s.store.CreateNotificationChannel(ctx, channel)
 	if err != nil {
 		return nil, toStatus(err)
 	}
 	return notificationChannelToProto(channel), nil
+}
+
+func (s *Service) UpdateNotificationChannel(ctx context.Context, req *schedulerv1.UpdateNotificationChannelRequest) (*schedulerv1.NotificationChannel, error) {
+	channel, err := notificationChannelForWrite(req.GetTenantId(), req.GetId(), req.GetKind(), req.GetName(), req.GetConfigJson(), req.GetEvents(), req.GetAllJobs(), req.GetJobIds(), req.GetMaxAttempts(), req.GetBackoffInitialSeconds(), req.GetBackoffMaxSeconds(), req.GetVersion())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if channel.ID == "" || channel.Version < 1 || uuid.Validate(channel.ID) != nil {
+		return nil, status.Error(codes.InvalidArgument, "UUID id and positive version are required")
+	}
+	channel, err = s.store.UpdateNotificationChannel(ctx, channel)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return notificationChannelToProto(channel), nil
+}
+
+func (s *Service) SetNotificationChannelEnabled(ctx context.Context, req *schedulerv1.SetNotificationChannelEnabledRequest) (*schedulerv1.NotificationChannel, error) {
+	if req.GetTenantId() == "" || uuid.Validate(req.GetId()) != nil || req.GetVersion() < 1 {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, UUID id and positive version are required")
+	}
+	channel, err := s.store.SetNotificationChannelEnabled(ctx, req.GetTenantId(), req.GetId(), req.GetEnabled(), req.GetVersion())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return notificationChannelToProto(channel), nil
+}
+
+func (s *Service) DeleteNotificationChannel(ctx context.Context, req *schedulerv1.DeleteNotificationChannelRequest) (*schedulerv1.DeleteNotificationChannelResponse, error) {
+	if req.GetTenantId() == "" || uuid.Validate(req.GetId()) != nil || req.GetVersion() < 1 {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, UUID id and positive version are required")
+	}
+	if err := s.store.DeleteNotificationChannel(ctx, req.GetTenantId(), req.GetId(), req.GetVersion()); err != nil {
+		return nil, toStatus(err)
+	}
+	return &schedulerv1.DeleteNotificationChannelResponse{}, nil
+}
+
+func notificationChannelForWrite(tenantID, id, kind, name string, config json.RawMessage, rawEvents []string, allJobs bool, rawJobIDs []string, rawMaxAttempts, rawInitialBackoff, rawMaxBackoff int32, version int64) (store.NotificationChannel, error) {
+	name = strings.TrimSpace(name)
+	if tenantID == "" || name == "" {
+		return store.NotificationChannel{}, fmt.Errorf("tenant_id and name are required")
+	}
+	if len(name) > 200 {
+		return store.NotificationChannel{}, fmt.Errorf("name must not exceed 200 bytes")
+	}
+	if err := validateNotificationConfig(kind, config); err != nil {
+		return store.NotificationChannel{}, err
+	}
+	events, err := normalizeNotificationEvents(rawEvents)
+	if err != nil {
+		return store.NotificationChannel{}, err
+	}
+	jobIDs, err := normalizeNotificationJobIDs(rawJobIDs)
+	if err != nil {
+		return store.NotificationChannel{}, err
+	}
+	if allJobs && len(jobIDs) > 0 {
+		return store.NotificationChannel{}, fmt.Errorf("all_jobs cannot be combined with job_ids")
+	}
+	allJobs = allJobs || len(jobIDs) == 0
+	maxAttempts := int(rawMaxAttempts)
+	if maxAttempts == 0 {
+		maxAttempts = 8
+	}
+	initialBackoff := int(rawInitialBackoff)
+	if initialBackoff == 0 {
+		initialBackoff = 2
+	}
+	maxBackoff := int(rawMaxBackoff)
+	if maxBackoff == 0 {
+		maxBackoff = 300
+	}
+	if maxAttempts < 1 || maxAttempts > 100 || initialBackoff < 1 || initialBackoff > 3600 || maxBackoff < initialBackoff || maxBackoff > 86400 {
+		return store.NotificationChannel{}, fmt.Errorf("invalid retry policy")
+	}
+	return store.NotificationChannel{ID: id, TenantID: tenantID, Kind: kind, Name: name, Config: config, Events: events, AllJobs: allJobs, JobIDs: jobIDs, MaxAttempts: maxAttempts, BackoffInitialSeconds: initialBackoff, BackoffMaxSeconds: maxBackoff, Version: version}, nil
 }
 
 func (s *Service) ListNotificationChannels(ctx context.Context, req *schedulerv1.ListNotificationChannelsRequest) (*schedulerv1.ListNotificationChannelsResponse, error) {
@@ -182,7 +227,7 @@ func (s *Service) ListNotificationChannels(ctx context.Context, req *schedulerv1
 }
 
 func notificationChannelToProto(channel store.NotificationChannel) *schedulerv1.NotificationChannel {
-	return &schedulerv1.NotificationChannel{Id: channel.ID, TenantId: channel.TenantID, Kind: channel.Kind, Name: channel.Name, Configured: len(channel.Config) > 0, Events: trimEventPrefixes(channel.Events), AllJobs: channel.AllJobs, JobIds: channel.JobIDs, MaxAttempts: boundedInt32(channel.MaxAttempts), BackoffInitialSeconds: boundedInt32(channel.BackoffInitialSeconds), BackoffMaxSeconds: boundedInt32(channel.BackoffMaxSeconds)}
+	return &schedulerv1.NotificationChannel{Id: channel.ID, TenantId: channel.TenantID, Kind: channel.Kind, Name: channel.Name, Configured: len(channel.Config) > 0, Events: trimEventPrefixes(channel.Events), AllJobs: channel.AllJobs, JobIds: channel.JobIDs, MaxAttempts: boundedInt32(channel.MaxAttempts), BackoffInitialSeconds: boundedInt32(channel.BackoffInitialSeconds), BackoffMaxSeconds: boundedInt32(channel.BackoffMaxSeconds), Enabled: channel.Enabled, Version: channel.Version}
 }
 
 func boundedInt32(value int) int32 {
