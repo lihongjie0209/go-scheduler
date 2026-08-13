@@ -519,3 +519,20 @@ func TestNotificationsCreateUsesAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNotificationsHistoryUsesFilters(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/notification-history" || r.URL.Query().Get("channel_id") != "channel-1" || r.URL.Query().Get("job_id") != "job-1" || r.URL.Query().Get("status") != "dead" || r.URL.Query().Get("limit") != "25" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"deliveries":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	command := newRootCommand("test")
+	command.SetOut(new(bytes.Buffer))
+	command.SetArgs([]string{"--server", server.URL, "--token", "gsk_test", "notifications", "history", "--channel-id", "channel-1", "--job-id", "job-1", "--status", "dead", "--limit", "25"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -12,6 +12,7 @@
 - HTTP/gRPC 监听端口在启动 hook 中同步绑定，端口冲突会直接使启动失败并回滚已打开的 listener；
 - Core 的 Executor gRPC 连接池增加 256 个连接上限、引用计数和空闲 LRU 淘汰；
 - Notifier 将 30 秒租约内的 claim 批次收窄为 20 条并以 10 路有界并发投递，Webhook/SMTP 单次 deadline 为 10 秒；
+- 通知升级为可扩展 provider 订阅模型：Webhook、Email、钉钉可按完整运行生命周期和全局/任务范围过滤，支持每渠道有界指数退避、死信及投递历史查询；
 - 高频辅助历史清理改为每 10 秒最多删除每表 10,000 行，终态运行清理仍按小时逐租户执行，避免无上限 DELETE 长事务和高频租户扫描；
 - 并发删除 tenant owner 通过事务和租户行锁串行化，保持至少一个 owner；
 - 服务令牌改为恒定时间比较；
@@ -53,7 +54,7 @@ api-server ── gRPC + etcd discovery ── scheduler core ── gRPC ──
 
 ### 剩余架构风险
 
-- 通知投递是 at-least-once：进程在外部服务接受请求后、数据库确认前崩溃时仍可能重复发送。Webhook 消费方应按事件 ID 幂等，后续可在协议中增加明确的幂等 Header。
+- 通知投递是 at-least-once：进程在外部服务接受请求后、数据库确认前崩溃时仍可能重复发送。Webhook 已发送 `Idempotency-Key` 与 `X-Go-Scheduler-Event-ID`，消费方仍必须按事件 ID 幂等。
 - Executor 连接池上限当前为编译期常量 256。超过该规模的集群应先通过容量测试，再决定是否开放配置。
 
 ## 性能审计

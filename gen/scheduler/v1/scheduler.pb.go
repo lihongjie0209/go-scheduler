@@ -2955,14 +2955,20 @@ func (x *ListRunLogsResponse) GetNextCursor() int64 {
 }
 
 type NotificationChannel struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Kind          string                 `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
-	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	Configured    bool                   `protobuf:"varint,5,opt,name=configured,proto3" json:"configured,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Id                    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	TenantId              string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Kind                  string                 `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
+	Name                  string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	Configured            bool                   `protobuf:"varint,5,opt,name=configured,proto3" json:"configured,omitempty"`
+	Events                []string               `protobuf:"bytes,6,rep,name=events,proto3" json:"events,omitempty"`
+	AllJobs               bool                   `protobuf:"varint,7,opt,name=all_jobs,json=allJobs,proto3" json:"all_jobs,omitempty"`
+	JobIds                []string               `protobuf:"bytes,8,rep,name=job_ids,json=jobIds,proto3" json:"job_ids,omitempty"`
+	MaxAttempts           int32                  `protobuf:"varint,9,opt,name=max_attempts,json=maxAttempts,proto3" json:"max_attempts,omitempty"`
+	BackoffInitialSeconds int32                  `protobuf:"varint,10,opt,name=backoff_initial_seconds,json=backoffInitialSeconds,proto3" json:"backoff_initial_seconds,omitempty"`
+	BackoffMaxSeconds     int32                  `protobuf:"varint,11,opt,name=backoff_max_seconds,json=backoffMaxSeconds,proto3" json:"backoff_max_seconds,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *NotificationChannel) Reset() {
@@ -3030,14 +3036,62 @@ func (x *NotificationChannel) GetConfigured() bool {
 	return false
 }
 
+func (x *NotificationChannel) GetEvents() []string {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
+func (x *NotificationChannel) GetAllJobs() bool {
+	if x != nil {
+		return x.AllJobs
+	}
+	return false
+}
+
+func (x *NotificationChannel) GetJobIds() []string {
+	if x != nil {
+		return x.JobIds
+	}
+	return nil
+}
+
+func (x *NotificationChannel) GetMaxAttempts() int32 {
+	if x != nil {
+		return x.MaxAttempts
+	}
+	return 0
+}
+
+func (x *NotificationChannel) GetBackoffInitialSeconds() int32 {
+	if x != nil {
+		return x.BackoffInitialSeconds
+	}
+	return 0
+}
+
+func (x *NotificationChannel) GetBackoffMaxSeconds() int32 {
+	if x != nil {
+		return x.BackoffMaxSeconds
+	}
+	return 0
+}
+
 type CreateNotificationChannelRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
-	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	ConfigJson    []byte                 `protobuf:"bytes,4,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	TenantId              string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Kind                  string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	Name                  string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	ConfigJson            []byte                 `protobuf:"bytes,4,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
+	Events                []string               `protobuf:"bytes,5,rep,name=events,proto3" json:"events,omitempty"`
+	AllJobs               bool                   `protobuf:"varint,6,opt,name=all_jobs,json=allJobs,proto3" json:"all_jobs,omitempty"`
+	JobIds                []string               `protobuf:"bytes,7,rep,name=job_ids,json=jobIds,proto3" json:"job_ids,omitempty"`
+	MaxAttempts           int32                  `protobuf:"varint,8,opt,name=max_attempts,json=maxAttempts,proto3" json:"max_attempts,omitempty"`
+	BackoffInitialSeconds int32                  `protobuf:"varint,9,opt,name=backoff_initial_seconds,json=backoffInitialSeconds,proto3" json:"backoff_initial_seconds,omitempty"`
+	BackoffMaxSeconds     int32                  `protobuf:"varint,10,opt,name=backoff_max_seconds,json=backoffMaxSeconds,proto3" json:"backoff_max_seconds,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *CreateNotificationChannelRequest) Reset() {
@@ -3096,6 +3150,48 @@ func (x *CreateNotificationChannelRequest) GetConfigJson() []byte {
 		return x.ConfigJson
 	}
 	return nil
+}
+
+func (x *CreateNotificationChannelRequest) GetEvents() []string {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
+func (x *CreateNotificationChannelRequest) GetAllJobs() bool {
+	if x != nil {
+		return x.AllJobs
+	}
+	return false
+}
+
+func (x *CreateNotificationChannelRequest) GetJobIds() []string {
+	if x != nil {
+		return x.JobIds
+	}
+	return nil
+}
+
+func (x *CreateNotificationChannelRequest) GetMaxAttempts() int32 {
+	if x != nil {
+		return x.MaxAttempts
+	}
+	return 0
+}
+
+func (x *CreateNotificationChannelRequest) GetBackoffInitialSeconds() int32 {
+	if x != nil {
+		return x.BackoffInitialSeconds
+	}
+	return 0
+}
+
+func (x *CreateNotificationChannelRequest) GetBackoffMaxSeconds() int32 {
+	if x != nil {
+		return x.BackoffMaxSeconds
+	}
+	return 0
 }
 
 type ListNotificationChannelsRequest struct {
@@ -3186,6 +3282,274 @@ func (x *ListNotificationChannelsResponse) GetChannels() []*NotificationChannel 
 	return nil
 }
 
+type NotificationHistoryEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeliveryId    string                 `protobuf:"bytes,1,opt,name=delivery_id,json=deliveryId,proto3" json:"delivery_id,omitempty"`
+	EventId       string                 `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	ChannelId     string                 `protobuf:"bytes,3,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	ChannelName   string                 `protobuf:"bytes,4,opt,name=channel_name,json=channelName,proto3" json:"channel_name,omitempty"`
+	ChannelKind   string                 `protobuf:"bytes,5,opt,name=channel_kind,json=channelKind,proto3" json:"channel_kind,omitempty"`
+	Topic         string                 `protobuf:"bytes,6,opt,name=topic,proto3" json:"topic,omitempty"`
+	JobId         string                 `protobuf:"bytes,7,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	RunId         string                 `protobuf:"bytes,8,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Status        string                 `protobuf:"bytes,9,opt,name=status,proto3" json:"status,omitempty"`
+	Attempts      int32                  `protobuf:"varint,10,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	LastError     string                 `protobuf:"bytes,11,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	DeliveredAt   *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=delivered_at,json=deliveredAt,proto3" json:"delivered_at,omitempty"`
+	DeadAt        *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=dead_at,json=deadAt,proto3" json:"dead_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NotificationHistoryEntry) Reset() {
+	*x = NotificationHistoryEntry{}
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NotificationHistoryEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NotificationHistoryEntry) ProtoMessage() {}
+
+func (x *NotificationHistoryEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NotificationHistoryEntry.ProtoReflect.Descriptor instead.
+func (*NotificationHistoryEntry) Descriptor() ([]byte, []int) {
+	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *NotificationHistoryEntry) GetDeliveryId() string {
+	if x != nil {
+		return x.DeliveryId
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetChannelId() string {
+	if x != nil {
+		return x.ChannelId
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetChannelName() string {
+	if x != nil {
+		return x.ChannelName
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetChannelKind() string {
+	if x != nil {
+		return x.ChannelKind
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetAttempts() int32 {
+	if x != nil {
+		return x.Attempts
+	}
+	return 0
+}
+
+func (x *NotificationHistoryEntry) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+func (x *NotificationHistoryEntry) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *NotificationHistoryEntry) GetDeliveredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeliveredAt
+	}
+	return nil
+}
+
+func (x *NotificationHistoryEntry) GetDeadAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeadAt
+	}
+	return nil
+}
+
+type ListNotificationHistoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	ChannelId     string                 `protobuf:"bytes,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	JobId         string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	Limit         int32                  `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNotificationHistoryRequest) Reset() {
+	*x = ListNotificationHistoryRequest{}
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNotificationHistoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNotificationHistoryRequest) ProtoMessage() {}
+
+func (x *ListNotificationHistoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNotificationHistoryRequest.ProtoReflect.Descriptor instead.
+func (*ListNotificationHistoryRequest) Descriptor() ([]byte, []int) {
+	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *ListNotificationHistoryRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ListNotificationHistoryRequest) GetChannelId() string {
+	if x != nil {
+		return x.ChannelId
+	}
+	return ""
+}
+
+func (x *ListNotificationHistoryRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *ListNotificationHistoryRequest) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ListNotificationHistoryRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type ListNotificationHistoryResponse struct {
+	state         protoimpl.MessageState      `protogen:"open.v1"`
+	Deliveries    []*NotificationHistoryEntry `protobuf:"bytes,1,rep,name=deliveries,proto3" json:"deliveries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNotificationHistoryResponse) Reset() {
+	*x = ListNotificationHistoryResponse{}
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNotificationHistoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNotificationHistoryResponse) ProtoMessage() {}
+
+func (x *ListNotificationHistoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNotificationHistoryResponse.ProtoReflect.Descriptor instead.
+func (*ListNotificationHistoryResponse) Descriptor() ([]byte, []int) {
+	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *ListNotificationHistoryResponse) GetDeliveries() []*NotificationHistoryEntry {
+	if x != nil {
+		return x.Deliveries
+	}
+	return nil
+}
+
 type GetRunReportRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -3198,7 +3562,7 @@ type GetRunReportRequest struct {
 
 func (x *GetRunReportRequest) Reset() {
 	*x = GetRunReportRequest{}
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[49]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3210,7 +3574,7 @@ func (x *GetRunReportRequest) String() string {
 func (*GetRunReportRequest) ProtoMessage() {}
 
 func (x *GetRunReportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[49]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3223,7 +3587,7 @@ func (x *GetRunReportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRunReportRequest.ProtoReflect.Descriptor instead.
 func (*GetRunReportRequest) Descriptor() ([]byte, []int) {
-	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{49}
+	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *GetRunReportRequest) GetTenantId() string {
@@ -3269,7 +3633,7 @@ type RunReportPoint struct {
 
 func (x *RunReportPoint) Reset() {
 	*x = RunReportPoint{}
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[50]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3281,7 +3645,7 @@ func (x *RunReportPoint) String() string {
 func (*RunReportPoint) ProtoMessage() {}
 
 func (x *RunReportPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[50]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3294,7 +3658,7 @@ func (x *RunReportPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunReportPoint.ProtoReflect.Descriptor instead.
 func (*RunReportPoint) Descriptor() ([]byte, []int) {
-	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{50}
+	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *RunReportPoint) GetDate() string {
@@ -3358,7 +3722,7 @@ type RunReport struct {
 
 func (x *RunReport) Reset() {
 	*x = RunReport{}
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[51]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3370,7 +3734,7 @@ func (x *RunReport) String() string {
 func (*RunReport) ProtoMessage() {}
 
 func (x *RunReport) ProtoReflect() protoreflect.Message {
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[51]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3383,7 +3747,7 @@ func (x *RunReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunReport.ProtoReflect.Descriptor instead.
 func (*RunReport) Descriptor() ([]byte, []int) {
-	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{51}
+	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *RunReport) GetFromDate() string {
@@ -3426,7 +3790,7 @@ type PurgeRunHistoryRequest struct {
 
 func (x *PurgeRunHistoryRequest) Reset() {
 	*x = PurgeRunHistoryRequest{}
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[52]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3438,7 +3802,7 @@ func (x *PurgeRunHistoryRequest) String() string {
 func (*PurgeRunHistoryRequest) ProtoMessage() {}
 
 func (x *PurgeRunHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[52]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3451,7 +3815,7 @@ func (x *PurgeRunHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeRunHistoryRequest.ProtoReflect.Descriptor instead.
 func (*PurgeRunHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{52}
+	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *PurgeRunHistoryRequest) GetTenantId() string {
@@ -3491,7 +3855,7 @@ type PurgeRunHistoryResponse struct {
 
 func (x *PurgeRunHistoryResponse) Reset() {
 	*x = PurgeRunHistoryResponse{}
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[53]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3503,7 +3867,7 @@ func (x *PurgeRunHistoryResponse) String() string {
 func (*PurgeRunHistoryResponse) ProtoMessage() {}
 
 func (x *PurgeRunHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scheduler_v1_scheduler_proto_msgTypes[53]
+	mi := &file_scheduler_v1_scheduler_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3516,7 +3880,7 @@ func (x *PurgeRunHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeRunHistoryResponse.ProtoReflect.Descriptor instead.
 func (*PurgeRunHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{53}
+	return file_scheduler_v1_scheduler_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PurgeRunHistoryResponse) GetDeleted() int64 {
@@ -3762,7 +4126,7 @@ const file_scheduler_v1_scheduler_proto_rawDesc = "" +
 	"\x13ListRunLogsResponse\x123\n" +
 	"\aentries\x18\x01 \x03(\v2\x19.scheduler.v1.RunLogEntryR\aentries\x12\x1f\n" +
 	"\vnext_cursor\x18\x02 \x01(\x03R\n" +
-	"nextCursor\"\x8a\x01\n" +
+	"nextCursor\"\xe1\x02\n" +
 	"\x13NotificationChannel\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x12\n" +
@@ -3770,17 +4134,62 @@ const file_scheduler_v1_scheduler_proto_rawDesc = "" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12\x1e\n" +
 	"\n" +
 	"configured\x18\x05 \x01(\bR\n" +
-	"configured\"\x88\x01\n" +
+	"configured\x12\x16\n" +
+	"\x06events\x18\x06 \x03(\tR\x06events\x12\x19\n" +
+	"\ball_jobs\x18\a \x01(\bR\aallJobs\x12\x17\n" +
+	"\ajob_ids\x18\b \x03(\tR\x06jobIds\x12!\n" +
+	"\fmax_attempts\x18\t \x01(\x05R\vmaxAttempts\x126\n" +
+	"\x17backoff_initial_seconds\x18\n" +
+	" \x01(\x05R\x15backoffInitialSeconds\x12.\n" +
+	"\x13backoff_max_seconds\x18\v \x01(\x05R\x11backoffMaxSeconds\"\xdf\x02\n" +
 	" CreateNotificationChannelRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1f\n" +
 	"\vconfig_json\x18\x04 \x01(\fR\n" +
-	"configJson\">\n" +
+	"configJson\x12\x16\n" +
+	"\x06events\x18\x05 \x03(\tR\x06events\x12\x19\n" +
+	"\ball_jobs\x18\x06 \x01(\bR\aallJobs\x12\x17\n" +
+	"\ajob_ids\x18\a \x03(\tR\x06jobIds\x12!\n" +
+	"\fmax_attempts\x18\b \x01(\x05R\vmaxAttempts\x126\n" +
+	"\x17backoff_initial_seconds\x18\t \x01(\x05R\x15backoffInitialSeconds\x12.\n" +
+	"\x13backoff_max_seconds\x18\n" +
+	" \x01(\x05R\x11backoffMaxSeconds\">\n" +
 	"\x1fListNotificationChannelsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"a\n" +
 	" ListNotificationChannelsResponse\x12=\n" +
-	"\bchannels\x18\x01 \x03(\v2!.scheduler.v1.NotificationChannelR\bchannels\"\x84\x01\n" +
+	"\bchannels\x18\x01 \x03(\v2!.scheduler.v1.NotificationChannelR\bchannels\"\x81\x04\n" +
+	"\x18NotificationHistoryEntry\x12\x1f\n" +
+	"\vdelivery_id\x18\x01 \x01(\tR\n" +
+	"deliveryId\x12\x19\n" +
+	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x03 \x01(\tR\tchannelId\x12!\n" +
+	"\fchannel_name\x18\x04 \x01(\tR\vchannelName\x12!\n" +
+	"\fchannel_kind\x18\x05 \x01(\tR\vchannelKind\x12\x14\n" +
+	"\x05topic\x18\x06 \x01(\tR\x05topic\x12\x15\n" +
+	"\x06job_id\x18\a \x01(\tR\x05jobId\x12\x15\n" +
+	"\x06run_id\x18\b \x01(\tR\x05runId\x12\x16\n" +
+	"\x06status\x18\t \x01(\tR\x06status\x12\x1a\n" +
+	"\battempts\x18\n" +
+	" \x01(\x05R\battempts\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\v \x01(\tR\tlastError\x129\n" +
+	"\n" +
+	"created_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12=\n" +
+	"\fdelivered_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\vdeliveredAt\x123\n" +
+	"\adead_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\x06deadAt\"\xa1\x01\n" +
+	"\x1eListNotificationHistoryRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\tR\tchannelId\x12\x15\n" +
+	"\x06job_id\x18\x03 \x01(\tR\x05jobId\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12\x14\n" +
+	"\x05limit\x18\x05 \x01(\x05R\x05limit\"i\n" +
+	"\x1fListNotificationHistoryResponse\x12F\n" +
+	"\n" +
+	"deliveries\x18\x01 \x03(\v2&.scheduler.v1.NotificationHistoryEntryR\n" +
+	"deliveries\"\x84\x01\n" +
 	"\x13GetRunReportRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tfrom_date\x18\x02 \x01(\tR\bfromDate\x12\x17\n" +
@@ -3805,7 +4214,7 @@ const file_scheduler_v1_scheduler_proto_rawDesc = "" +
 	"\x06before\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x06before\x12\x14\n" +
 	"\x05limit\x18\x04 \x01(\x05R\x05limit\"3\n" +
 	"\x17PurgeRunHistoryResponse\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\x03R\adeleted2\x93\x14\n" +
+	"\adeleted\x18\x01 \x01(\x03R\adeleted2\x8b\x15\n" +
 	"\x10SchedulerService\x12>\n" +
 	"\tCreateJob\x12\x1e.scheduler.v1.CreateJobRequest\x1a\x11.scheduler.v1.Job\x128\n" +
 	"\x06GetJob\x12\x1b.scheduler.v1.GetJobRequest\x1a\x11.scheduler.v1.Job\x12I\n" +
@@ -3834,7 +4243,8 @@ const file_scheduler_v1_scheduler_proto_rawDesc = "" +
 	"\rAppendRunLogs\x12\".scheduler.v1.AppendRunLogsRequest\x1a#.scheduler.v1.AppendRunLogsResponse\x12R\n" +
 	"\vListRunLogs\x12 .scheduler.v1.ListRunLogsRequest\x1a!.scheduler.v1.ListRunLogsResponse\x12n\n" +
 	"\x19CreateNotificationChannel\x12..scheduler.v1.CreateNotificationChannelRequest\x1a!.scheduler.v1.NotificationChannel\x12y\n" +
-	"\x18ListNotificationChannels\x12-.scheduler.v1.ListNotificationChannelsRequest\x1a..scheduler.v1.ListNotificationChannelsResponse\x12J\n" +
+	"\x18ListNotificationChannels\x12-.scheduler.v1.ListNotificationChannelsRequest\x1a..scheduler.v1.ListNotificationChannelsResponse\x12v\n" +
+	"\x17ListNotificationHistory\x12,.scheduler.v1.ListNotificationHistoryRequest\x1a-.scheduler.v1.ListNotificationHistoryResponse\x12J\n" +
 	"\fGetRunReport\x12!.scheduler.v1.GetRunReportRequest\x1a\x17.scheduler.v1.RunReport\x12^\n" +
 	"\x0fPurgeRunHistory\x12$.scheduler.v1.PurgeRunHistoryRequest\x1a%.scheduler.v1.PurgeRunHistoryResponseBDZBgithub.com/lihongjie0209/go-scheduler/gen/scheduler/v1;schedulerv1b\x06proto3"
 
@@ -3850,7 +4260,7 @@ func file_scheduler_v1_scheduler_proto_rawDescGZIP() []byte {
 	return file_scheduler_v1_scheduler_proto_rawDescData
 }
 
-var file_scheduler_v1_scheduler_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
+var file_scheduler_v1_scheduler_proto_msgTypes = make([]protoimpl.MessageInfo, 58)
 var file_scheduler_v1_scheduler_proto_goTypes = []any{
 	(*Job)(nil),                              // 0: scheduler.v1.Job
 	(*CreateJobRequest)(nil),                 // 1: scheduler.v1.CreateJobRequest
@@ -3901,103 +4311,112 @@ var file_scheduler_v1_scheduler_proto_goTypes = []any{
 	(*CreateNotificationChannelRequest)(nil), // 46: scheduler.v1.CreateNotificationChannelRequest
 	(*ListNotificationChannelsRequest)(nil),  // 47: scheduler.v1.ListNotificationChannelsRequest
 	(*ListNotificationChannelsResponse)(nil), // 48: scheduler.v1.ListNotificationChannelsResponse
-	(*GetRunReportRequest)(nil),              // 49: scheduler.v1.GetRunReportRequest
-	(*RunReportPoint)(nil),                   // 50: scheduler.v1.RunReportPoint
-	(*RunReport)(nil),                        // 51: scheduler.v1.RunReport
-	(*PurgeRunHistoryRequest)(nil),           // 52: scheduler.v1.PurgeRunHistoryRequest
-	(*PurgeRunHistoryResponse)(nil),          // 53: scheduler.v1.PurgeRunHistoryResponse
-	nil,                                      // 54: scheduler.v1.Job.HeadersEntry
-	(*timestamppb.Timestamp)(nil),            // 55: google.protobuf.Timestamp
+	(*NotificationHistoryEntry)(nil),         // 49: scheduler.v1.NotificationHistoryEntry
+	(*ListNotificationHistoryRequest)(nil),   // 50: scheduler.v1.ListNotificationHistoryRequest
+	(*ListNotificationHistoryResponse)(nil),  // 51: scheduler.v1.ListNotificationHistoryResponse
+	(*GetRunReportRequest)(nil),              // 52: scheduler.v1.GetRunReportRequest
+	(*RunReportPoint)(nil),                   // 53: scheduler.v1.RunReportPoint
+	(*RunReport)(nil),                        // 54: scheduler.v1.RunReport
+	(*PurgeRunHistoryRequest)(nil),           // 55: scheduler.v1.PurgeRunHistoryRequest
+	(*PurgeRunHistoryResponse)(nil),          // 56: scheduler.v1.PurgeRunHistoryResponse
+	nil,                                      // 57: scheduler.v1.Job.HeadersEntry
+	(*timestamppb.Timestamp)(nil),            // 58: google.protobuf.Timestamp
 }
 var file_scheduler_v1_scheduler_proto_depIdxs = []int32{
-	54, // 0: scheduler.v1.Job.headers:type_name -> scheduler.v1.Job.HeadersEntry
-	55, // 1: scheduler.v1.Job.next_run_at:type_name -> google.protobuf.Timestamp
+	57, // 0: scheduler.v1.Job.headers:type_name -> scheduler.v1.Job.HeadersEntry
+	58, // 1: scheduler.v1.Job.next_run_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: scheduler.v1.CreateJobRequest.job:type_name -> scheduler.v1.Job
 	0,  // 3: scheduler.v1.ListJobsResponse.jobs:type_name -> scheduler.v1.Job
 	0,  // 4: scheduler.v1.UpdateJobRequest.job:type_name -> scheduler.v1.Job
-	55, // 5: scheduler.v1.JobScriptVersion.created_at:type_name -> google.protobuf.Timestamp
+	58, // 5: scheduler.v1.JobScriptVersion.created_at:type_name -> google.protobuf.Timestamp
 	6,  // 6: scheduler.v1.ListJobScriptVersionsResponse.versions:type_name -> scheduler.v1.JobScriptVersion
-	55, // 7: scheduler.v1.PreviewScheduleRequest.after:type_name -> google.protobuf.Timestamp
-	55, // 8: scheduler.v1.PreviewScheduleResponse.trigger_times:type_name -> google.protobuf.Timestamp
-	55, // 9: scheduler.v1.Run.scheduled_at:type_name -> google.protobuf.Timestamp
-	55, // 10: scheduler.v1.Run.started_at:type_name -> google.protobuf.Timestamp
-	55, // 11: scheduler.v1.Run.finished_at:type_name -> google.protobuf.Timestamp
+	58, // 7: scheduler.v1.PreviewScheduleRequest.after:type_name -> google.protobuf.Timestamp
+	58, // 8: scheduler.v1.PreviewScheduleResponse.trigger_times:type_name -> google.protobuf.Timestamp
+	58, // 9: scheduler.v1.Run.scheduled_at:type_name -> google.protobuf.Timestamp
+	58, // 10: scheduler.v1.Run.started_at:type_name -> google.protobuf.Timestamp
+	58, // 11: scheduler.v1.Run.finished_at:type_name -> google.protobuf.Timestamp
 	16, // 12: scheduler.v1.ListRunsResponse.runs:type_name -> scheduler.v1.Run
 	26, // 13: scheduler.v1.CreateExecutorGroupRequest.group:type_name -> scheduler.v1.ExecutorGroup
 	26, // 14: scheduler.v1.UpdateExecutorGroupRequest.group:type_name -> scheduler.v1.ExecutorGroup
 	26, // 15: scheduler.v1.ListExecutorGroupsResponse.groups:type_name -> scheduler.v1.ExecutorGroup
-	55, // 16: scheduler.v1.ExecutorNode.expires_at:type_name -> google.protobuf.Timestamp
-	55, // 17: scheduler.v1.ExecutorNode.updated_at:type_name -> google.protobuf.Timestamp
+	58, // 16: scheduler.v1.ExecutorNode.expires_at:type_name -> google.protobuf.Timestamp
+	58, // 17: scheduler.v1.ExecutorNode.updated_at:type_name -> google.protobuf.Timestamp
 	33, // 18: scheduler.v1.ListExecutorNodesResponse.nodes:type_name -> scheduler.v1.ExecutorNode
-	55, // 19: scheduler.v1.RunLogEntry.created_at:type_name -> google.protobuf.Timestamp
+	58, // 19: scheduler.v1.RunLogEntry.created_at:type_name -> google.protobuf.Timestamp
 	39, // 20: scheduler.v1.AppendRunLogsRequest.entries:type_name -> scheduler.v1.RunLogInput
 	40, // 21: scheduler.v1.ListRunLogsResponse.entries:type_name -> scheduler.v1.RunLogEntry
 	45, // 22: scheduler.v1.ListNotificationChannelsResponse.channels:type_name -> scheduler.v1.NotificationChannel
-	50, // 23: scheduler.v1.RunReport.points:type_name -> scheduler.v1.RunReportPoint
-	55, // 24: scheduler.v1.PurgeRunHistoryRequest.before:type_name -> google.protobuf.Timestamp
-	1,  // 25: scheduler.v1.SchedulerService.CreateJob:input_type -> scheduler.v1.CreateJobRequest
-	2,  // 26: scheduler.v1.SchedulerService.GetJob:input_type -> scheduler.v1.GetJobRequest
-	3,  // 27: scheduler.v1.SchedulerService.ListJobs:input_type -> scheduler.v1.ListJobsRequest
-	5,  // 28: scheduler.v1.SchedulerService.UpdateJob:input_type -> scheduler.v1.UpdateJobRequest
-	7,  // 29: scheduler.v1.SchedulerService.ListJobScriptVersions:input_type -> scheduler.v1.ListJobScriptVersionsRequest
-	9,  // 30: scheduler.v1.SchedulerService.RollbackJobScriptVersion:input_type -> scheduler.v1.RollbackJobScriptVersionRequest
-	10, // 31: scheduler.v1.SchedulerService.SetJobEnabled:input_type -> scheduler.v1.SetJobEnabledRequest
-	11, // 32: scheduler.v1.SchedulerService.DeleteJob:input_type -> scheduler.v1.DeleteJobRequest
-	13, // 33: scheduler.v1.SchedulerService.TriggerJob:input_type -> scheduler.v1.TriggerJobRequest
-	14, // 34: scheduler.v1.SchedulerService.PreviewSchedule:input_type -> scheduler.v1.PreviewScheduleRequest
-	17, // 35: scheduler.v1.SchedulerService.GetRun:input_type -> scheduler.v1.GetRunRequest
-	18, // 36: scheduler.v1.SchedulerService.ListRuns:input_type -> scheduler.v1.ListRunsRequest
-	20, // 37: scheduler.v1.SchedulerService.CancelRun:input_type -> scheduler.v1.CancelRunRequest
-	21, // 38: scheduler.v1.SchedulerService.SetJobDependencies:input_type -> scheduler.v1.SetJobDependenciesRequest
-	22, // 39: scheduler.v1.SchedulerService.GetJobDependencies:input_type -> scheduler.v1.GetJobDependenciesRequest
-	24, // 40: scheduler.v1.SchedulerService.CompleteCallback:input_type -> scheduler.v1.CompleteCallbackRequest
-	27, // 41: scheduler.v1.SchedulerService.CreateExecutorGroup:input_type -> scheduler.v1.CreateExecutorGroupRequest
-	28, // 42: scheduler.v1.SchedulerService.UpdateExecutorGroup:input_type -> scheduler.v1.UpdateExecutorGroupRequest
-	29, // 43: scheduler.v1.SchedulerService.DeleteExecutorGroup:input_type -> scheduler.v1.DeleteExecutorGroupRequest
-	31, // 44: scheduler.v1.SchedulerService.ListExecutorGroups:input_type -> scheduler.v1.ListExecutorGroupsRequest
-	34, // 45: scheduler.v1.SchedulerService.RegisterExecutorNode:input_type -> scheduler.v1.RegisterExecutorNodeRequest
-	35, // 46: scheduler.v1.SchedulerService.UnregisterExecutorNode:input_type -> scheduler.v1.UnregisterExecutorNodeRequest
-	37, // 47: scheduler.v1.SchedulerService.ListExecutorNodes:input_type -> scheduler.v1.ListExecutorNodesRequest
-	41, // 48: scheduler.v1.SchedulerService.AppendRunLogs:input_type -> scheduler.v1.AppendRunLogsRequest
-	43, // 49: scheduler.v1.SchedulerService.ListRunLogs:input_type -> scheduler.v1.ListRunLogsRequest
-	46, // 50: scheduler.v1.SchedulerService.CreateNotificationChannel:input_type -> scheduler.v1.CreateNotificationChannelRequest
-	47, // 51: scheduler.v1.SchedulerService.ListNotificationChannels:input_type -> scheduler.v1.ListNotificationChannelsRequest
-	49, // 52: scheduler.v1.SchedulerService.GetRunReport:input_type -> scheduler.v1.GetRunReportRequest
-	52, // 53: scheduler.v1.SchedulerService.PurgeRunHistory:input_type -> scheduler.v1.PurgeRunHistoryRequest
-	0,  // 54: scheduler.v1.SchedulerService.CreateJob:output_type -> scheduler.v1.Job
-	0,  // 55: scheduler.v1.SchedulerService.GetJob:output_type -> scheduler.v1.Job
-	4,  // 56: scheduler.v1.SchedulerService.ListJobs:output_type -> scheduler.v1.ListJobsResponse
-	0,  // 57: scheduler.v1.SchedulerService.UpdateJob:output_type -> scheduler.v1.Job
-	8,  // 58: scheduler.v1.SchedulerService.ListJobScriptVersions:output_type -> scheduler.v1.ListJobScriptVersionsResponse
-	0,  // 59: scheduler.v1.SchedulerService.RollbackJobScriptVersion:output_type -> scheduler.v1.Job
-	0,  // 60: scheduler.v1.SchedulerService.SetJobEnabled:output_type -> scheduler.v1.Job
-	12, // 61: scheduler.v1.SchedulerService.DeleteJob:output_type -> scheduler.v1.DeleteJobResponse
-	16, // 62: scheduler.v1.SchedulerService.TriggerJob:output_type -> scheduler.v1.Run
-	15, // 63: scheduler.v1.SchedulerService.PreviewSchedule:output_type -> scheduler.v1.PreviewScheduleResponse
-	16, // 64: scheduler.v1.SchedulerService.GetRun:output_type -> scheduler.v1.Run
-	19, // 65: scheduler.v1.SchedulerService.ListRuns:output_type -> scheduler.v1.ListRunsResponse
-	16, // 66: scheduler.v1.SchedulerService.CancelRun:output_type -> scheduler.v1.Run
-	23, // 67: scheduler.v1.SchedulerService.SetJobDependencies:output_type -> scheduler.v1.JobDependencies
-	23, // 68: scheduler.v1.SchedulerService.GetJobDependencies:output_type -> scheduler.v1.JobDependencies
-	25, // 69: scheduler.v1.SchedulerService.CompleteCallback:output_type -> scheduler.v1.CompleteCallbackResponse
-	26, // 70: scheduler.v1.SchedulerService.CreateExecutorGroup:output_type -> scheduler.v1.ExecutorGroup
-	26, // 71: scheduler.v1.SchedulerService.UpdateExecutorGroup:output_type -> scheduler.v1.ExecutorGroup
-	30, // 72: scheduler.v1.SchedulerService.DeleteExecutorGroup:output_type -> scheduler.v1.DeleteExecutorGroupResponse
-	32, // 73: scheduler.v1.SchedulerService.ListExecutorGroups:output_type -> scheduler.v1.ListExecutorGroupsResponse
-	33, // 74: scheduler.v1.SchedulerService.RegisterExecutorNode:output_type -> scheduler.v1.ExecutorNode
-	36, // 75: scheduler.v1.SchedulerService.UnregisterExecutorNode:output_type -> scheduler.v1.UnregisterExecutorNodeResponse
-	38, // 76: scheduler.v1.SchedulerService.ListExecutorNodes:output_type -> scheduler.v1.ListExecutorNodesResponse
-	42, // 77: scheduler.v1.SchedulerService.AppendRunLogs:output_type -> scheduler.v1.AppendRunLogsResponse
-	44, // 78: scheduler.v1.SchedulerService.ListRunLogs:output_type -> scheduler.v1.ListRunLogsResponse
-	45, // 79: scheduler.v1.SchedulerService.CreateNotificationChannel:output_type -> scheduler.v1.NotificationChannel
-	48, // 80: scheduler.v1.SchedulerService.ListNotificationChannels:output_type -> scheduler.v1.ListNotificationChannelsResponse
-	51, // 81: scheduler.v1.SchedulerService.GetRunReport:output_type -> scheduler.v1.RunReport
-	53, // 82: scheduler.v1.SchedulerService.PurgeRunHistory:output_type -> scheduler.v1.PurgeRunHistoryResponse
-	54, // [54:83] is the sub-list for method output_type
-	25, // [25:54] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	58, // 23: scheduler.v1.NotificationHistoryEntry.created_at:type_name -> google.protobuf.Timestamp
+	58, // 24: scheduler.v1.NotificationHistoryEntry.delivered_at:type_name -> google.protobuf.Timestamp
+	58, // 25: scheduler.v1.NotificationHistoryEntry.dead_at:type_name -> google.protobuf.Timestamp
+	49, // 26: scheduler.v1.ListNotificationHistoryResponse.deliveries:type_name -> scheduler.v1.NotificationHistoryEntry
+	53, // 27: scheduler.v1.RunReport.points:type_name -> scheduler.v1.RunReportPoint
+	58, // 28: scheduler.v1.PurgeRunHistoryRequest.before:type_name -> google.protobuf.Timestamp
+	1,  // 29: scheduler.v1.SchedulerService.CreateJob:input_type -> scheduler.v1.CreateJobRequest
+	2,  // 30: scheduler.v1.SchedulerService.GetJob:input_type -> scheduler.v1.GetJobRequest
+	3,  // 31: scheduler.v1.SchedulerService.ListJobs:input_type -> scheduler.v1.ListJobsRequest
+	5,  // 32: scheduler.v1.SchedulerService.UpdateJob:input_type -> scheduler.v1.UpdateJobRequest
+	7,  // 33: scheduler.v1.SchedulerService.ListJobScriptVersions:input_type -> scheduler.v1.ListJobScriptVersionsRequest
+	9,  // 34: scheduler.v1.SchedulerService.RollbackJobScriptVersion:input_type -> scheduler.v1.RollbackJobScriptVersionRequest
+	10, // 35: scheduler.v1.SchedulerService.SetJobEnabled:input_type -> scheduler.v1.SetJobEnabledRequest
+	11, // 36: scheduler.v1.SchedulerService.DeleteJob:input_type -> scheduler.v1.DeleteJobRequest
+	13, // 37: scheduler.v1.SchedulerService.TriggerJob:input_type -> scheduler.v1.TriggerJobRequest
+	14, // 38: scheduler.v1.SchedulerService.PreviewSchedule:input_type -> scheduler.v1.PreviewScheduleRequest
+	17, // 39: scheduler.v1.SchedulerService.GetRun:input_type -> scheduler.v1.GetRunRequest
+	18, // 40: scheduler.v1.SchedulerService.ListRuns:input_type -> scheduler.v1.ListRunsRequest
+	20, // 41: scheduler.v1.SchedulerService.CancelRun:input_type -> scheduler.v1.CancelRunRequest
+	21, // 42: scheduler.v1.SchedulerService.SetJobDependencies:input_type -> scheduler.v1.SetJobDependenciesRequest
+	22, // 43: scheduler.v1.SchedulerService.GetJobDependencies:input_type -> scheduler.v1.GetJobDependenciesRequest
+	24, // 44: scheduler.v1.SchedulerService.CompleteCallback:input_type -> scheduler.v1.CompleteCallbackRequest
+	27, // 45: scheduler.v1.SchedulerService.CreateExecutorGroup:input_type -> scheduler.v1.CreateExecutorGroupRequest
+	28, // 46: scheduler.v1.SchedulerService.UpdateExecutorGroup:input_type -> scheduler.v1.UpdateExecutorGroupRequest
+	29, // 47: scheduler.v1.SchedulerService.DeleteExecutorGroup:input_type -> scheduler.v1.DeleteExecutorGroupRequest
+	31, // 48: scheduler.v1.SchedulerService.ListExecutorGroups:input_type -> scheduler.v1.ListExecutorGroupsRequest
+	34, // 49: scheduler.v1.SchedulerService.RegisterExecutorNode:input_type -> scheduler.v1.RegisterExecutorNodeRequest
+	35, // 50: scheduler.v1.SchedulerService.UnregisterExecutorNode:input_type -> scheduler.v1.UnregisterExecutorNodeRequest
+	37, // 51: scheduler.v1.SchedulerService.ListExecutorNodes:input_type -> scheduler.v1.ListExecutorNodesRequest
+	41, // 52: scheduler.v1.SchedulerService.AppendRunLogs:input_type -> scheduler.v1.AppendRunLogsRequest
+	43, // 53: scheduler.v1.SchedulerService.ListRunLogs:input_type -> scheduler.v1.ListRunLogsRequest
+	46, // 54: scheduler.v1.SchedulerService.CreateNotificationChannel:input_type -> scheduler.v1.CreateNotificationChannelRequest
+	47, // 55: scheduler.v1.SchedulerService.ListNotificationChannels:input_type -> scheduler.v1.ListNotificationChannelsRequest
+	50, // 56: scheduler.v1.SchedulerService.ListNotificationHistory:input_type -> scheduler.v1.ListNotificationHistoryRequest
+	52, // 57: scheduler.v1.SchedulerService.GetRunReport:input_type -> scheduler.v1.GetRunReportRequest
+	55, // 58: scheduler.v1.SchedulerService.PurgeRunHistory:input_type -> scheduler.v1.PurgeRunHistoryRequest
+	0,  // 59: scheduler.v1.SchedulerService.CreateJob:output_type -> scheduler.v1.Job
+	0,  // 60: scheduler.v1.SchedulerService.GetJob:output_type -> scheduler.v1.Job
+	4,  // 61: scheduler.v1.SchedulerService.ListJobs:output_type -> scheduler.v1.ListJobsResponse
+	0,  // 62: scheduler.v1.SchedulerService.UpdateJob:output_type -> scheduler.v1.Job
+	8,  // 63: scheduler.v1.SchedulerService.ListJobScriptVersions:output_type -> scheduler.v1.ListJobScriptVersionsResponse
+	0,  // 64: scheduler.v1.SchedulerService.RollbackJobScriptVersion:output_type -> scheduler.v1.Job
+	0,  // 65: scheduler.v1.SchedulerService.SetJobEnabled:output_type -> scheduler.v1.Job
+	12, // 66: scheduler.v1.SchedulerService.DeleteJob:output_type -> scheduler.v1.DeleteJobResponse
+	16, // 67: scheduler.v1.SchedulerService.TriggerJob:output_type -> scheduler.v1.Run
+	15, // 68: scheduler.v1.SchedulerService.PreviewSchedule:output_type -> scheduler.v1.PreviewScheduleResponse
+	16, // 69: scheduler.v1.SchedulerService.GetRun:output_type -> scheduler.v1.Run
+	19, // 70: scheduler.v1.SchedulerService.ListRuns:output_type -> scheduler.v1.ListRunsResponse
+	16, // 71: scheduler.v1.SchedulerService.CancelRun:output_type -> scheduler.v1.Run
+	23, // 72: scheduler.v1.SchedulerService.SetJobDependencies:output_type -> scheduler.v1.JobDependencies
+	23, // 73: scheduler.v1.SchedulerService.GetJobDependencies:output_type -> scheduler.v1.JobDependencies
+	25, // 74: scheduler.v1.SchedulerService.CompleteCallback:output_type -> scheduler.v1.CompleteCallbackResponse
+	26, // 75: scheduler.v1.SchedulerService.CreateExecutorGroup:output_type -> scheduler.v1.ExecutorGroup
+	26, // 76: scheduler.v1.SchedulerService.UpdateExecutorGroup:output_type -> scheduler.v1.ExecutorGroup
+	30, // 77: scheduler.v1.SchedulerService.DeleteExecutorGroup:output_type -> scheduler.v1.DeleteExecutorGroupResponse
+	32, // 78: scheduler.v1.SchedulerService.ListExecutorGroups:output_type -> scheduler.v1.ListExecutorGroupsResponse
+	33, // 79: scheduler.v1.SchedulerService.RegisterExecutorNode:output_type -> scheduler.v1.ExecutorNode
+	36, // 80: scheduler.v1.SchedulerService.UnregisterExecutorNode:output_type -> scheduler.v1.UnregisterExecutorNodeResponse
+	38, // 81: scheduler.v1.SchedulerService.ListExecutorNodes:output_type -> scheduler.v1.ListExecutorNodesResponse
+	42, // 82: scheduler.v1.SchedulerService.AppendRunLogs:output_type -> scheduler.v1.AppendRunLogsResponse
+	44, // 83: scheduler.v1.SchedulerService.ListRunLogs:output_type -> scheduler.v1.ListRunLogsResponse
+	45, // 84: scheduler.v1.SchedulerService.CreateNotificationChannel:output_type -> scheduler.v1.NotificationChannel
+	48, // 85: scheduler.v1.SchedulerService.ListNotificationChannels:output_type -> scheduler.v1.ListNotificationChannelsResponse
+	51, // 86: scheduler.v1.SchedulerService.ListNotificationHistory:output_type -> scheduler.v1.ListNotificationHistoryResponse
+	54, // 87: scheduler.v1.SchedulerService.GetRunReport:output_type -> scheduler.v1.RunReport
+	56, // 88: scheduler.v1.SchedulerService.PurgeRunHistory:output_type -> scheduler.v1.PurgeRunHistoryResponse
+	59, // [59:89] is the sub-list for method output_type
+	29, // [29:59] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_scheduler_v1_scheduler_proto_init() }
@@ -4011,7 +4430,7 @@ func file_scheduler_v1_scheduler_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scheduler_v1_scheduler_proto_rawDesc), len(file_scheduler_v1_scheduler_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   55,
+			NumMessages:   58,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

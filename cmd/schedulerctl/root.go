@@ -611,25 +611,55 @@ func kubernetesClustersCommand(c *cliConfig) *cobra.Command {
 }
 
 func notificationsCommand(c *cliConfig) *cobra.Command {
-	cmd := &cobra.Command{Use: "notifications", Short: "Manage failure notification channels"}
+	cmd := &cobra.Command{Use: "notifications", Short: "Manage notification subscriptions and delivery history"}
 	cmd.AddCommand(&cobra.Command{Use: "list", Short: "List enabled notification channels", Args: cobra.NoArgs, RunE: runAuthenticated(c, http.MethodGet, "/api/v1/notification-channels", nil)})
 	var kind, name, config string
+	var events, jobIDs []string
+	var allJobs bool
+	var maxAttempts, initialBackoff, maxBackoff int
 	create := &cobra.Command{Use: "create", Short: "Create a webhook or email channel", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if !json.Valid([]byte(config)) {
 			return errors.New("config must be valid JSON")
 		}
 		payload := func() ([]byte, error) {
-			return json.Marshal(map[string]any{"kind": kind, "name": name, "config": json.RawMessage(config)})
+			return json.Marshal(map[string]any{"kind": kind, "name": name, "config": json.RawMessage(config), "events": events, "all_jobs": allJobs, "job_ids": jobIDs, "max_attempts": maxAttempts, "backoff_initial_seconds": initialBackoff, "backoff_max_seconds": maxBackoff})
 		}
 		return runAuthenticated(c, http.MethodPost, "/api/v1/notification-channels", payload)(cmd, nil)
 	}}
-	create.Flags().StringVar(&kind, "kind", "", "channel kind: webhook or email")
+	create.Flags().StringVar(&kind, "kind", "", "channel kind: webhook, email, or dingtalk")
 	create.Flags().StringVar(&name, "name", "", "channel name")
 	create.Flags().StringVar(&config, "config", "", "channel configuration JSON")
+	create.Flags().StringSliceVar(&events, "events", []string{"exhausted"}, "run lifecycle events")
+	create.Flags().BoolVar(&allJobs, "all-jobs", true, "subscribe to all jobs")
+	create.Flags().StringSliceVar(&jobIDs, "job-ids", nil, "specific job IDs when --all-jobs=false")
+	create.Flags().IntVar(&maxAttempts, "max-attempts", 8, "maximum delivery attempts")
+	create.Flags().IntVar(&initialBackoff, "backoff-initial-seconds", 2, "initial retry backoff")
+	create.Flags().IntVar(&maxBackoff, "backoff-max-seconds", 300, "maximum retry backoff")
 	_ = create.MarkFlagRequired("kind")
 	_ = create.MarkFlagRequired("name")
 	_ = create.MarkFlagRequired("config")
 	cmd.AddCommand(create)
+	var historyChannelID, historyJobID, historyStatus string
+	var historyLimit int
+	history := &cobra.Command{Use: "history", Short: "Query notification delivery history", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+		query := url.Values{}
+		query.Set("limit", strconv.Itoa(historyLimit))
+		if historyChannelID != "" {
+			query.Set("channel_id", historyChannelID)
+		}
+		if historyJobID != "" {
+			query.Set("job_id", historyJobID)
+		}
+		if historyStatus != "" {
+			query.Set("status", historyStatus)
+		}
+		return runAuthenticated(c, http.MethodGet, "/api/v1/notification-history?"+query.Encode(), nil)(command, nil)
+	}}
+	history.Flags().StringVar(&historyChannelID, "channel-id", "", "filter by channel ID")
+	history.Flags().StringVar(&historyJobID, "job-id", "", "filter by job ID")
+	history.Flags().StringVar(&historyStatus, "status", "", "filter by pending, delivered, or dead")
+	history.Flags().IntVar(&historyLimit, "limit", 100, "maximum rows (1-500)")
+	cmd.AddCommand(history)
 	return cmd
 }
 func versionCommand(value string) *cobra.Command {

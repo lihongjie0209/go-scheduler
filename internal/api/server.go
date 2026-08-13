@@ -126,6 +126,7 @@ func (s *Server) Routes() http.Handler {
 		r.Delete("/kubernetes-clusters/{id}", s.deleteKubernetesCluster)
 		r.Get("/notification-channels", s.listNotificationChannels)
 		r.Post("/notification-channels", s.createNotificationChannel)
+		r.Get("/notification-history", s.listNotificationHistory)
 		r.Get("/api-keys", s.listAPIKeys)
 		r.Post("/api-keys", s.createAPIKey)
 		r.Delete("/api-keys/{id}", s.revokeAPIKey)
@@ -314,15 +315,40 @@ func (s *Server) createNotificationChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var body struct {
-		Kind   string          `json:"kind"`
-		Name   string          `json:"name"`
-		Config json.RawMessage `json:"config"`
+		Kind                  string          `json:"kind"`
+		Name                  string          `json:"name"`
+		Config                json.RawMessage `json:"config"`
+		Events                []string        `json:"events"`
+		AllJobs               *bool           `json:"all_jobs"`
+		JobIDs                []string        `json:"job_ids"`
+		MaxAttempts           int32           `json:"max_attempts"`
+		BackoffInitialSeconds int32           `json:"backoff_initial_seconds"`
+		BackoffMaxSeconds     int32           `json:"backoff_max_seconds"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	out, err := s.client.CreateNotificationChannel(r.Context(), &schedulerv1.CreateNotificationChannelRequest{TenantId: tenantID(r.Context()), Kind: body.Kind, Name: body.Name, ConfigJson: body.Config})
+	allJobs := len(body.JobIDs) == 0
+	if body.AllJobs != nil {
+		allJobs = *body.AllJobs
+	}
+	out, err := s.client.CreateNotificationChannel(r.Context(), &schedulerv1.CreateNotificationChannelRequest{TenantId: tenantID(r.Context()), Kind: body.Kind, Name: body.Name, ConfigJson: body.Config, Events: body.Events, AllJobs: allJobs, JobIds: body.JobIDs, MaxAttempts: body.MaxAttempts, BackoffInitialSeconds: body.BackoffInitialSeconds, BackoffMaxSeconds: body.BackoffMaxSeconds})
 	respond(w, out, err, http.StatusCreated)
+}
+func (s *Server) listNotificationHistory(w http.ResponseWriter, r *http.Request) {
+	if tenantID(r.Context()) == "" {
+		writeError(w, 400, "X-Tenant-ID is required")
+		return
+	}
+	limit, err := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 32)
+	if r.URL.Query().Get("limit") == "" {
+		limit = 100
+	} else if err != nil {
+		writeError(w, 400, "invalid limit")
+		return
+	}
+	out, callErr := s.client.ListNotificationHistory(r.Context(), &schedulerv1.ListNotificationHistoryRequest{TenantId: tenantID(r.Context()), ChannelId: r.URL.Query().Get("channel_id"), JobId: r.URL.Query().Get("job_id"), Status: r.URL.Query().Get("status"), Limit: int32(limit)})
+	respond(w, out, callErr, http.StatusOK)
 }
 func (s *Server) completeCallback(w http.ResponseWriter, r *http.Request) {
 	var body struct {

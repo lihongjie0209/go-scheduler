@@ -563,6 +563,9 @@ func (s *Store) TriggerJobWithOptions(ctx context.Context, tenantID, jobID, key,
 			if err != nil {
 				return Run{}, fmt.Errorf("insert broadcast shard: %w", err)
 			}
+			if err = emitRunLifecycleEventTx(ctx, tx, runID, "pending"); err != nil {
+				return Run{}, err
+			}
 		}
 		r.ShardIndex = 0
 		r.ShardTotal = int32(len(shards)) // #nosec G115 -- executor addresses are validated to at most 100 entries.
@@ -572,6 +575,9 @@ func (s *Store) TriggerJobWithOptions(ctx context.Context, tenantID, jobID, key,
 		err = tx.QueryRow(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,runtime_input,idempotency_key,error_message,override_addresses) VALUES($1,$2,$3,'manual',$4,$5,CASE WHEN $4='skipped' THEN now() END,$6,NULLIF($7,''),CASE WHEN $4='skipped' THEN 'block strategy: discard later' ELSE NULL END,$8) RETURNING id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,runtime_input`, r.ID, tenantID, jobID, status, r.ScheduledAt, input, key, options.OverrideAddresses).Scan(&r.ID, &r.TenantID, &r.JobID, &r.TriggerType, &r.Status, &r.Attempt, &r.ScheduledAt, &r.RuntimeInput)
 		if err != nil {
 			return Run{}, fmt.Errorf("insert run: %w", err)
+		}
+		if err = emitRunLifecycleEventTx(ctx, tx, r.ID, status); err != nil {
+			return Run{}, err
 		}
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -613,6 +619,9 @@ func applyBlockAction(ctx context.Context, tx pgx.Tx, jobID string, action block
 			return "", err
 		}
 		for _, item := range covered {
+			if err = emitRunLifecycleEventTx(ctx, tx, item.run.ID, "cancelled"); err != nil {
+				return "", err
+			}
 			if err = rearmFixedDelay(ctx, tx, item.run, item.finishedAt); err != nil {
 				return "", err
 			}
@@ -710,7 +719,9 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 		fastPath := j.OverlapPolicy == "parallel" && routeStrategy != "sharding_broadcast"
 		for _, scheduledAt := range due {
 			if fastPath {
-				fastBatch.Queue(`INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,reschedule_on_terminal) VALUES($1,$2,$3,'schedule','pending',$4,$5)`, uuid.NewString(), j.TenantID, j.ID, scheduledAt, j.ScheduleType == "fixed_delay")
+				runID := uuid.NewString()
+				fastBatch.Queue(`INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,reschedule_on_terminal) VALUES($1,$2,$3,'schedule','pending',$4,$5)`, runID, j.TenantID, j.ID, scheduledAt, j.ScheduleType == "fixed_delay")
+				fastBatch.Queue(runLifecycleEventSQL, runID, "pending", "pending", uuid.NewString())
 				continue
 			}
 			queued, hasActive, stateErr := jobRunQueueState(ctx, tx, j.ID)
@@ -744,15 +755,23 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 				} else {
 					groupID := uuid.NewString()
 					for _, shard := range shards {
-						if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,reschedule_on_terminal) VALUES($1,$2,$3,'schedule','pending',$4,$5,$6,$7,$8,$9,$10)`, uuid.NewString(), j.TenantID, j.ID, scheduledAt, shard.NodeID, shard.Address, groupID, shard.Index, shard.Total, j.ScheduleType == "fixed_delay"); err != nil {
+						runID := uuid.NewString()
+						if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,reschedule_on_terminal) VALUES($1,$2,$3,'schedule','pending',$4,$5,$6,$7,$8,$9,$10)`, runID, j.TenantID, j.ID, scheduledAt, shard.NodeID, shard.Address, groupID, shard.Index, shard.Total, j.ScheduleType == "fixed_delay"); err != nil {
+							return err
+						}
+						if err = emitRunLifecycleEventTx(ctx, tx, runID, "pending"); err != nil {
 							return err
 						}
 					}
 					continue
 				}
 			}
-			_, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,error_message,reschedule_on_terminal) VALUES($1,$2,$3,'schedule',$4,$5,CASE WHEN $4='skipped' THEN now() END,CASE WHEN $4='skipped' THEN 'block strategy: discard later or queue full' ELSE NULL END,$6)`, uuid.NewString(), j.TenantID, j.ID, status, scheduledAt, j.ScheduleType == "fixed_delay")
+			runID := uuid.NewString()
+			_, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,error_message,reschedule_on_terminal) VALUES($1,$2,$3,'schedule',$4,$5,CASE WHEN $4='skipped' THEN now() END,CASE WHEN $4='skipped' THEN 'block strategy: discard later or queue full' ELSE NULL END,$6)`, runID, j.TenantID, j.ID, status, scheduledAt, j.ScheduleType == "fixed_delay")
 			if err != nil {
+				return err
+			}
+			if err = emitRunLifecycleEventTx(ctx, tx, runID, status); err != nil {
 				return err
 			}
 			if j.ScheduleType == "fixed_delay" && status == "skipped" {
@@ -812,11 +831,14 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 	 LEFT JOIN active_job aj ON aj.job_id=r.job_id LEFT JOIN active_tenant at ON at.tenant_id=r.tenant_id
 	 WHERE (r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())
 	), eligible AS (
-	 SELECT r.id,c.timeout_seconds FROM job_runs r JOIN candidates c ON c.id=r.id
+	 SELECT r.id,c.timeout_seconds,r.status='pending' AS emit_running FROM job_runs r JOIN candidates c ON c.id=r.id
 	 WHERE c.job_rank<=GREATEST(c.max_concurrent_runs-c.job_active,0)
 	 AND c.tenant_rank<=GREATEST(c.tenant_max-c.tenant_active,0)
 	 ORDER BY r.available_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT $1
-	), claimed AS (UPDATE job_runs r SET status='running',lease_owner=$2,lease_until=now()+GREATEST($3,eligible.timeout_seconds+30)*interval '1 second',started_at=COALESCE(started_at,now()) FROM eligible WHERE r.id=eligible.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())) RETURNING r.id,r.tenant_id,r.job_id,r.trigger_type,r.status,r.attempt,r.scheduled_at,r.runtime_input,r.parent_run_id,r.retry_of_run_id,r.executor_node_id,r.executor_address,r.broadcast_group_id,r.shard_index,r.shard_total,r.reschedule_on_terminal,r.override_addresses)
+	), claimed AS (UPDATE job_runs r SET status='running',lease_owner=$2,lease_until=now()+GREATEST($3,eligible.timeout_seconds+30)*interval '1 second',started_at=COALESCE(started_at,now()) FROM eligible WHERE r.id=eligible.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())) RETURNING r.id,r.tenant_id,r.job_id,r.trigger_type,r.status,r.attempt,r.scheduled_at,r.runtime_input,r.parent_run_id,r.retry_of_run_id,r.executor_node_id,r.executor_address,r.broadcast_group_id,r.shard_index,r.shard_total,r.reschedule_on_terminal,r.override_addresses,eligible.emit_running
+	), emitted AS (INSERT INTO outbox_events(id,tenant_id,topic,payload)
+	 SELECT gen_random_uuid(),c.tenant_id,'job.run.running',jsonb_build_object('run_id',c.id::text,'job_id',c.job_id::text,'tenant_id',c.tenant_id::text,'status','running','attempt',c.attempt,'trigger_type',c.trigger_type,'scheduled_at',c.scheduled_at,'occurred_at',now())
+	 FROM claimed c WHERE c.emit_running AND EXISTS(SELECT 1 FROM notification_channels n WHERE n.tenant_id=c.tenant_id AND n.enabled AND 'job.run.running'=ANY(n.event_types) AND (n.all_jobs OR EXISTS(SELECT 1 FROM notification_channel_jobs j WHERE j.channel_id=n.id AND j.job_id=c.job_id))))
 	 SELECT c.id,c.tenant_id,c.job_id,c.trigger_type,c.status,c.attempt,c.scheduled_at,c.runtime_input,COALESCE(c.parent_run_id::text,''),COALESCE(c.retry_of_run_id::text,''),COALESCE(c.executor_node_id,''),COALESCE(c.executor_address,''),COALESCE(c.broadcast_group_id::text,''),COALESCE(c.shard_index,0),COALESCE(c.shard_total,0),c.reschedule_on_terminal,c.override_addresses,`+jobColumnsWithAlias("j")+` FROM claimed c JOIN jobs j ON j.id=c.job_id`, limit, owner, lease.Seconds())
 	if err != nil {
 		return nil, err
@@ -869,12 +891,18 @@ func (s *Store) CompleteRun(ctx context.Context, r Run, success bool, status int
 	if err != nil {
 		return err
 	}
+	if err = emitRunLifecycleEventTx(ctx, tx, r.ID, state); err != nil {
+		return err
+	}
 	if !success {
-		if _, err = tx.Exec(ctx, `INSERT INTO outbox_events(id,tenant_id,topic,payload) VALUES($1,$2,'job.run.failed',jsonb_build_object('run_id',$3::text,'job_id',$4::text,'error',$5::text))`, uuid.NewString(), r.TenantID, r.ID, r.JobID, errorMessage); err != nil {
+		if err = emitRunEventTx(ctx, tx, r.ID, state, "exhausted"); err != nil {
 			return err
 		}
-	} else if err = enqueueDependentRuns(ctx, tx, r); err != nil {
-		return err
+	}
+	if success {
+		if err = enqueueDependentRuns(ctx, tx, r); err != nil {
+			return err
+		}
 	}
 	if err = rearmFixedDelay(ctx, tx, r, finishedAt); err != nil {
 		return err
@@ -989,6 +1017,9 @@ func enqueueDependentRuns(ctx context.Context, tx pgx.Tx, parent Run) error {
 					if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,parent_run_id,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total) VALUES($1,$2,$3,'dependency','pending',$4,$5,$6,$7,$8,$9,$10)`, shardRunID, parent.TenantID, child.id, scheduledAt, parent.ID, shard.NodeID, shard.Address, groupID, shard.Index, shard.Total); err != nil {
 						return err
 					}
+					if err = emitRunLifecycleEventTx(ctx, tx, shardRunID, "pending"); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -996,19 +1027,30 @@ func enqueueDependentRuns(ctx context.Context, tx pgx.Tx, parent Run) error {
 		if _, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,scheduled_at,finished_at,error_message,parent_run_id) VALUES($1,$2,$3,'dependency',$4,$5,CASE WHEN $4='skipped' THEN now() END,NULLIF($6,''),$7)`, runID, parent.TenantID, child.id, state, scheduledAt, message, parent.ID); err != nil {
 			return err
 		}
+		if err = emitRunLifecycleEventTx(ctx, tx, runID, state); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (s *Store) MarkWaitingCallback(ctx context.Context, runID string, status int, tokenHash []byte, deadline time.Time) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE job_runs SET status='waiting_callback',response_status=$2,callback_token_hash=$3,callback_deadline=$4,lease_owner=NULL,lease_until=NULL WHERE id=$1 AND status='running'`, runID, status, tokenHash, deadline)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE job_runs SET status='waiting_callback',response_status=$2,callback_token_hash=$3,callback_deadline=$4,lease_owner=NULL,lease_until=NULL WHERE id=$1 AND status='running'`, runID, status, tokenHash, deadline)
 	if err != nil {
 		return fmt.Errorf("mark waiting callback: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrConflict
 	}
-	return nil
+	if err = emitRunLifecycleEventTx(ctx, tx, runID, "waiting_callback"); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) CompleteCallback(ctx context.Context, runID string, tokenHash []byte, succeeded bool, message string) error {
@@ -1030,17 +1072,23 @@ func (s *Store) CompleteCallback(ctx context.Context, runID string, tokenHash []
 		return fmt.Errorf("complete callback: %w", err)
 	}
 	finishedAt := *terminal.FinishedAt
+	if err = emitRunLifecycleEventTx(ctx, tx, runID, terminal.Status); err != nil {
+		return err
+	}
 	willRetry := !succeeded && terminal.Attempt <= maxRetries
+	if !succeeded && !willRetry {
+		if err = emitRunEventTx(ctx, tx, runID, terminal.Status, "exhausted"); err != nil {
+			return err
+		}
+	}
 	if willRetry {
 		if _, err = insertRetryRunTx(ctx, tx, terminal, callbackRetryDelay(terminal.Attempt)); err != nil {
 			return err
 		}
-	} else if !succeeded {
-		if _, err = tx.Exec(ctx, `INSERT INTO outbox_events(id,tenant_id,topic,payload) VALUES($1,$2,'job.run.failed',jsonb_build_object('run_id',$3::text,'job_id',$4::text,'error',$5::text))`, uuid.NewString(), terminal.TenantID, runID, terminal.JobID, message); err != nil {
+	} else if succeeded {
+		if err = enqueueDependentRuns(ctx, tx, Run{ID: runID, TenantID: terminal.TenantID, JobID: terminal.JobID}); err != nil {
 			return err
 		}
-	} else if err = enqueueDependentRuns(ctx, tx, Run{ID: runID, TenantID: terminal.TenantID, JobID: terminal.JobID}); err != nil {
-		return err
 	}
 	if !willRetry {
 		if err = rearmFixedDelay(ctx, tx, terminal, finishedAt); err != nil {
@@ -1065,6 +1113,9 @@ func insertRetryRunTx(ctx context.Context, tx pgx.Tx, previous Run, delay time.D
 	next := Run{ID: uuid.NewString(), TenantID: previous.TenantID, JobID: previous.JobID, TriggerType: "retry", Status: "pending", RuntimeInput: previous.RuntimeInput, ParentRunID: previous.ParentRunID, RetryOfRunID: previous.ID, Attempt: previous.Attempt + 1, ScheduledAt: time.Now().UTC(), ExecutorNodeID: previous.ExecutorNodeID, ExecutorAddress: previous.ExecutorAddress, BroadcastGroupID: previous.BroadcastGroupID, ShardIndex: previous.ShardIndex, ShardTotal: previous.ShardTotal, RescheduleOnTerminal: previous.RescheduleOnTerminal, OverrideAddresses: previous.OverrideAddresses}
 	_, err := tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,available_at,runtime_input,parent_run_id,retry_of_run_id,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,reschedule_on_terminal,override_addresses) VALUES($1,$2,$3,'retry','pending',$4,$5::timestamptz,$5::timestamptz+$6*interval '1 second',$7,NULLIF($8,'')::uuid,$9,NULLIF($10,''),NULLIF($11,''),NULLIF($12,'')::uuid,CASE WHEN $12='' THEN NULL ELSE $13::integer END,CASE WHEN $12='' THEN NULL ELSE $14::integer END,$15,$16)`, next.ID, next.TenantID, next.JobID, next.Attempt, next.ScheduledAt, delay.Seconds(), next.RuntimeInput, next.ParentRunID, next.RetryOfRunID, next.ExecutorNodeID, next.ExecutorAddress, next.BroadcastGroupID, next.ShardIndex, next.ShardTotal, next.RescheduleOnTerminal, next.OverrideAddresses)
 	if err != nil {
+		return Run{}, err
+	}
+	if err = emitRunLifecycleEventTx(ctx, tx, next.ID, "pending"); err != nil {
 		return Run{}, err
 	}
 	return next, nil
@@ -1106,12 +1157,15 @@ func (s *Store) ExpireCallbacks(ctx context.Context) error {
 		if err = tx.QueryRow(ctx, `UPDATE job_runs SET status='timed_out',finished_at=now(),error_message='callback deadline exceeded',callback_token_hash=NULL,callback_deadline=NULL WHERE id=$1 AND status='waiting_callback' RETURNING finished_at`, item.run.ID).Scan(&finishedAt); err != nil {
 			return err
 		}
+		if err = emitRunLifecycleEventTx(ctx, tx, item.run.ID, "timed_out"); err != nil {
+			return err
+		}
 		if item.run.Attempt <= item.maxRetries {
 			if _, err = insertRetryRunTx(ctx, tx, item.run, callbackRetryDelay(item.run.Attempt)); err != nil {
 				return err
 			}
 		} else {
-			if _, err = tx.Exec(ctx, `INSERT INTO outbox_events(id,tenant_id,topic,payload) VALUES($1,$2,'job.run.failed',jsonb_build_object('run_id',$3::text,'job_id',$4::text,'error','callback deadline exceeded'))`, uuid.NewString(), item.run.TenantID, item.run.ID, item.run.JobID); err != nil {
+			if err = emitRunEventTx(ctx, tx, item.run.ID, "timed_out", "exhausted"); err != nil {
 				return err
 			}
 			if err = rearmFixedDelay(ctx, tx, item.run, finishedAt); err != nil {
@@ -1260,16 +1314,22 @@ func (s *Store) FailRun(ctx context.Context, r Run, state string, status int, er
 	if err != nil {
 		return nil, err
 	}
+	if err = emitRunLifecycleEventTx(ctx, tx, r.ID, state); err != nil {
+		return nil, err
+	}
+	if retryDelay == nil {
+		if err = emitRunEventTx(ctx, tx, r.ID, state, "exhausted"); err != nil {
+			return nil, err
+		}
+	}
 	var retry *Run
 	if retryDelay != nil {
-		next := Run{ID: uuid.NewString(), TenantID: r.TenantID, JobID: r.JobID, TriggerType: "retry", Status: "pending", RuntimeInput: r.RuntimeInput, ParentRunID: r.ParentRunID, RetryOfRunID: r.ID, Attempt: r.Attempt + 1, ScheduledAt: time.Now().UTC(), ExecutorNodeID: r.ExecutorNodeID, ExecutorAddress: r.ExecutorAddress, BroadcastGroupID: r.BroadcastGroupID, ShardIndex: r.ShardIndex, ShardTotal: r.ShardTotal, RescheduleOnTerminal: r.RescheduleOnTerminal, OverrideAddresses: r.OverrideAddresses}
-		_, err = tx.Exec(ctx, `INSERT INTO job_runs(id,tenant_id,job_id,trigger_type,status,attempt,scheduled_at,available_at,runtime_input,parent_run_id,retry_of_run_id,executor_node_id,executor_address,broadcast_group_id,shard_index,shard_total,reschedule_on_terminal,override_addresses) VALUES($1,$2,$3,'retry','pending',$4,$5::timestamptz,$5::timestamptz+$6*interval '1 second',$7,NULLIF($8,'')::uuid,$9,NULLIF($10,''),NULLIF($11,''),NULLIF($12,'')::uuid,CASE WHEN $12='' THEN NULL ELSE $13::integer END,CASE WHEN $12='' THEN NULL ELSE $14::integer END,$15,$16)`, next.ID, next.TenantID, next.JobID, next.Attempt, next.ScheduledAt, retryDelay.Seconds(), next.RuntimeInput, next.ParentRunID, next.RetryOfRunID, next.ExecutorNodeID, next.ExecutorAddress, next.BroadcastGroupID, next.ShardIndex, next.ShardTotal, next.RescheduleOnTerminal, next.OverrideAddresses)
+		next, retryErr := insertRetryRunTx(ctx, tx, r, *retryDelay)
+		err = retryErr
 		if err != nil {
 			return nil, err
 		}
 		retry = &next
-	} else if _, err = tx.Exec(ctx, `INSERT INTO outbox_events(id,tenant_id,topic,payload) VALUES($1,$2,'job.run.failed',jsonb_build_object('run_id',$3::text,'job_id',$4::text,'error',$5::text))`, uuid.NewString(), r.TenantID, r.ID, r.JobID, errorMessage); err != nil {
-		return nil, err
 	}
 	if retryDelay == nil {
 		if err = rearmFixedDelay(ctx, tx, r, finishedAt); err != nil {
@@ -1300,6 +1360,9 @@ func (s *Store) CancelRun(ctx context.Context, tenantID, runID, reason string) (
 	defer func() { _ = tx.Rollback(ctx) }()
 	run, err := scanRun(tx.QueryRow(ctx, `UPDATE job_runs SET status='cancelled',finished_at=COALESCE(finished_at,now()),error_message=$3,lease_owner=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE tenant_id=$1 AND id=$2 AND status IN ('pending','running','waiting_callback') RETURNING `+runSelectColumns, tenantID, runID, reason))
 	if err == nil {
+		if err = emitRunLifecycleEventTx(ctx, tx, run.ID, "cancelled"); err != nil {
+			return Run{}, err
+		}
 		if run.FinishedAt != nil {
 			if err = rearmFixedDelay(ctx, tx, run, *run.FinishedAt); err != nil {
 				return Run{}, err

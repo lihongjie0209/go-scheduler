@@ -3,7 +3,10 @@ package notifier
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,8 +14,11 @@ import (
 	"net"
 	"net/http"
 	"net/smtp"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/lihongjie0209/go-scheduler/internal/store"
@@ -27,15 +33,22 @@ const (
 )
 
 type Worker struct {
-	store  *store.Store
-	owner  string
-	smtp   SMTPConfig
-	client *http.Client
-	wg     sync.WaitGroup
+	store   *store.Store
+	owner   string
+	smtp    SMTPConfig
+	client  *http.Client
+	wg      sync.WaitGroup
+	senders map[string]func(context.Context, store.NotificationChannel, store.OutboxEvent) error
 }
 
 func New(s *store.Store, owner string, smtpConfig SMTPConfig) *Worker {
-	return &Worker{store: s, owner: owner, smtp: smtpConfig, client: &http.Client{Timeout: notificationTimeout}}
+	w := &Worker{store: s, owner: owner, smtp: smtpConfig, client: &http.Client{Timeout: notificationTimeout}}
+	w.senders = map[string]func(context.Context, store.NotificationChannel, store.OutboxEvent) error{
+		"webhook":  w.webhook,
+		"email":    w.email,
+		"dingtalk": w.dingtalk,
+	}
+	return w
 }
 func (w *Worker) Run(ctx context.Context) {
 	w.wg.Add(1)
@@ -69,7 +82,16 @@ func (w *Worker) tick(ctx context.Context) {
 		deliverErr := w.deliver(deliveryCtx, delivery.Channel, delivery.Event)
 		cancel()
 		if deliverErr != nil {
-			_ = w.store.RetryNotificationDelivery(ctx, delivery.ID, deliverErr.Error(), retryDelay(delivery.Attempts))
+			if delivery.Attempts >= delivery.Channel.MaxAttempts {
+				if err := w.store.DeadLetterNotificationDelivery(ctx, delivery.ID, delivery.EventID, deliverErr.Error()); err != nil {
+					slog.Error("dead-letter notification delivery", "delivery_id", delivery.ID, "error", err)
+				}
+				return
+			}
+			delay := retryDelay(delivery.Attempts, time.Duration(delivery.Channel.BackoffInitialSeconds)*time.Second, time.Duration(delivery.Channel.BackoffMaxSeconds)*time.Second)
+			if err := w.store.RetryNotificationDelivery(ctx, delivery.ID, deliverErr.Error(), delay); err != nil {
+				slog.Error("retry notification delivery", "delivery_id", delivery.ID, "error", err)
+			}
 			return
 		}
 		_ = w.store.CompleteNotificationDelivery(ctx, delivery.ID, delivery.EventID)
@@ -102,15 +124,11 @@ func processDeliveries(ctx context.Context, deliveries []store.NotificationDeliv
 	group.Wait()
 }
 func (w *Worker) deliver(ctx context.Context, channel store.NotificationChannel, event store.OutboxEvent) error {
-	var err error
-	switch channel.Kind {
-	case "webhook":
-		err = w.webhook(ctx, channel, event)
-	case "email":
-		err = w.email(ctx, channel, event)
-	default:
-		err = fmt.Errorf("unknown notification channel %q", channel.Kind)
+	sender, ok := w.senders[channel.Kind]
+	if !ok {
+		return fmt.Errorf("unknown notification channel %q", channel.Kind)
 	}
+	err := sender(ctx, channel, event)
 	if err != nil {
 		return fmt.Errorf("deliver %s: %w", channel.Name, err)
 	}
@@ -118,13 +136,17 @@ func (w *Worker) deliver(ctx context.Context, channel store.NotificationChannel,
 }
 func (w *Worker) webhook(ctx context.Context, channel store.NotificationChannel, event store.OutboxEvent) error {
 	var config struct {
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
+		URL      string            `json:"url"`
+		Headers  map[string]string `json:"headers"`
+		Template string            `json:"template"`
 	}
 	if err := json.Unmarshal(channel.Config, &config); err != nil {
 		return err
 	}
-	body, _ := json.Marshal(map[string]any{"topic": event.Topic, "payload": json.RawMessage(event.Payload)})
+	body, err := webhookBody(config.Template, event)
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, config.URL, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -145,6 +167,106 @@ func (w *Worker) webhook(ctx context.Context, channel store.NotificationChannel,
 		return fmt.Errorf("webhook status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (w *Worker) dingtalk(ctx context.Context, channel store.NotificationChannel, event store.OutboxEvent) error {
+	var config struct {
+		URL         string `json:"url"`
+		AuthType    string `json:"auth_type"`
+		AccessToken string `json:"access_token"`
+		Secret      string `json:"secret"`
+		Template    string `json:"template"`
+	}
+	if err := json.Unmarshal(channel.Config, &config); err != nil {
+		return err
+	}
+	endpoint, err := url.Parse(config.URL)
+	if err != nil {
+		return err
+	}
+	query := endpoint.Query()
+	if config.AuthType == "access_token" || config.AccessToken != "" {
+		query.Set("access_token", config.AccessToken)
+	}
+	if config.AuthType == "hmac_sha256" {
+		timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
+		mac := hmac.New(sha256.New, []byte(config.Secret))
+		_, _ = mac.Write([]byte(timestamp + "\n" + config.Secret))
+		query.Set("timestamp", timestamp)
+		query.Set("sign", base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+	}
+	endpoint.RawQuery = query.Encode()
+	content, err := renderNotificationTemplate(config.Template, event)
+	if err != nil {
+		return err
+	}
+	if config.Template == "" {
+		content = event.Topic + ": " + string(event.Payload)
+	}
+	body, err := json.Marshal(map[string]any{"msgtype": "text", "text": map[string]string{"content": content}})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", event.ID)
+	req.Header.Set("X-Go-Scheduler-Event-ID", event.ID)
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("dingtalk status %d", resp.StatusCode)
+	}
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if len(responseBody) > 0 && json.Unmarshal(responseBody, &result) == nil && result.ErrCode != 0 {
+		return fmt.Errorf("dingtalk error %d: %s", result.ErrCode, result.ErrMsg)
+	}
+	return nil
+}
+
+func webhookBody(rawTemplate string, event store.OutboxEvent) ([]byte, error) {
+	if rawTemplate == "" {
+		return json.Marshal(map[string]any{"topic": event.Topic, "payload": json.RawMessage(event.Payload)})
+	}
+	rendered, err := renderNotificationTemplate(rawTemplate, event)
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid([]byte(rendered)) {
+		return nil, fmt.Errorf("webhook template must render valid JSON")
+	}
+	return []byte(rendered), nil
+}
+
+func renderNotificationTemplate(rawTemplate string, event store.OutboxEvent) (string, error) {
+	if len(rawTemplate) > 64<<10 {
+		return "", fmt.Errorf("notification template exceeds 64 KiB")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return "", fmt.Errorf("decode notification payload: %w", err)
+	}
+	tmpl, err := template.New("notification").Option("missingkey=error").Parse(rawTemplate)
+	if err != nil {
+		return "", err
+	}
+	var output bytes.Buffer
+	if err = tmpl.Execute(&output, map[string]any{"EventID": event.ID, "Topic": event.Topic, "Payload": payload}); err != nil {
+		return "", err
+	}
+	if output.Len() > 1<<20 {
+		return "", fmt.Errorf("rendered notification exceeds 1 MiB")
+	}
+	return output.String(), nil
 }
 func (w *Worker) email(ctx context.Context, channel store.NotificationChannel, event store.OutboxEvent) error {
 	if w.smtp.Address == "" {
@@ -204,12 +326,19 @@ func (w *Worker) email(ctx context.Context, channel store.NotificationChannel, e
 	}
 	return writer.Close()
 }
-func retryDelay(attempt int) time.Duration {
-	if attempt > 8 {
-		attempt = 8
-	}
+func retryDelay(attempt int, initial, maximum time.Duration) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	return time.Duration(1<<attempt) * time.Second
+	delay := initial
+	for step := 1; step < attempt && delay < maximum; step++ {
+		if delay > maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
 }

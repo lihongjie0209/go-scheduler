@@ -34,6 +34,7 @@ service SchedulerService {
   rpc ListRunLogs(ListRunLogsRequest) returns (ListRunLogsResponse);
   rpc CreateNotificationChannel(CreateNotificationChannelRequest) returns (NotificationChannel);
   rpc ListNotificationChannels(ListNotificationChannelsRequest) returns (ListNotificationChannelsResponse);
+  rpc ListNotificationHistory(ListNotificationHistoryRequest) returns (ListNotificationHistoryResponse);
   rpc GetRunReport(GetRunReportRequest) returns (RunReport);
   rpc PurgeRunHistory(PurgeRunHistoryRequest) returns (PurgeRunHistoryResponse);
 }
@@ -189,10 +190,57 @@ message AppendRunLogsResponse { int64 next_cursor = 1; }
 message ListRunLogsRequest { string tenant_id = 1; string run_id = 2; int64 after_cursor = 3; int32 limit = 4; }
 message ListRunLogsResponse { repeated RunLogEntry entries = 1; int64 next_cursor = 2; }
 
-message NotificationChannel { string id = 1; string tenant_id = 2; string kind = 3; string name = 4; bool configured = 5; }
-message CreateNotificationChannelRequest { string tenant_id = 1; string kind = 2; string name = 3; bytes config_json = 4; }
+message NotificationChannel {
+  string id = 1;
+  string tenant_id = 2;
+  string kind = 3;
+  string name = 4;
+  bool configured = 5;
+  repeated string events = 6;
+  bool all_jobs = 7;
+  repeated string job_ids = 8;
+  int32 max_attempts = 9;
+  int32 backoff_initial_seconds = 10;
+  int32 backoff_max_seconds = 11;
+}
+message CreateNotificationChannelRequest {
+  string tenant_id = 1;
+  string kind = 2;
+  string name = 3;
+  bytes config_json = 4;
+  repeated string events = 5;
+  bool all_jobs = 6;
+  repeated string job_ids = 7;
+  int32 max_attempts = 8;
+  int32 backoff_initial_seconds = 9;
+  int32 backoff_max_seconds = 10;
+}
 message ListNotificationChannelsRequest { string tenant_id = 1; }
 message ListNotificationChannelsResponse { repeated NotificationChannel channels = 1; }
+message NotificationHistoryEntry {
+  string delivery_id = 1;
+  string event_id = 2;
+  string channel_id = 3;
+  string channel_name = 4;
+  string channel_kind = 5;
+  string topic = 6;
+  string job_id = 7;
+  string run_id = 8;
+  string status = 9;
+  int32 attempts = 10;
+  string last_error = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp delivered_at = 13;
+  google.protobuf.Timestamp dead_at = 14;
+}
+message ListNotificationHistoryRequest {
+  string tenant_id = 1;
+  string channel_id = 2;
+  string job_id = 3;
+  string status = 4;
+  int32 limit = 5;
+}
+message ListNotificationHistoryResponse { repeated NotificationHistoryEntry deliveries = 1; }
 
 message GetRunReportRequest {
   string tenant_id = 1;

@@ -3600,7 +3600,7 @@ func TestFailureNotificationUseCaseThroughCLI(t *testing.T) {
 		var event struct {
 			Topic string `json:"topic"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&event); err != nil || event.Topic != "job.run.failed" {
+		if err := json.NewDecoder(r.Body).Decode(&event); err != nil || event.Topic != "job.run.exhausted" {
 			t.Errorf("stable event = %+v, %v", event, err)
 		}
 		w.WriteHeader(http.StatusNoContent)

@@ -46,6 +46,7 @@ const (
 	SchedulerService_ListRunLogs_FullMethodName               = "/scheduler.v1.SchedulerService/ListRunLogs"
 	SchedulerService_CreateNotificationChannel_FullMethodName = "/scheduler.v1.SchedulerService/CreateNotificationChannel"
 	SchedulerService_ListNotificationChannels_FullMethodName  = "/scheduler.v1.SchedulerService/ListNotificationChannels"
+	SchedulerService_ListNotificationHistory_FullMethodName   = "/scheduler.v1.SchedulerService/ListNotificationHistory"
 	SchedulerService_GetRunReport_FullMethodName              = "/scheduler.v1.SchedulerService/GetRunReport"
 	SchedulerService_PurgeRunHistory_FullMethodName           = "/scheduler.v1.SchedulerService/PurgeRunHistory"
 )
@@ -81,6 +82,7 @@ type SchedulerServiceClient interface {
 	ListRunLogs(ctx context.Context, in *ListRunLogsRequest, opts ...grpc.CallOption) (*ListRunLogsResponse, error)
 	CreateNotificationChannel(ctx context.Context, in *CreateNotificationChannelRequest, opts ...grpc.CallOption) (*NotificationChannel, error)
 	ListNotificationChannels(ctx context.Context, in *ListNotificationChannelsRequest, opts ...grpc.CallOption) (*ListNotificationChannelsResponse, error)
+	ListNotificationHistory(ctx context.Context, in *ListNotificationHistoryRequest, opts ...grpc.CallOption) (*ListNotificationHistoryResponse, error)
 	GetRunReport(ctx context.Context, in *GetRunReportRequest, opts ...grpc.CallOption) (*RunReport, error)
 	PurgeRunHistory(ctx context.Context, in *PurgeRunHistoryRequest, opts ...grpc.CallOption) (*PurgeRunHistoryResponse, error)
 }
@@ -363,6 +365,16 @@ func (c *schedulerServiceClient) ListNotificationChannels(ctx context.Context, i
 	return out, nil
 }
 
+func (c *schedulerServiceClient) ListNotificationHistory(ctx context.Context, in *ListNotificationHistoryRequest, opts ...grpc.CallOption) (*ListNotificationHistoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNotificationHistoryResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_ListNotificationHistory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *schedulerServiceClient) GetRunReport(ctx context.Context, in *GetRunReportRequest, opts ...grpc.CallOption) (*RunReport, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunReport)
@@ -414,6 +426,7 @@ type SchedulerServiceServer interface {
 	ListRunLogs(context.Context, *ListRunLogsRequest) (*ListRunLogsResponse, error)
 	CreateNotificationChannel(context.Context, *CreateNotificationChannelRequest) (*NotificationChannel, error)
 	ListNotificationChannels(context.Context, *ListNotificationChannelsRequest) (*ListNotificationChannelsResponse, error)
+	ListNotificationHistory(context.Context, *ListNotificationHistoryRequest) (*ListNotificationHistoryResponse, error)
 	GetRunReport(context.Context, *GetRunReportRequest) (*RunReport, error)
 	PurgeRunHistory(context.Context, *PurgeRunHistoryRequest) (*PurgeRunHistoryResponse, error)
 	mustEmbedUnimplementedSchedulerServiceServer()
@@ -506,6 +519,9 @@ func (UnimplementedSchedulerServiceServer) CreateNotificationChannel(context.Con
 }
 func (UnimplementedSchedulerServiceServer) ListNotificationChannels(context.Context, *ListNotificationChannelsRequest) (*ListNotificationChannelsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListNotificationChannels not implemented")
+}
+func (UnimplementedSchedulerServiceServer) ListNotificationHistory(context.Context, *ListNotificationHistoryRequest) (*ListNotificationHistoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListNotificationHistory not implemented")
 }
 func (UnimplementedSchedulerServiceServer) GetRunReport(context.Context, *GetRunReportRequest) (*RunReport, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRunReport not implemented")
@@ -1020,6 +1036,24 @@ func _SchedulerService_ListNotificationChannels_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SchedulerService_ListNotificationHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListNotificationHistoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).ListNotificationHistory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_ListNotificationHistory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).ListNotificationHistory(ctx, req.(*ListNotificationHistoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SchedulerService_GetRunReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetRunReportRequest)
 	if err := dec(in); err != nil {
@@ -1170,6 +1204,10 @@ var SchedulerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListNotificationChannels",
 			Handler:    _SchedulerService_ListNotificationChannels_Handler,
+		},
+		{
+			MethodName: "ListNotificationHistory",
+			Handler:    _SchedulerService_ListNotificationHistory_Handler,
 		},
 		{
 			MethodName: "GetRunReport",

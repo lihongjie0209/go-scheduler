@@ -1484,14 +1484,14 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if _, err = one.pool.Exec(ctx, `UPDATE outbox_events SET published_at=now() WHERE published_at IS NULL`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = one.CreateNotificationChannel(ctx, tenantID, "webhook", "primary-alerts", json.RawMessage(`{"url":"https://alerts.example.com/primary"}`)); err != nil {
+	if _, err = one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "webhook", Name: "primary-alerts", Config: json.RawMessage(`{"url":"https://alerts.example.com/primary"}`), Events: []string{"job.run.exhausted"}, AllJobs: true, MaxAttempts: 8, BackoffInitialSeconds: 2, BackoffMaxSeconds: 300}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = one.CreateNotificationChannel(ctx, tenantID, "webhook", "secondary-alerts", json.RawMessage(`{"url":"https://alerts.example.com/secondary"}`)); err != nil {
+	if _, err = one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "webhook", Name: "secondary-alerts", Config: json.RawMessage(`{"url":"https://alerts.example.com/secondary"}`), Events: []string{"job.run.exhausted"}, AllJobs: true, MaxAttempts: 8, BackoffInitialSeconds: 2, BackoffMaxSeconds: 300}); err != nil {
 		t.Fatal(err)
 	}
 	var notificationEventID string
-	if err = one.pool.QueryRow(ctx, `INSERT INTO outbox_events(tenant_id,topic,payload) VALUES($1,'job.run.failed','{"run_id":"notification-test"}') RETURNING id`, tenantID).Scan(&notificationEventID); err != nil {
+	if err = one.pool.QueryRow(ctx, `INSERT INTO outbox_events(tenant_id,topic,payload) VALUES($1,'job.run.exhausted','{"run_id":"notification-test"}') RETURNING id`, tenantID).Scan(&notificationEventID); err != nil {
 		t.Fatal(err)
 	}
 	if err = one.PrepareNotificationDeliveries(ctx, 10); err != nil {
@@ -1528,6 +1528,41 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	remainingDeliveries, err := two.ClaimNotificationDeliveries(ctx, "notifier-b", 10)
 	if err != nil || len(remainingDeliveries) != 0 {
 		t.Fatalf("completed delivery reclaimed = %+v, %v", remainingDeliveries, err)
+	}
+	if _, err = one.pool.Exec(ctx, `UPDATE notification_channels SET enabled=false WHERE tenant_id=$1`, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	scoped, err := one.CreateNotificationChannel(ctx, NotificationChannel{TenantID: tenantID, Kind: "dingtalk", Name: "queue-job-only", Config: json.RawMessage(`{"url":"https://oapi.dingtalk.com/robot/send","auth_type":"none"}`), Events: []string{"job.run.succeeded"}, JobIDs: []string{queueLimited.ID}, MaxAttempts: 1, BackoffInitialSeconds: 2, BackoffMaxSeconds: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var matchingEventID, ignoredEventID string
+	if err = one.pool.QueryRow(ctx, `INSERT INTO outbox_events(tenant_id,topic,payload) VALUES($1,'job.run.succeeded',jsonb_build_object('run_id','matching','job_id',$2::text)) RETURNING id`, tenantID, queueLimited.ID).Scan(&matchingEventID); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.pool.QueryRow(ctx, `INSERT INTO outbox_events(tenant_id,topic,payload) VALUES($1,'job.run.succeeded',jsonb_build_object('run_id','ignored','job_id',$2::text)) RETURNING id`, tenantID, firstShard.JobID).Scan(&ignoredEventID); err != nil {
+		t.Fatal(err)
+	}
+	if err = one.PrepareNotificationDeliveries(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	var matchingDeliveries, ignoredDeliveries int
+	if err = one.pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE event_id=$1),count(*) FILTER(WHERE event_id=$2) FROM notification_deliveries WHERE channel_id=$3`, matchingEventID, ignoredEventID, scoped.ID).Scan(&matchingDeliveries, &ignoredDeliveries); err != nil {
+		t.Fatal(err)
+	}
+	if matchingDeliveries != 1 || ignoredDeliveries != 0 {
+		t.Fatalf("scoped deliveries matching=%d ignored=%d", matchingDeliveries, ignoredDeliveries)
+	}
+	deadDeliveries, err := one.ClaimNotificationDeliveries(ctx, "notifier-dead", 10)
+	if err != nil || len(deadDeliveries) != 1 {
+		t.Fatalf("dead-letter claim = %+v, %v", deadDeliveries, err)
+	}
+	if err = one.DeadLetterNotificationDelivery(ctx, deadDeliveries[0].ID, matchingEventID, "attempts exhausted"); err != nil {
+		t.Fatal(err)
+	}
+	history, err := one.NotificationHistory(ctx, tenantID, scoped.ID, queueLimited.ID, "dead", 10)
+	if err != nil || len(history) != 1 || history[0].RunID != "matching" || history[0].Attempts != 1 || history[0].LastError != "attempts exhausted" || history[0].DeadAt == nil {
+		t.Fatalf("notification history = %+v, %v", history, err)
 	}
 	var reportTenantID string
 	if err = one.pool.QueryRow(ctx, `INSERT INTO tenants(name) VALUES('report-isolation') RETURNING id`).Scan(&reportTenantID); err != nil {

@@ -264,6 +264,10 @@ Cron 使用包含秒字段的 6 字段表达式，并按任务配置的 IANA 时
 
 执行目标返回 HTTP 202 时，Core 将运行置为 `waiting_callback`，目标随后使用派发头中的 callback URL 和一次性 token 报告结果。失败回调或超过 `callback_timeout_seconds` 未回调时，同样遵守 `max_retries`：每次创建独立 retry attempt 并指数退避，只有预算耗尽后的最终失败才告警。已消费、过期或取消运行的 token 返回 404。
 
-最终失败告警支持 webhook 和 email。使用 `schedulerctl notifications create --kind webhook --name ops --config '{"url":"https://hooks.example.com/job"}'` 创建渠道，或用 `--kind email --config '{"to":["ops@example.com"]}'` 创建邮件渠道。重试中的 attempt 不告警；耗尽重试后，每个渠道独立可靠投递和指数退避，已成功渠道不会因其他渠道失败而重发。
+通知采用多订阅模型，支持 `webhook`、`email` 和 `dingtalk` provider。每个订阅可通过 `--events pending,running,waiting_callback,succeeded,failed,timed_out,cancelled,skipped,exhausted` 监听完整运行生命周期；`--all-jobs=false --job-ids ID1,ID2` 可绑定指定任务，默认订阅全部任务。每个渠道可配置 `--max-attempts`、`--backoff-initial-seconds` 和 `--backoff-max-seconds`，投递耗尽后进入 `dead`，不会永久阻塞 Outbox。
+
+通用 Webhook 配置支持地址、自定义 Header 和 JSON Go 模板，例如 `schedulerctl notifications create --kind webhook --name ops --events succeeded,exhausted --config '{"url":"https://hooks.example.com/job","template":"{\"run\":\"{{.Payload.run_id}}\",\"status\":\"{{.Payload.status}}\"}"}'`。钉钉机器人支持 `none`、`access_token` 和 `hmac_sha256` 认证，例如 `--kind dingtalk --config '{"url":"https://oapi.dingtalk.com/robot/send","auth_type":"hmac_sha256","access_token":"...","secret":"...","template":"任务 {{.Payload.job_id}} 状态 {{.Payload.status}}"}'`。敏感配置随渠道配置整体加密落库。
+
+使用 `schedulerctl notifications history` 查询投递历史，可用 `--channel-id`、`--job-id`、`--status pending|delivered|dead` 和 `--limit` 过滤。投递语义为 at-least-once；通用 Webhook 会携带 `Idempotency-Key` 和 `X-Go-Scheduler-Event-ID`，接收方应按事件 ID 幂等。
 
 所有全局参数都有同名环境变量：`SCHEDULER_URL`、`SCHEDULER_TOKEN`、`SCHEDULER_EMAIL`、`SCHEDULER_PASSWORD`、`SCHEDULER_TENANT`。自动化环境建议使用 `--password-stdin` 或 `SCHEDULER_TOKEN`，避免密码进入 shell 历史。运行 `schedulerctl --help` 查看任务、运行记录、触发、删除、健康检查和补全命令。
