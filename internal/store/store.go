@@ -586,6 +586,10 @@ func applyBlockPolicy(ctx context.Context, tx pgx.Tx, jobID, policy string) (blo
 		return "", fmt.Errorf("check active job runs: %w", err)
 	}
 	action := decideBlockAction(policy, hasActive)
+	return applyBlockAction(ctx, tx, jobID, action)
+}
+
+func applyBlockAction(ctx context.Context, tx pgx.Tx, jobID string, action blockAction) (blockAction, error) {
 	if action == blockCancelAndEnqueue {
 		rows, err := tx.Query(ctx, `UPDATE job_runs SET status='cancelled',finished_at=now(),error_message='block strategy: covered by newer trigger',lease_owner=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE job_id=$1 AND status IN ('pending','running','waiting_callback') RETURNING id,tenant_id,job_id,COALESCE(broadcast_group_id::text,''),reschedule_on_terminal,finished_at`, jobID)
 		if err != nil {
@@ -615,6 +619,16 @@ func applyBlockPolicy(ctx context.Context, tx pgx.Tx, jobID, policy string) (blo
 		}
 	}
 	return action, nil
+}
+
+func jobRunQueueState(ctx context.Context, tx pgx.Tx, jobID string) (int, bool, error) {
+	var queued int
+	var hasActive bool
+	err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status='pending'),count(*) FILTER (WHERE status IN ('pending','running','waiting_callback'))>0 FROM job_runs WHERE job_id=$1`, jobID).Scan(&queued, &hasActive)
+	if err != nil {
+		return 0, false, fmt.Errorf("query job run queue state: %w", err)
+	}
+	return queued, hasActive, nil
 }
 
 func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
@@ -656,11 +670,11 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 			}
 		}
 		for _, scheduledAt := range due {
-			var queued int
-			if err = tx.QueryRow(ctx, `SELECT count(*) FROM job_runs WHERE job_id=$1 AND status='pending'`, j.ID).Scan(&queued); err != nil {
-				return err
+			queued, hasActive, stateErr := jobRunQueueState(ctx, tx, j.ID)
+			if stateErr != nil {
+				return stateErr
 			}
-			action, actionErr := applyBlockPolicy(ctx, tx, j.ID, j.OverlapPolicy)
+			action, actionErr := applyBlockAction(ctx, tx, j.ID, decideBlockAction(j.OverlapPolicy, hasActive))
 			if actionErr != nil {
 				return actionErr
 			}
@@ -944,21 +958,17 @@ func (s *Store) CompleteCallback(ctx context.Context, runID string, tokenHash []
 	defer func() { _ = tx.Rollback(ctx) }()
 	var terminal Run
 	var maxRetries int32
-	err = tx.QueryRow(ctx, `SELECT `+runColumns("r")+`,j.max_retries FROM job_runs r JOIN jobs j ON j.id=r.job_id WHERE r.id=$1 AND r.status='waiting_callback' AND r.callback_token_hash=$2 AND r.callback_deadline>now() FOR UPDATE OF r`, runID, tokenHash).Scan(&terminal.ID, &terminal.TenantID, &terminal.JobID, &terminal.TriggerType, &terminal.Status, &terminal.Attempt, &terminal.ScheduledAt, &terminal.StartedAt, &terminal.FinishedAt, &terminal.ResponseStatus, &terminal.ErrorMessage, &terminal.RuntimeInput, &terminal.ParentRunID, &terminal.RetryOfRunID, &terminal.ExecutorNodeID, &terminal.ExecutorAddress, &terminal.BroadcastGroupID, &terminal.ShardIndex, &terminal.ShardTotal, &terminal.RescheduleOnTerminal, &terminal.OverrideAddresses, &maxRetries)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("read callback run: %w", err)
-	}
-	var finishedAt time.Time
-	err = tx.QueryRow(ctx, `UPDATE job_runs SET status=CASE WHEN $2 THEN 'succeeded' ELSE 'failed' END,error_message=CASE WHEN $2 THEN '' ELSE $3 END,finished_at=now(),callback_consumed_at=now(),callback_token_hash=NULL,callback_deadline=NULL WHERE id=$1 AND status='waiting_callback' RETURNING finished_at`, runID, succeeded, message).Scan(&finishedAt)
+	err = tx.QueryRow(ctx, `WITH updated AS (
+	 UPDATE job_runs SET status=CASE WHEN $3 THEN 'succeeded' ELSE 'failed' END,error_message=CASE WHEN $3 THEN '' ELSE $4 END,finished_at=now(),callback_consumed_at=now(),callback_token_hash=NULL,callback_deadline=NULL
+	 WHERE id=$1 AND status='waiting_callback' AND callback_token_hash=$2 AND callback_deadline>now() RETURNING *
+	) SELECT `+runColumns("u")+`,j.max_retries FROM updated u JOIN jobs j ON j.id=u.job_id`, runID, tokenHash, succeeded, message).Scan(&terminal.ID, &terminal.TenantID, &terminal.JobID, &terminal.TriggerType, &terminal.Status, &terminal.Attempt, &terminal.ScheduledAt, &terminal.StartedAt, &terminal.FinishedAt, &terminal.ResponseStatus, &terminal.ErrorMessage, &terminal.RuntimeInput, &terminal.ParentRunID, &terminal.RetryOfRunID, &terminal.ExecutorNodeID, &terminal.ExecutorAddress, &terminal.BroadcastGroupID, &terminal.ShardIndex, &terminal.ShardTotal, &terminal.RescheduleOnTerminal, &terminal.OverrideAddresses, &maxRetries)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("complete callback: %w", err)
 	}
+	finishedAt := *terminal.FinishedAt
 	willRetry := !succeeded && terminal.Attempt <= maxRetries
 	if willRetry {
 		if _, err = insertRetryRunTx(ctx, tx, terminal, callbackRetryDelay(terminal.Attempt)); err != nil {

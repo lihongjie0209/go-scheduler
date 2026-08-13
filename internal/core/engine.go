@@ -179,9 +179,11 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 	callbackURL := e.publicBaseURL + "/api/v1/callbacks/" + c.Run.ID
 	logURL := e.publicBaseURL + "/api/v1/runs/" + c.Run.ID + "/logs"
 	callbackDeadline := time.Now().Add(time.Duration(c.Job.CallbackTimeoutSeconds) * time.Second)
-	if err = e.store.ActivateRunToken(parent, c.Run.ID, tokenHash, callbackDeadline); err != nil {
-		e.fail(parent, c, fmt.Errorf("activate run token: %w", err))
-		return
+	if e.executorGRPC == nil {
+		if err = e.store.ActivateRunToken(parent, c.Run.ID, tokenHash, callbackDeadline); err != nil {
+			e.fail(parent, c, fmt.Errorf("activate run token: %w", err))
+			return
+		}
 	}
 	targetURL := c.Job.TargetURL
 	method := c.Job.HTTPMethod
@@ -225,6 +227,8 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 					}
 				}
 			}
+		} else if c.Run.BroadcastGroupID == "" && routeErr == nil && len(activeNodes) == 1 {
+			node = activeNodes[0]
 		} else if c.Run.BroadcastGroupID == "" && routeErr == nil {
 			reserve := e.store.ReserveExecutorRoute
 			if len(c.Run.OverrideAddresses) > 0 {
@@ -256,10 +260,6 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			e.fail(parent, c, routeErr)
 			return
 		}
-		if routeErr = e.store.AssignRunExecutor(parent, c.Run.ID, node.NodeID, node.Address); routeErr != nil {
-			e.fail(parent, c, fmt.Errorf("assign executor: %w", routeErr))
-			return
-		}
 		if e.executorGRPC != nil {
 			dispatchRequest := &executorv1.DispatchRequest{RunId: c.Run.ID, JobId: c.Job.ID, Attempt: c.Run.Attempt, Handler: c.Job.ExecutorHandler, Input: c.Run.RuntimeInput, CallbackToken: callbackToken, TimeoutSeconds: c.Job.TimeoutSeconds, BroadcastGroupId: c.Run.BroadcastGroupID, BroadcastIndex: c.Run.ShardIndex, BroadcastTotal: c.Run.ShardTotal, ScriptLanguage: c.Job.ScriptLanguage, ScriptSource: c.Job.ScriptSource}
 			if c.Job.TargetURL != "" {
@@ -279,8 +279,8 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 				dispatchRequest.ExternalExecutionId = executionID
 				dispatchRequest.KubernetesCluster = &executorv1.KubernetesCluster{AuthMode: cluster.AuthMode, ApiServer: cluster.APIServer, Namespace: cluster.Namespace, Kubeconfig: cluster.Credentials.Kubeconfig, Token: cluster.Credentials.Token, CaData: cluster.Credentials.CAData, InsecureSkipTlsVerify: cluster.InsecureSkipTLSVerify}
 			}
-			if err := e.store.MarkWaitingCallback(parent, c.Run.ID, http.StatusAccepted, tokenHash, callbackDeadline); err != nil {
-				e.fail(parent, c, fmt.Errorf("mark waiting callback: %w", err))
+			if err := e.store.PrepareExecutorDispatch(parent, c.Run.ID, node.NodeID, node.Address, tokenHash, callbackDeadline); err != nil {
+				e.fail(parent, c, err)
 				return
 			}
 			if err := e.executorGRPC.dispatch(ctx, node.Address, dispatchRequest); err != nil {
@@ -288,6 +288,10 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 					slog.Error("complete failed gRPC dispatch", "run_id", c.Run.ID, "dispatch_error", err, "callback_error", callbackErr)
 				}
 			}
+			return
+		}
+		if routeErr = e.store.AssignRunExecutor(parent, c.Run.ID, node.NodeID, node.Address); routeErr != nil {
+			e.fail(parent, c, fmt.Errorf("assign executor: %w", routeErr))
 			return
 		}
 		targetURL = strings.TrimRight(node.Address, "/") + "/run"

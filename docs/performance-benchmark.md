@@ -105,6 +105,9 @@ BENCH_COUNT=100 BENCH_LEAD_SECONDS=31 make integration-benchmark
 # 调整单节点参数，并在结束后保留容器用于排查
 BENCH_COUNT=10000 BENCH_WORKERS=64 BENCH_SCHEDULER_INTERVAL=100ms \
 BENCH_KEEP_STACK=true make integration-benchmark
+
+# 诊断数据库热 SQL（会启用 pg_stat_statements，因此不与普通基准混算）
+BENCH_PG_STATS=true make integration-benchmark
 ```
 
 每次运行使用独立 Compose project 和全新 PostgreSQL 数据卷；正常情况下退出时自动清理。设置 `BENCH_ARTIFACT_DIR` 可指定产物目录，设置 `BENCH_KEEP_STACK=true` 可保留现场。
@@ -154,3 +157,24 @@ Go Scheduler 压测必须指定 `--go-executor-group`，确保覆盖生产使用
 | 移除组行锁，64 workers | 276.11/s | 2,667 ms | 3,617 ms | 0 / 0 |
 
 相对初始 gRPC 基线，64 workers 下吞吐提高 124.4%，P99 降低 55.1%。修复后 PostgreSQL 峰值约 278% CPU、Core 153%、Executor 56%，说明并发工作已经能分散到多个数据库后端；后续优化应聚焦减少每次运行的 SQL 往返和批量化状态转换。
+
+### 数据库往返优化
+
+`pg_stat_statements` 显示瓶颈主要是运行状态写入和事务往返，不是标签、路由候选等普通查询。针对单节点常见路径做了以下合并：
+
+- 单活跃执行器直接选择，省去不产生选择价值的路由计数器事务；
+- 执行器绑定、回调令牌激活和 `waiting_callback` 状态合并为一次条件更新；
+- 日志令牌校验和批量幂等写入合并为一个 CTE；
+- 回调令牌消费和终态转换合并为一次原子更新；
+- 到期入队的 pending 数量与活跃状态合并为一次条件聚合。
+
+同一机器、1,000 个同时到期任务、64 workers 的三轮诊断结果如下。每轮均为 1,000/1,000 成功且无丢失、重复或非法请求：
+
+| 轮次 | 吞吐 | P50 | P99 |
+| --- | ---: | ---: | ---: |
+| 1 | 325.34/s | 2,598 ms | 3,058 ms |
+| 2 | 284.95/s | 3,015 ms | 3,504 ms |
+| 3 | 343.84/s | 2,312 ms | 2,901 ms |
+| 中位数 | 325.34/s | 2,598 ms | 3,058 ms |
+
+相对上一阶段 276.11/s、P99 3,617 ms 的单轮诊断基线，中位吞吐提高 17.8%，P99 降低 15.5%。由于优化前数据尚未满足五轮对照要求，这仍属于定位性结果，不作为正式容量结论。

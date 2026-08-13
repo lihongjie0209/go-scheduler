@@ -2,12 +2,8 @@ package store
 
 import (
 	"context"
-	"crypto/subtle"
-	"errors"
 	"fmt"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 type RunLogInput struct {
@@ -32,36 +28,27 @@ func (s *Store) ActivateRunToken(ctx context.Context, runID string, tokenHash []
 }
 
 func (s *Store) AppendRunLogs(ctx context.Context, runID string, tokenHash []byte, entries []RunLogInput) (int64, error) {
-	tx, err := s.pool.Begin(ctx)
+	entryIDs := make([]string, len(entries))
+	streams := make([]string, len(entries))
+	contents := make([]string, len(entries))
+	for index, entry := range entries {
+		entryIDs[index], streams[index], contents[index] = entry.EntryID, entry.Stream, entry.Content
+	}
+	var cursor, inserted int64
+	err := s.pool.QueryRow(ctx, `WITH valid_run AS (
+	 SELECT tenant_id,id FROM job_runs WHERE id=$1 AND status IN ('running','waiting_callback') AND callback_deadline>now() AND callback_token_hash=$2
+	), entries AS (
+	 SELECT * FROM unnest($3::text[],$4::text[],$5::text[]) AS e(entry_id,stream,content)
+	), inserted AS (
+	 INSERT INTO job_run_logs(tenant_id,run_id,entry_id,stream,content)
+	 SELECT r.tenant_id,r.id,e.entry_id,e.stream,e.content FROM valid_run r CROSS JOIN entries e
+	 ON CONFLICT(run_id,entry_id) DO UPDATE SET entry_id=EXCLUDED.entry_id RETURNING id
+	) SELECT COALESCE(max(id),0),count(*) FROM inserted`, runID, tokenHash, entryIDs, streams, contents).Scan(&cursor, &inserted)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("append run logs: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var tenantID string
-	var storedHash []byte
-	err = tx.QueryRow(ctx, `SELECT tenant_id,callback_token_hash FROM job_runs WHERE id=$1 AND status IN ('running','waiting_callback') AND callback_deadline>now() FOR UPDATE`, runID).Scan(&tenantID, &storedHash)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if inserted == 0 {
 		return 0, ErrNotFound
-	}
-	if err != nil {
-		return 0, err
-	}
-	if subtle.ConstantTimeCompare(storedHash, tokenHash) != 1 {
-		return 0, ErrNotFound
-	}
-	var cursor int64
-	for _, entry := range entries {
-		var id int64
-		err = tx.QueryRow(ctx, `INSERT INTO job_run_logs(tenant_id,run_id,entry_id,stream,content) VALUES($1,$2,$3,$4,$5) ON CONFLICT(run_id,entry_id) DO UPDATE SET entry_id=EXCLUDED.entry_id RETURNING id`, tenantID, runID, entry.EntryID, entry.Stream, entry.Content).Scan(&id)
-		if err != nil {
-			return 0, fmt.Errorf("append run log: %w", err)
-		}
-		if id > cursor {
-			cursor = id
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return 0, err
 	}
 	return cursor, nil
 }

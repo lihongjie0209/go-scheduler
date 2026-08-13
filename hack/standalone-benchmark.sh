@@ -14,6 +14,7 @@ BENCH_RUN_ID="${BENCH_RUN_ID:-standalone-$(date --utc '+%Y%m%dT%H%M%SZ')}"
 BENCH_ARTIFACT_DIR="${BENCH_ARTIFACT_DIR:-$BENCH_REPO_ROOT/benchmark-artifacts/$BENCH_RUN_ID}"
 BENCH_COMPOSE_PROJECT="${BENCH_COMPOSE_PROJECT:-go-scheduler-benchmark-$$}"
 BENCH_KEEP_STACK="${BENCH_KEEP_STACK:-false}"
+BENCH_PG_STATS="${BENCH_PG_STATS:-false}"
 
 for BENCH_BINARY in docker go curl jq sed date mktemp; do
   if ! command -v "$BENCH_BINARY" >/dev/null 2>&1; then
@@ -33,13 +34,16 @@ if (( BENCH_COUNT > 100000 || BENCH_LOAD_CONCURRENCY > 256 || BENCH_LEAD_SECONDS
   echo "count must be <=100000, concurrency <=256, and lead >=31 seconds" >&2
   exit 1
 fi
-if [[ "$BENCH_KEEP_STACK" != true && "$BENCH_KEEP_STACK" != false ]]; then
-  echo "BENCH_KEEP_STACK must be true or false" >&2
+if [[ "$BENCH_KEEP_STACK" != true && "$BENCH_KEEP_STACK" != false ]] || [[ "$BENCH_PG_STATS" != true && "$BENCH_PG_STATS" != false ]]; then
+  echo "BENCH_KEEP_STACK and BENCH_PG_STATS must be true or false" >&2
   exit 1
 fi
 
 mkdir -p "$BENCH_ARTIFACT_DIR"
 BENCH_COMPOSE=(docker compose --project-name "$BENCH_COMPOSE_PROJECT" --file deploy/docker-compose.yml --file deploy/docker-compose.benchmark.yml)
+if [[ "$BENCH_PG_STATS" == true ]]; then
+  BENCH_COMPOSE+=(--file deploy/docker-compose.benchmark-profile.yml)
+fi
 BENCH_CAPTURED=false
 BENCH_TEMP_DIR="$(mktemp -d)"
 BENCH_TOOL="$BENCH_TEMP_DIR/scheduler-bench"
@@ -58,6 +62,9 @@ benchmark_capture() {
   "${BENCH_COMPOSE[@]}" exec -T postgres psql -U scheduler -d scheduler -X --csv -c \
     "SELECT count(*) AS runs,round(extract(epoch FROM max(finished_at)-min(scheduled_at))::numeric,3) AS window_seconds,round(percentile_cont(0.50) WITHIN GROUP (ORDER BY extract(epoch FROM started_at-scheduled_at))::numeric,6) AS dispatch_p50_seconds,round(percentile_cont(0.99) WITHIN GROUP (ORDER BY extract(epoch FROM started_at-scheduled_at))::numeric,6) AS dispatch_p99_seconds,max(started_at-scheduled_at) AS dispatch_max FROM job_runs WHERE trigger_type='schedule'" \
     > "$BENCH_ARTIFACT_DIR/database-summary.csv" 2>/dev/null || true
+  "${BENCH_COMPOSE[@]}" exec -T postgres psql -U scheduler -d scheduler -X --csv -c \
+    "SELECT calls,round(total_exec_time::numeric,3) AS total_exec_ms,round(mean_exec_time::numeric,3) AS mean_exec_ms,rows,left(regexp_replace(query,E'[\\n\\r\\t ]+',' ','g'),500) AS query FROM pg_stat_statements WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database()) ORDER BY total_exec_time DESC LIMIT 30" \
+    > "$BENCH_ARTIFACT_DIR/pg-stat-statements.csv" 2>/dev/null || true
   "${BENCH_COMPOSE[@]}" logs --no-color > "$BENCH_ARTIFACT_DIR/compose.log" 2>&1 || true
 }
 
@@ -101,6 +108,11 @@ for BENCH_ATTEMPT in $(seq 1 90); do
   fi
   sleep 1
 done
+
+if [[ "$BENCH_PG_STATS" == true ]]; then
+  "${BENCH_COMPOSE[@]}" exec -T postgres psql -U scheduler -d scheduler -X -c \
+    "CREATE EXTENSION IF NOT EXISTS pg_stat_statements; SELECT pg_stat_statements_reset();" >/dev/null
+fi
 
 BENCH_BOOTSTRAP_LOG="$("${BENCH_COMPOSE[@]}" logs --no-color bootstrap)"
 BENCH_TOKEN="$(sed -n 's/.*api_key=\(gsk_[^[:space:]]*\).*/\1/p' <<<"$BENCH_BOOTSTRAP_LOG" | tail -1)"
@@ -153,6 +165,11 @@ echo "loading $BENCH_COUNT jobs scheduled at $BENCH_SCHEDULED_AT" >&2
   --scheduled-at "$BENCH_SCHEDULED_AT" \
   --go-executor-group "$BENCH_EXECUTOR_GROUP_ID" \
   > "$BENCH_ARTIFACT_DIR/manifest.json"
+
+if [[ "$BENCH_PG_STATS" == true ]]; then
+  "${BENCH_COMPOSE[@]}" exec -T postgres psql -U scheduler -d scheduler -X -c \
+    "SELECT pg_stat_statements_reset();" >/dev/null
+fi
 
 while [[ "$(date +%s)" -lt "$(date --date="$BENCH_SCHEDULED_AT" +%s)" ]]; do
   sleep 1

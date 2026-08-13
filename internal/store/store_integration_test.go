@@ -1211,8 +1211,15 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	target := claimed[0]
 	token := "one-time-token"
 	hash := sha256.Sum256([]byte(token))
-	if err = one.MarkWaitingCallback(ctx, target.Run.ID, 202, hash[:], time.Now().Add(time.Minute)); err != nil {
+	if err = one.PrepareExecutorDispatch(ctx, target.Run.ID, "executor-fast-path", "127.0.0.1:19090", hash[:], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
+	}
+	prepared, err := two.GetRun(ctx, tenantID, target.Run.ID)
+	if err != nil || prepared.Status != "waiting_callback" || prepared.ExecutorNodeID != "executor-fast-path" || prepared.ExecutorAddress != "127.0.0.1:19090" || prepared.ResponseStatus != 202 {
+		t.Fatalf("prepared executor dispatch = %+v, %v", prepared, err)
+	}
+	if err = one.PrepareExecutorDispatch(ctx, target.Run.ID, "executor-fast-path", "127.0.0.1:19090", hash[:], time.Now().Add(time.Minute)); err != ErrConflict {
+		t.Fatalf("repeated executor dispatch preparation = %v, want ErrConflict", err)
 	}
 	if err = two.CompleteCallback(ctx, target.Run.ID, hash[:], true, "done"); err != nil {
 		t.Fatal(err)
