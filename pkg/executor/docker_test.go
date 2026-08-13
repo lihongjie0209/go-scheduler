@@ -65,7 +65,7 @@ func TestDockerRunArgumentsDefaultToDockerRuntimePolicy(t *testing.T) {
 
 func TestValidateManagedDockerInspection(t *testing.T) {
 	t.Parallel()
-	task := Task{RunID: "retry-run", ExternalExecutionID: "stable-execution", JobID: "job-1"}
+	task := Task{RunID: "first-run", ExternalExecutionID: "stable-execution", JobID: "job-1"}
 	tests := []struct {
 		name string
 		raw  string

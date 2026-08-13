@@ -173,7 +173,7 @@ func TestDockerHandlerResumesManagedContainerAfterExecutorRestart(t *testing.T) 
 	logger := &recordingLogger{}
 	handler := DockerHandler(DockerOptions{})
 	err = handler(t.Context(), Task{
-		RunID: "retry-attempt", ExternalExecutionID: "stable-execution", JobID: "job-docker-resume", Logger: logger,
+		RunID: "first-attempt", ExternalExecutionID: "stable-execution", JobID: "job-docker-resume", Logger: logger,
 		ScriptSource: `{"image":"alpine:3.22","pull_policy":"never"}`,
 	})
 	if err != nil {

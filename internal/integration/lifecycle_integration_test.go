@@ -3170,7 +3170,7 @@ func TestKubernetesExecutorLabelRoutingUseCase(t *testing.T) {
 	}
 }
 
-func TestExecutorRetryPreservesExternalExecutionIDUseCase(t *testing.T) {
+func TestExecutorRetryUsesDistinctExternalExecutionIDUseCase(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
 	executionIDs := make(chan string, 2)
@@ -3224,8 +3224,8 @@ func TestExecutorRetryPreservesExternalExecutionIDUseCase(t *testing.T) {
 			t.Fatalf("executor retry IDs = %+v", seen)
 		}
 	}
-	if seen[0] != seen[1] {
-		t.Fatalf("executor retry changed external execution ID: %+v", seen)
+	if seen[0] == seen[1] {
+		t.Fatalf("executor retry reused completed external execution ID: %+v", seen)
 	}
 }
 
