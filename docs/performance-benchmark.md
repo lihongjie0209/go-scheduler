@@ -85,11 +85,24 @@ sink 对每个 ID 只使用首次到达时间计算延迟，并单独统计重�
 
 `scheduler-bench load` 为两套系统生成相同的事件 ID、UTC Quartz Cron 表达式和计划时刻。凭据只从环境变量读取，不放入命令历史：
 
+先启动两套系统共用的双协议执行器。Go Scheduler 调用 `/go`，XXL-JOB 调用 `/trigger`，两条路径都会同步转发到同一个 sink：
+
+```bash
+BENCH_XXL_ACCESS_TOKEN=executor-token BENCH_XXL_APPNAME=scheduler-benchmark \
+  scheduler-bench executor --listen :19100 \
+  --address http://benchmark-executor:19100 \
+  --sink http://sink:19090/execute \
+  --xxl-admin http://xxl-admin:8080/xxl-job-admin
+```
+
+XXL-JOB 中需预先创建 appname 为 `scheduler-benchmark`、access token 相同的自动注册执行器组。执行器每 30 秒注册，退出时注销。Go Scheduler 不需要注册该基准执行器，因为基准任务使用同一个 HTTP target 地址。
+
 ```bash
 # Go Scheduler；API key 自带租户时可省略 BENCH_TENANT_ID
 BENCH_TOKEN=gsk_xxx BENCH_TENANT_ID=tenant-id \
   scheduler-bench load --system go \
   --server http://scheduler:8080 --sink http://sink:19090/execute \
+  --executor http://benchmark-executor:19100 \
   --run-id burst-go-001 --count 1000 --concurrency 16 \
   --scheduled-at 2026-08-14T02:00:00Z > burst-go-001.json
 
@@ -98,7 +111,8 @@ BENCH_XXL_USERNAME=admin BENCH_XXL_PASSWORD=secret \
 BENCH_XXL_EXECUTOR_GROUP=2 \
   scheduler-bench load --system xxl \
   --server http://xxl-admin:8080/xxl-job-admin \
-  --sink http://sink:19090/execute --run-id burst-xxl-001 \
+  --sink http://sink:19090/execute --executor http://benchmark-executor:19100 \
+  --run-id burst-xxl-001 \
   --count 1000 --concurrency 16 \
   --scheduled-at 2026-08-14T02:00:00Z > burst-xxl-001.json
 ```
