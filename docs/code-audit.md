@@ -9,10 +9,12 @@
 本轮已修复：
 
 - 配置类型错误不再静默回退，进程会 fail-fast；
+- HTTP/gRPC 监听端口在启动 hook 中同步绑定，端口冲突会直接使启动失败并回滚已打开的 listener；
 - Core 的 Executor gRPC 连接池增加 256 个连接上限、引用计数和空闲 LRU 淘汰；
 - 并发删除 tenant owner 通过事务和租户行锁串行化，保持至少一个 owner；
 - 服务令牌改为恒定时间比较；
 - Argon2 哈希参数在内存分配前验证上下限，阻止异常哈希触发资源耗尽；
+- 登录接口按来源 IP 和邮箱摘要执行有界本地限流，成功认证后重置窗口；
 - Docker 执行器按产品约束默认继承 Docker 原生网络和权限策略，网络、只读根文件系统、CPU 和内存限制均改为显式可选；
 - migration 23 为 Claim 活跃集合、过期租约、幂等记录、Outbox 和依赖派发清理增加针对性索引。
 
@@ -47,7 +49,6 @@ api-server ── gRPC + etcd discovery ── scheduler core ── gRPC ──
 
 ### 剩余架构风险
 
-- `api-server`、`scheduler-core` 和 standalone 的监听失败在部分入口中由后台 goroutine 记录，启动 hook 不能总是把错误反馈给进程管理器。应统一先 `net.Listen`，成功后再启动 Serve。
 - SMTP 发送是同步的，Notifier 单 worker 遇到慢 SMTP 时会降低通知吞吐；不影响调度主路径，但需要独立并发上限和发送超时。
 - Executor 连接池上限当前为编译期常量 256。超过该规模的集群应先通过容量测试，再决定是否开放配置。
 
@@ -94,6 +95,7 @@ Migration 23 增加：
 | --- | --- | --- |
 | 中 | gRPC Bearer token 普通字符串比较 | 使用 `crypto/subtle.ConstantTimeCompare` |
 | 中 | 数据库中的异常 Argon2 参数可触发超大分配 | 限制 memory、iterations、parallelism、salt 和 hash 长度 |
+| 中 | 匿名登录请求可持续消耗 Argon2 CPU | 增加有界的来源 IP + 邮箱窗口限流，成功后重置 |
 | 高 | 并发 owner 删除破坏授权治理不变量 | PostgreSQL 事务和 tenant 行锁 |
 | 中 | 非法布尔/整数/Duration 环境变量静默回退 | 启动边界严格校验 |
 
@@ -104,7 +106,7 @@ Migration 23 增加：
 - 按产品要求，脚本、HTTP 和 Docker 任务不做目标网络白名单；Docker 默认也不强制 drop capabilities、只读根文件系统或 PID 限制。Executor 因此属于可信高权限组件，必须部署在独立节点/namespace，并由基础设施实施宿主机和凭据隔离。
 - 分布式 gRPC 支持 API→Core TLS，但 Core→Executor 和 Executor→Core 当前默认明文。服务令牌能鉴权但不能防止同网段窃听，应补齐可选 TLS/mTLS，并在生产配置中强制启用。
 - `/metrics` 默认未鉴权，应只通过内网 Service 或网络策略暴露。
-- 登录接口尚无跨实例速率限制。Argon2 能提高暴力破解成本，也会放大匿名 CPU 消耗；应采用 PostgreSQL/Redis 共享限流或网关限流。
+- 应用内登录限流是单实例状态。集群模式还应由网关实施共享限流，避免攻击者把额度乘以 API 实例数。
 - Kubernetes 配置允许 `insecure_skip_tls_verify`，这是显式运维选项；生产审计应检测并告警，而不是静默启用。
 
 ## 验证记录

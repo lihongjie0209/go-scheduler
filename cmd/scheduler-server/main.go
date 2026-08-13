@@ -2,6 +2,7 @@ package schedulerserver
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -148,12 +149,18 @@ func newNotifier(c config.Config, s *coreStore) *notifier.Worker {
 func run(lc fx.Lifecycle, c config.Config, server *http.Server, grpcServer *grpc.Server, engine *core.Engine, notifications *notifier.Worker) {
 	var cancel context.CancelFunc
 	var grpcListener net.Listener
+	var httpListener net.Listener
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			var err error
 			grpcListener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", c.GRPCAddress)
 			if err != nil {
-				return err
+				return fmt.Errorf("listen grpc: %w", err)
+			}
+			httpListener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", server.Addr)
+			if err != nil {
+				_ = grpcListener.Close()
+				return fmt.Errorf("listen http: %w", err)
 			}
 			runCtx, stop := context.WithCancel(context.Background())
 			cancel = stop
@@ -161,7 +168,7 @@ func run(lc fx.Lifecycle, c config.Config, server *http.Server, grpcServer *grpc
 			notifications.Run(runCtx)
 			go func() {
 				slog.Info("scheduler server listening", "address", server.Addr, "mode", "standalone")
-				if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				if err := server.Serve(httpListener); err != nil && err != http.ErrServerClosed {
 					slog.Error("scheduler server stopped", "error", err)
 				}
 			}()

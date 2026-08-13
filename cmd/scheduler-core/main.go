@@ -113,12 +113,18 @@ func newCoreHTTPServer(c config.Config, s *store.Store) *http.Server {
 }
 func run(lc fx.Lifecycle, c config.Config, server *grpc.Server, registrar *discovery.Registrar, engine *core.Engine, notifications *notifier.Worker, adminServer *http.Server) {
 	var listener net.Listener
+	var adminListener net.Listener
 	var cancel context.CancelFunc
 	lc.Append(fx.Hook{OnStart: func(ctx context.Context) error {
 		var err error
 		listener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", c.GRPCAddress)
 		if err != nil {
 			return fmt.Errorf("listen grpc: %w", err)
+		}
+		adminListener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", adminServer.Addr)
+		if err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("listen core http: %w", err)
 		}
 		runCtx, stop := context.WithCancel(context.Background())
 		cancel = stop
@@ -128,7 +134,7 @@ func run(lc fx.Lifecycle, c config.Config, server *grpc.Server, registrar *disco
 			}
 		}()
 		go func() {
-			if err := adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := adminServer.Serve(adminListener); err != nil && err != http.ErrServerClosed {
 				slog.Error("core admin server stopped", "error", err)
 			}
 		}()

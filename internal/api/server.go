@@ -40,6 +40,7 @@ type Server struct {
 	etcd         *clientv3.Client
 	etcdPrefix   string
 	instances    []map[string]any
+	logins       *loginLimiter
 }
 
 func (s *Server) SetStandaloneInstance(instanceID string, startedAt time.Time) {
@@ -61,7 +62,7 @@ func NewServer(client schedulerv1.SchedulerServiceClient, s *store.Store, manage
 	if len(cookieSecure) > 0 {
 		secure = cookieSecure[0]
 	}
-	return &Server{client: client, store: s, auth: manager, cookieSecure: secure}
+	return &Server{client: client, store: s, auth: manager, cookieSecure: secure, logins: newLoginLimiter()}
 }
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
@@ -404,11 +405,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
+	if !s.logins.allow(r.RemoteAddr, body.Email) {
+		writeError(w, http.StatusTooManyRequests, "too many login attempts")
+		return
+	}
 	user, err := s.store.GetUserByEmail(r.Context(), body.Email)
 	if err != nil || user.Disabled || !auth.VerifyPassword(user.PasswordHash, body.Password) {
 		writeError(w, 401, "invalid credentials")
 		return
 	}
+	s.logins.reset(r.RemoteAddr, body.Email)
 	token, err := s.auth.Issue(user.ID, user.PlatformAdmin)
 	if err != nil {
 		writeError(w, 500, "internal error")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -87,7 +88,13 @@ func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s
 }
 func run(lc fx.Lifecycle, server *http.Server, registrar *discovery.Registrar) {
 	var cancel context.CancelFunc
-	lc.Append(fx.Hook{OnStart: func(context.Context) error {
+	var listener net.Listener
+	lc.Append(fx.Hook{OnStart: func(startCtx context.Context) error {
+		var err error
+		listener, err = (&net.ListenConfig{}).Listen(startCtx, "tcp", server.Addr)
+		if err != nil {
+			return fmt.Errorf("listen http: %w", err)
+		}
 		ctx, stop := context.WithCancel(context.Background())
 		cancel = stop
 		go func() {
@@ -97,7 +104,7 @@ func run(lc fx.Lifecycle, server *http.Server, registrar *discovery.Registrar) {
 		}()
 		go func() {
 			slog.Info("api server listening", "address", server.Addr)
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 				slog.Error("http server stopped", "error", err)
 			}
 		}()
