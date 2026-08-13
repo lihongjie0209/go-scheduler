@@ -159,3 +159,37 @@ func TestProcessDeliveriesStopsSchedulingAfterCancellation(t *testing.T) {
 		t.Fatalf("completed after cancellation = %d", got)
 	}
 }
+
+func TestRunNotificationLoopImmediatelyDrainsFullBatches(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	drained := make(chan struct{})
+	done := make(chan struct{})
+	var calls atomic.Int32
+	go func() {
+		defer close(done)
+		runNotificationLoop(ctx, time.Hour, 20, func() int {
+			call := calls.Add(1)
+			if call == 3 {
+				close(drained)
+				return 0
+			}
+			return 20
+		})
+	}()
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("full notification batches were not drained immediately")
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("drain calls = %d, want 3", got)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("notification loop did not stop after cancellation")
+	}
+}

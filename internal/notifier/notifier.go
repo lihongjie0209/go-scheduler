@@ -30,6 +30,7 @@ const (
 	notificationBatchSize   = 20
 	notificationConcurrency = 10
 	notificationTimeout     = 10 * time.Second
+	notificationIdlePoll    = 2 * time.Second
 )
 
 type Worker struct {
@@ -54,28 +55,52 @@ func (w *Worker) Run(ctx context.Context) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			w.tick(ctx)
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
+		runNotificationLoop(ctx, notificationIdlePoll, notificationBatchSize, func() int { return w.tick(ctx) })
 	}()
 }
 func (w *Worker) Wait() { w.wg.Wait() }
-func (w *Worker) tick(ctx context.Context) {
+
+func runNotificationLoop(ctx context.Context, idlePoll time.Duration, batchSize int, drain func() int) {
+	if idlePoll <= 0 {
+		idlePoll = notificationIdlePoll
+	}
+	if batchSize < 1 {
+		batchSize = 1
+	}
+	timer := time.NewTimer(idlePoll)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		processed := drain()
+		if ctx.Err() != nil {
+			return
+		}
+		if processed >= batchSize {
+			continue
+		}
+		timer.Reset(idlePoll)
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (w *Worker) tick(ctx context.Context) int {
 	if err := w.store.PrepareNotificationDeliveries(ctx, notificationBatchSize); err != nil {
 		slog.Error("prepare notification deliveries", "error", err)
-		return
+		return 0
 	}
 	deliveries, err := w.store.ClaimNotificationDeliveries(ctx, w.owner, notificationBatchSize)
 	if err != nil {
 		slog.Error("claim notification deliveries", "error", err)
-		return
+		return 0
 	}
 	processDeliveries(ctx, deliveries, notificationConcurrency, func(delivery store.NotificationDelivery) {
 		deliveryCtx, cancel := context.WithTimeout(ctx, notificationTimeout)
@@ -98,6 +123,7 @@ func (w *Worker) tick(ctx context.Context) {
 			slog.Error("complete notification delivery", "delivery_id", delivery.ID, "error", err)
 		}
 	})
+	return len(deliveries)
 }
 
 func processDeliveries(ctx context.Context, deliveries []store.NotificationDelivery, concurrency int, process func(store.NotificationDelivery)) {
