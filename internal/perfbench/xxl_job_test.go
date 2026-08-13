@@ -20,7 +20,7 @@ func TestXXLJobLoaderLoginCreateAndStart(t *testing.T) {
 			if r.Form.Get("userName") != "admin" || r.Form.Get("password") != "secret" {
 				t.Errorf("login form = %v", r.Form)
 			}
-			http.SetCookie(w, &http.Cookie{Name: "XXL_JOB_LOGIN_IDENTITY", Value: sessionCookie})
+			http.SetCookie(w, &http.Cookie{Name: "XXL_JOB_LOGIN_IDENTITY", Value: sessionCookie, Path: "/xxl-job-admin"})
 			_, _ = w.Write([]byte(`{"code":200,"msg":null,"data":null}`))
 		case "/xxl-job-admin/jobinfo/insert":
 			assertXXLSession(t, r, sessionCookie)
