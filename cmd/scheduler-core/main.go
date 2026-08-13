@@ -29,7 +29,7 @@ import (
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	fx.New(fx.Provide(loadConfig, newStore, newEtcd, core.NewService, newGRPCServer, newRegistrar, newEngine, newNotifier, newCoreHTTPServer), fx.Invoke(run)).Run()
+	fx.New(fx.Provide(loadConfig, newStore, newEtcd, newExecutorRegistry, newCoreService, newGRPCServer, newRegistrar, newEngine, newNotifier, newCoreHTTPServer), fx.Invoke(run)).Run()
 }
 func loadConfig() (config.Config, error) { return config.Load("scheduler-core") }
 func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
@@ -52,6 +52,12 @@ func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
 		lc.Append(fx.Hook{OnStop: func(context.Context) error { return client.Close() }})
 	}
 	return client, err
+}
+func newExecutorRegistry(c config.Config, client *clientv3.Client, s *store.Store) core.ExecutorRegistry {
+	return discovery.NewExecutorRegistry(client, c.EtcdPrefix, s)
+}
+func newCoreService(s *store.Store, registry core.ExecutorRegistry) *core.Service {
+	return core.NewService(s, registry)
 }
 func newGRPCServer(c config.Config, svc *core.Service) (*grpc.Server, error) {
 	opts := []grpc.ServerOption{grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(c.ServiceToken, c.PreviousToken))}

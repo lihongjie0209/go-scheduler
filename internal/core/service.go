@@ -22,10 +22,17 @@ import (
 
 type Service struct {
 	schedulerv1.UnimplementedSchedulerServiceServer
-	store *store.Store
+	store            *store.Store
+	executorRegistry ExecutorRegistry
 }
 
-func NewService(s *store.Store) *Service { return &Service{store: s} }
+func NewService(s *store.Store, registries ...ExecutorRegistry) *Service {
+	registry := ExecutorRegistry(s)
+	if len(registries) > 0 && registries[0] != nil {
+		registry = registries[0]
+	}
+	return &Service{store: s, executorRegistry: registry}
+}
 
 func (s *Service) CreateJob(ctx context.Context, req *schedulerv1.CreateJobRequest) (*schedulerv1.Job, error) {
 	if req.GetJob() == nil {
@@ -489,7 +496,7 @@ func (s *Service) RegisterExecutorNode(ctx context.Context, req *schedulerv1.Reg
 	if req.GetTtlSeconds() < 5 || req.GetTtlSeconds() > 300 {
 		return nil, status.Error(codes.InvalidArgument, "ttl_seconds must be between 5 and 300")
 	}
-	node, err := s.store.RegisterExecutorNode(ctx, req.TenantId, req.GroupId, strings.TrimSpace(req.NodeId), strings.TrimRight(req.Address, "/"), time.Duration(req.TtlSeconds)*time.Second)
+	node, err := s.executorRegistry.RegisterExecutorNode(ctx, req.TenantId, req.GroupId, strings.TrimSpace(req.NodeId), strings.TrimRight(req.Address, "/"), time.Duration(req.TtlSeconds)*time.Second)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -500,14 +507,14 @@ func (s *Service) UnregisterExecutorNode(ctx context.Context, req *schedulerv1.U
 	if req.GetTenantId() == "" || req.GetGroupId() == "" || strings.TrimSpace(req.GetNodeId()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id, group_id and node_id are required")
 	}
-	if err := s.store.UnregisterExecutorNode(ctx, req.TenantId, req.GroupId, strings.TrimSpace(req.NodeId)); err != nil {
+	if err := s.executorRegistry.UnregisterExecutorNode(ctx, req.TenantId, req.GroupId, strings.TrimSpace(req.NodeId)); err != nil {
 		return nil, toStatus(err)
 	}
 	return &schedulerv1.UnregisterExecutorNodeResponse{}, nil
 }
 
 func (s *Service) ListExecutorNodes(ctx context.Context, req *schedulerv1.ListExecutorNodesRequest) (*schedulerv1.ListExecutorNodesResponse, error) {
-	nodes, err := s.store.ListExecutorNodes(ctx, req.GetTenantId(), req.GetGroupId(), req.GetLiveOnly())
+	nodes, err := s.executorRegistry.ListExecutorNodes(ctx, req.GetTenantId(), req.GetGroupId(), req.GetLiveOnly())
 	if err != nil {
 		return nil, toStatus(err)
 	}
