@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/fx"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
 	apihttp "github.com/lihongjie0209/go-scheduler/internal/api"
@@ -31,6 +35,7 @@ func main() {
 			newAPIStore,
 			newCoreStore,
 			newCoreService,
+			newGRPCServer,
 			newInProcessScheduler,
 			newCoreClient,
 			newAuthManager,
@@ -83,6 +88,15 @@ func newCoreStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher) (
 
 func newCoreService(s *coreStore) *core.Service { return core.NewService(s.Store) }
 
+func newGRPCServer(c config.Config, service *core.Service) *grpc.Server {
+	server := grpc.NewServer(grpc.ChainUnaryInterceptor(rpc.UnaryRecovery(), rpc.UnaryLogging(), rpc.UnaryServerAuth(c.ServiceToken, c.PreviousToken)))
+	schedulerv1.RegisterSchedulerServiceServer(server, service)
+	healthServer := health.NewServer()
+	healthpb.RegisterHealthServer(server, healthServer)
+	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	return server
+}
+
 func registerDatabasePoolMetrics(api *apiStore, core *coreStore) error {
 	if err := prometheus.Register(observability.NewDatabasePoolCollector("api", api.PoolStats)); err != nil {
 		return err
@@ -122,7 +136,7 @@ func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s
 }
 
 func newEngine(c config.Config, s *coreStore) *core.Engine {
-	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil)
+	return core.NewEngine(s.Store, c.InstanceID, c.SchedulerInterval, c.Workers, c.PublicBaseURL, c.HistoryRetention, nil, core.WithExecutorGRPC(c.ServiceToken))
 }
 
 func newNotifier(c config.Config, s *coreStore) *notifier.Worker {
@@ -131,10 +145,16 @@ func newNotifier(c config.Config, s *coreStore) *notifier.Worker {
 	})
 }
 
-func run(lc fx.Lifecycle, server *http.Server, engine *core.Engine, notifications *notifier.Worker) {
+func run(lc fx.Lifecycle, c config.Config, server *http.Server, grpcServer *grpc.Server, engine *core.Engine, notifications *notifier.Worker) {
 	var cancel context.CancelFunc
+	var grpcListener net.Listener
 	lc.Append(fx.Hook{
-		OnStart: func(context.Context) error {
+		OnStart: func(ctx context.Context) error {
+			var err error
+			grpcListener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", c.GRPCAddress)
+			if err != nil {
+				return err
+			}
 			runCtx, stop := context.WithCancel(context.Background())
 			cancel = stop
 			engine.Run(runCtx)
@@ -145,10 +165,17 @@ func run(lc fx.Lifecycle, server *http.Server, engine *core.Engine, notification
 					slog.Error("scheduler server stopped", "error", err)
 				}
 			}()
+			go func() {
+				slog.Info("scheduler internal gRPC listening", "address", c.GRPCAddress, "mode", "standalone")
+				if err := grpcServer.Serve(grpcListener); err != nil {
+					slog.Error("scheduler internal gRPC stopped", "error", err)
+				}
+			}()
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
 			cancel()
+			grpcServer.GracefulStop()
 			err := server.Shutdown(ctx)
 			engine.Wait()
 			notifications.Wait()

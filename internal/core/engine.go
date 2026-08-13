@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
 	"github.com/lihongjie0209/go-scheduler/internal/observability"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
@@ -33,12 +34,17 @@ type Engine struct {
 	lastCleanup      time.Time
 	lastPartitionRun time.Time
 	dispatchWake     chan struct{}
+	executorGRPC     *executorGRPCPool
 }
 
 type EngineOption func(*Engine)
 
 func WithHTTPClient(client *http.Client) EngineOption {
 	return func(engine *Engine) { engine.client = client }
+}
+
+func WithExecutorGRPC(token string) EngineOption {
+	return func(engine *Engine) { engine.executorGRPC = newExecutorGRPCPool(token) }
 }
 
 func NewEngine(s *store.Store, owner string, interval time.Duration, workers int, publicBaseURL string, historyRetention time.Duration, _ []string, options ...EngineOption) *Engine {
@@ -57,7 +63,12 @@ func (e *Engine) Run(ctx context.Context) {
 	e.wg.Add(1)
 	go func() { defer e.wg.Done(); e.loop(ctx) }()
 }
-func (e *Engine) Wait() { e.wg.Wait() }
+func (e *Engine) Wait() {
+	e.wg.Wait()
+	if e.executorGRPC != nil {
+		e.executorGRPC.close()
+	}
+}
 func (e *Engine) loop(ctx context.Context) {
 	ticker := time.NewTicker(e.interval)
 	defer ticker.Stop()
@@ -249,6 +260,36 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 			e.fail(parent, c, fmt.Errorf("assign executor: %w", routeErr))
 			return
 		}
+		if e.executorGRPC != nil {
+			dispatchRequest := &executorv1.DispatchRequest{RunId: c.Run.ID, JobId: c.Job.ID, Attempt: c.Run.Attempt, Handler: c.Job.ExecutorHandler, Input: c.Run.RuntimeInput, CallbackToken: callbackToken, TimeoutSeconds: c.Job.TimeoutSeconds, BroadcastGroupId: c.Run.BroadcastGroupID, BroadcastIndex: c.Run.ShardIndex, BroadcastTotal: c.Run.ShardTotal, ScriptLanguage: c.Job.ScriptLanguage, ScriptSource: c.Job.ScriptSource}
+			if c.Job.TargetURL != "" {
+				dispatchRequest.Http = &executorv1.HttpExecution{Url: c.Job.TargetURL, Method: c.Job.HTTPMethod, Headers: c.Job.Headers, Body: body}
+			}
+			if c.Job.KubernetesClusterID != "" {
+				cluster, clusterErr := e.store.GetKubernetesCluster(parent, c.Job.TenantID, c.Job.KubernetesClusterID)
+				if clusterErr != nil {
+					e.fail(parent, c, fmt.Errorf("load kubernetes cluster: %w", clusterErr))
+					return
+				}
+				executionID, executionErr := e.store.RootRunID(parent, c.Job.TenantID, c.Run.ID)
+				if executionErr != nil {
+					e.fail(parent, c, fmt.Errorf("resolve external execution identity: %w", executionErr))
+					return
+				}
+				dispatchRequest.ExternalExecutionId = executionID
+				dispatchRequest.KubernetesCluster = &executorv1.KubernetesCluster{AuthMode: cluster.AuthMode, ApiServer: cluster.APIServer, Namespace: cluster.Namespace, Kubeconfig: cluster.Credentials.Kubeconfig, Token: cluster.Credentials.Token, CaData: cluster.Credentials.CAData, InsecureSkipTlsVerify: cluster.InsecureSkipTLSVerify}
+			}
+			if err := e.store.MarkWaitingCallback(parent, c.Run.ID, http.StatusAccepted, tokenHash, callbackDeadline); err != nil {
+				e.fail(parent, c, fmt.Errorf("mark waiting callback: %w", err))
+				return
+			}
+			if err := e.executorGRPC.dispatch(ctx, node.Address, dispatchRequest); err != nil {
+				if callbackErr := e.store.CompleteCallback(parent, c.Run.ID, tokenHash, false, truncateMessage(err.Error(), 4096)); callbackErr != nil {
+					slog.Error("complete failed gRPC dispatch", "run_id", c.Run.ID, "dispatch_error", err, "callback_error", callbackErr)
+				}
+			}
+			return
+		}
 		targetURL = strings.TrimRight(node.Address, "/") + "/run"
 		method = http.MethodPost
 		runPayload := map[string]any{"run_id": c.Run.ID, "job_id": c.Job.ID, "handler": c.Job.ExecutorHandler, "input": c.Run.RuntimeInput, "callback_url": callbackURL, "log_url": logURL, "callback_token": callbackToken, "timeout_seconds": c.Job.TimeoutSeconds, "broadcast_group_id": c.Run.BroadcastGroupID, "broadcast_index": c.Run.ShardIndex, "broadcast_total": c.Run.ShardTotal, "script_language": c.Job.ScriptLanguage, "script_source": c.Job.ScriptSource}
@@ -319,6 +360,13 @@ func (e *Engine) execute(parent context.Context, c store.ClaimedRun) {
 		return
 	}
 	e.failWithStatus(parent, c, resp.StatusCode, string(payload))
+}
+
+func truncateMessage(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit]
 }
 
 func dispatchDelay(startedAt, scheduledAt time.Time) time.Duration {

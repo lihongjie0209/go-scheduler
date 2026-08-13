@@ -28,6 +28,7 @@ services:
     environment:
       <<: *app-env
       HTTP_ADDRESS: ":8080"
+      GRPC_ADDRESS: ":9090"
       API_CONTEXT_PATH: ""
       PUBLIC_BASE_URL: "http://scheduler-server:8080"
       COOKIE_SECURE: "false"
@@ -42,11 +43,11 @@ services:
       context: ..
       dockerfile: deploy/script-executor/Dockerfile
     environment:
-      SCHEDULER_URL: "http://scheduler-server:8080"
+      SCHEDULER_GRPC_ADDRESS: "scheduler-server:9090"
       SCHEDULER_TOKEN: "${SCHEDULER_EXECUTOR_TOKEN:-}"
       EXECUTOR_GROUP_ID: "${SCHEDULER_EXECUTOR_GROUP_ID:-}"
       EXECUTOR_NODE_ID: "compose-executor-1"
-      EXECUTOR_ADVERTISE_URL: "http://executor:9999"
+      EXECUTOR_ADVERTISE_ADDRESS: "executor:9999"
       EXECUTOR_LABELS: "${SCHEDULER_EXECUTOR_LABELS:-linux,docker,kubernetes}"
       DOCKER_ENABLED: "true"
       KUBERNETES_ENABLED: "true"

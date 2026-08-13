@@ -60,24 +60,24 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `SMTP_ADDRESS` | 空 | 邮件告警 SMTP 地址，例如 `smtp.example.com:587` |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | 空 | SMTP 凭据和发件人 |
 
-生产环境应为 PostgreSQL 和公开 HTTP API 配置 TLS；单进程模式的 gRPC 只走内存连接。任务目标默认拒绝私网、环回、链路本地和未指定地址，以降低 SSRF 风险。
+生产环境应为 PostgreSQL、公开 HTTP API 和跨主机内部 gRPC 配置 TLS。HTTP、脚本和容器任务的网络访问不做目标地址限制。
 
-配置 `API_CONTEXT_PATH=/scheduler` 后，API readiness 地址变为 `/scheduler/health/ready`，REST 地址变为 `/scheduler/api/v1`。`PUBLIC_BASE_URL` 和 `ADVERTISE_HTTP_ADDRESS` 可以继续填写不带前缀的服务地址，服务会自动附加 context path。`schedulerctl --server` 与 Script Executor 的 `SCHEDULER_URL` 应填写完整地址，例如 `http://scheduler-server:8080/scheduler`。Kubernetes Probe 和反向代理路由也需要使用相同前缀。
+配置 `API_CONTEXT_PATH=/scheduler` 后，API readiness 地址变为 `/scheduler/health/ready`，REST 地址变为 `/scheduler/api/v1`。`PUBLIC_BASE_URL` 和 `ADVERTISE_HTTP_ADDRESS` 可以继续填写不带前缀的服务地址，服务会自动附加 context path。`schedulerctl --server` 应填写完整 HTTP 地址。Executor 使用独立的 `SCHEDULER_GRPC_ADDRESS`，不受 HTTP context path 影响。
 
-单进程模式仍保留 API/Core 的 protobuf 和 gRPC 边界，但使用 `bufconn` 内存传输，不涉及服务注册、网络监听和 TLS。需要 API/Core 独立扩缩容时可继续使用保留的分布式入口；它们通过 etcd 动态发现并依靠 PostgreSQL 行锁避免重复执行。
+单进程模式的 API/Core 调用使用 `bufconn` 内存传输，同时监听内部 gRPC 端口供 Executor 注册、回报和接收调度。需要 API/Core 独立扩缩容时可继续使用分布式入口；它们通过 etcd 动态发现并依靠 PostgreSQL 行锁避免重复执行。
 
 `pg_partman` 是可选增强项。迁移会检测扩展是否存在且当前账号是否可安装：可用时配置月分区并由服务每小时调用 pg_partman maintenance；不可用时，迁移先创建近 90 天及未来 3 个月的月分区，Scheduler 再通过 PostgreSQL advisory lock 每小时续建并删除无活跃运行的过期分区。多个服务实例可以共享同一普通 PostgreSQL，不需要超级用户或 pg_partman。
 
 ## Go Executor SDK
 
-`pkg/executor` 可将 Go 函数注册为命名 handler，并提供 Core 所需的 `/run`、`/health`、`/idle` 协议、TTL 心跳、同步或异步 callback 和 Rolling 日志。SDK 会隔离 handler panic，并限制 callback/log URL 与配置的 Scheduler 地址同源。
+`pkg/executor` 可将 Go 函数注册为命名 handler。Core 通过 gRPC `Dispatch` 下发并立即释放调度 worker；Executor 异步运行 handler，通过 Scheduler gRPC 回报 Rolling 日志和最终状态，并提供幂等下发、取消、状态查询和 TTL 注册。外部系统的 HTTP 异步 callback 统一由 API Server 接收，再通过 gRPC 转交 Core 状态机。
 
 ```go
-server, _ := executor.NewServer(executor.Options{SchedulerURL: schedulerURL})
+server, _ := executor.NewServer(executor.Options{SchedulerURL: "http://scheduler.invalid"})
 _ = server.Handle("invoiceHandler", func(ctx context.Context, task executor.Task) error {
     return task.Logger.Info("processing " + task.Input)
 })
-go http.ListenAndServe(":9999", server)
+// 将 server 包装成 executor.NewGRPCServer 并注册到 grpc.Server。
 ```
 
 完整的 handler 与心跳注册示例见 [`pkg/executor`](pkg/executor)。
@@ -91,11 +91,11 @@ Shell、Python、Node.js、PHP 与 PowerShell 脚本由独立 `script-executor` 
 ```bash
 docker build -f deploy/script-executor/Dockerfile -t go-scheduler-script-executor .
 docker run --rm -p 9999:9999 \
-  -e SCHEDULER_URL=http://scheduler-server:8080 \
+  -e SCHEDULER_GRPC_ADDRESS=scheduler-server:9090 \
   -e SCHEDULER_TOKEN="$SCHEDULER_TOKEN" \
   -e EXECUTOR_GROUP_ID="$GROUP_ID" \
   -e EXECUTOR_NODE_ID=script-1 \
-  -e EXECUTOR_ADVERTISE_URL=http://script-executor:9999 \
+  -e EXECUTOR_ADVERTISE_ADDRESS=script-executor:9999 \
   go-scheduler-script-executor
 ```
 
@@ -130,11 +130,11 @@ docker run --rm -p 9999:9999 \
   -v "$HOME/.docker:/docker-auth:ro" \
   -e DOCKER_CONFIG=/docker-auth \
   -e DOCKER_ENABLED=true \
-  -e SCHEDULER_URL=http://scheduler-server:8080 \
+  -e SCHEDULER_GRPC_ADDRESS=scheduler-server:9090 \
   -e SCHEDULER_TOKEN="$SCHEDULER_TOKEN" \
   -e EXECUTOR_GROUP_ID="$GROUP_ID" \
   -e EXECUTOR_NODE_ID=executor-1 \
-  -e EXECUTOR_ADVERTISE_URL=http://executor:9999 \
+  -e EXECUTOR_ADVERTISE_ADDRESS=executor:9999 \
   go-scheduler-executor
 ```
 

@@ -170,17 +170,6 @@ func boolean(key string, fallback bool) bool {
 	}
 	return v
 }
-func splitNonEmpty(value string) []string {
-	var out []string
-	for _, item := range strings.Split(value, ",") {
-		item = strings.TrimSpace(strings.ToLower(item))
-		if item != "" {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

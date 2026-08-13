@@ -1,5 +1,5 @@
-// Package executor provides an HTTP executor compatible with Go Scheduler's
-// handler dispatch, health, busyover, rolling-log, and callback protocols.
+// Package executor runs HTTP, script, container, and Kubernetes handlers
+// dispatched by Scheduler Core over gRPC.
 package executor
 
 import (
@@ -30,8 +30,14 @@ type Task struct {
 	RunID, JobID, Input, BroadcastGroupID, ExternalExecutionID string
 	ScriptLanguage, ScriptSource                               string
 	KubernetesCluster                                          *KubernetesClusterConfig
+	HTTP                                                       *HTTPExecution
 	BroadcastIndex, BroadcastTotal                             int32
 	Logger                                                     TaskLogger
+}
+
+type HTTPExecution struct {
+	URL, Method, Body string
+	Headers           map[string]string
 }
 
 type Options struct {

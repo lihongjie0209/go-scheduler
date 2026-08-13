@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package executor.v1;
+
+option go_package = "github.com/lihongjie0209/go-scheduler/gen/executor/v1;executorv1";
+
+service ExecutorService {
+  rpc Dispatch(DispatchRequest) returns (DispatchResponse);
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+  rpc Inspect(InspectRequest) returns (ExecutionState);
+}
+
+message DispatchRequest {
+  string run_id = 1;
+  string external_execution_id = 2;
+  string job_id = 3;
+  int32 attempt = 4;
+  string handler = 5;
+  string input = 6;
+  string callback_token = 7;
+  int32 timeout_seconds = 8;
+  string broadcast_group_id = 9;
+  int32 broadcast_index = 10;
+  int32 broadcast_total = 11;
+  string script_language = 12;
+  string script_source = 13;
+  KubernetesCluster kubernetes_cluster = 14;
+  HttpExecution http = 15;
+}
+
+message HttpExecution {
+  string url = 1;
+  string method = 2;
+  map<string, string> headers = 3;
+  string body = 4;
+}
+
+message KubernetesCluster {
+  string auth_mode = 1;
+  string api_server = 2;
+  string namespace = 3;
+  string kubeconfig = 4;
+  string token = 5;
+  string ca_data = 6;
+  bool insecure_skip_tls_verify = 7;
+}
+
+message DispatchResponse {
+  bool accepted = 1;
+  string execution_id = 2;
+  string state = 3;
+}
+
+message CancelRequest {
+  string run_id = 1;
+  string reason = 2;
+}
+message CancelResponse { bool accepted = 1; }
+
+message InspectRequest { string run_id = 1; }
+message ExecutionState {
+  string run_id = 1;
+  string execution_id = 2;
+  string state = 3;
+  string message = 4;
+}
