@@ -37,6 +37,7 @@ func TestDockerfileRejectsArchitecturesWithoutPowerShellMuslBuild(t *testing.T) 
 func TestExecutorDockerfilesProvidePrivateCompletionStateDirectory(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"Dockerfile", filepath.Join("..", "benchmark-executor.Dockerfile")} {
+		//nolint:gosec // The paths are a compile-time list of repository test fixtures.
 		raw, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
