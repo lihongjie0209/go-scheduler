@@ -45,7 +45,9 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          build-args: TARGET=scheduler
+          build-args: |
+            TARGET=scheduler
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
