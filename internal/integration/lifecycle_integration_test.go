@@ -995,6 +995,81 @@ func TestExecutorCancellationRecoversAfterExecutorReconnects(t *testing.T) {
 	}
 }
 
+func TestExecutorCompletionRecoversFromDurableOutboxAfterRestart(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+	job := createPolicyJob(t, fixture, "completion-outbox-restart", "serial")
+	run, err := fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "completion-outbox-restart", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := fixture.store.ClaimRuns(t.Context(), "completion-outbox-core", 1, time.Minute)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim run: count=%d err=%v", len(claims), err)
+	}
+	const callbackToken = "durable-completion-token"
+	tokenHash := sha256.Sum256([]byte(callbackToken))
+	if err = fixture.store.PrepareClaimedExecutorDispatch(t.Context(), claims[0].Run, "executor-restarted", "127.0.0.1:19999", tokenHash[:], time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	oldStore, err := executorsdk.NewFileCompletionStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := executorsdk.CompletionRecord{RunID: run.ID, Token: callbackToken, Succeeded: true, CreatedAt: time.Now().UTC()}
+	if err = oldStore.Save(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	restartedStore, err := executorsdk.NewFileCompletionStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executorServer, err := executorsdk.NewServer(executorsdk.Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reporter, err := executorsdk.NewGRPCReporter(fixture.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := executorsdk.NewGRPCServer(executorServer, reporter, executorsdk.GRPCServerOptions{MaxConcurrentExecutions: 1, CompletionStore: restartedStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryCtx, cancelDelivery := context.WithCancel(t.Context())
+	service.RunCompletionDelivery(deliveryCtx)
+	defer func() {
+		cancelDelivery()
+		service.WaitCompletionDelivery()
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		completed, loadErr := fixture.store.GetRun(t.Context(), fixture.tenantID, run.ID)
+		if loadErr == nil && completed.Status == "succeeded" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("persisted executor completion was not applied: run=%+v error=%v", completed, loadErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		records, listErr := restartedStore.List(t.Context())
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(records) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delivered completion outbox = %+v", records)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestCrossModuleRetryLineageThroughGRPC(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()

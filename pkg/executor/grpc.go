@@ -43,14 +43,16 @@ const (
 	defaultCompletionInitialBackoff  = 200 * time.Millisecond
 	defaultCompletionMaxBackoff      = 5 * time.Second
 	defaultMaxConcurrentExecutions   = 32
+	completionDeliveryConcurrency    = 8
 )
 
 type GRPCServerOptions struct {
 	MaxConcurrentExecutions int
+	CompletionStore         CompletionStore
 }
 
 // GRPCServer is the executor-facing control plane. Dispatch acknowledges after
-// the task has been durably accepted into this process; completion is reported
+// the task has been accepted into this process; completion is reported
 // asynchronously so long-running work never occupies a Core dispatch worker.
 type GRPCServer struct {
 	executorv1.UnimplementedExecutorServiceServer
@@ -69,6 +71,11 @@ type GRPCServer struct {
 	completionInitialBackoff time.Duration
 	completionMaxBackoff     time.Duration
 	executionSlots           chan struct{}
+	completionStore          CompletionStore
+	completionWake           chan struct{}
+	completionDeliveryWG     sync.WaitGroup
+	completionDeliveryOnce   sync.Once
+	completionStoreFailed    bool
 }
 
 func NewGRPCServer(server *Server, reporter Reporter, options ...GRPCServerOptions) (*GRPCServer, error) {
@@ -92,6 +99,8 @@ func NewGRPCServer(server *Server, reporter Reporter, options ...GRPCServerOptio
 		completionReportTimeout: defaultCompletionReportTimeout, completionInitialBackoff: defaultCompletionInitialBackoff,
 		completionMaxBackoff: defaultCompletionMaxBackoff,
 		executionSlots:       make(chan struct{}, configuration.MaxConcurrentExecutions),
+		completionStore:      configuration.CompletionStore,
+		completionWake:       make(chan struct{}, 1),
 	}, nil
 }
 
@@ -109,6 +118,10 @@ func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchReq
 	if s.draining {
 		s.mu.Unlock()
 		return nil, status.Error(codes.Unavailable, "executor is draining")
+	}
+	if s.completionStoreFailed {
+		s.mu.Unlock()
+		return nil, status.Error(codes.Unavailable, "executor completion persistence is unavailable")
 	}
 	s.pruneExecutionHistoryLocked(time.Now())
 	if current, ok := s.runs[request.GetRunId()]; ok {
@@ -204,7 +217,27 @@ func (s *GRPCServer) finish(request *executorv1.DispatchRequest, handlerErr erro
 	if handlerErr != nil {
 		state, message = "failed", truncate(handlerErr.Error(), 4096)
 	}
+	record := CompletionRecord{RunID: request.GetRunId(), Token: request.GetCallbackToken(), Succeeded: handlerErr == nil, Message: message, CreatedAt: time.Now().UTC()}
+	persisted := false
+	var persistErr error
+	if s.completionStore != nil {
+		s.mu.RLock()
+		current := s.runs[request.GetRunId()]
+		shouldPersist := current != nil && current.state == "running"
+		s.mu.RUnlock()
+		if !shouldPersist {
+			return
+		}
+		persistErr = s.completionStore.Save(context.Background(), record)
+		persisted = persistErr == nil
+		if persistErr != nil {
+			slog.Error("persist executor completion", "run_id", request.GetRunId(), "error", persistErr)
+		}
+	}
 	s.mu.Lock()
+	if persistErr != nil {
+		s.completionStoreFailed = true
+	}
 	current, exists := s.runs[request.GetRunId()]
 	transitioned := false
 	if exists && current.state == "running" {
@@ -217,36 +250,128 @@ func (s *GRPCServer) finish(request *executorv1.DispatchRequest, handlerErr erro
 	}
 	s.mu.Unlock()
 	if !transitioned {
+		if persisted {
+			s.wakeCompletionDelivery()
+		}
 		return
 	}
-	s.reportCompletion(request, handlerErr == nil, message)
+	if s.completionStore == nil {
+		s.reportCompletion(context.Background(), record)
+		return
+	}
+	if persistErr != nil {
+		// Retain the previous in-memory retry as a best effort when local
+		// persistence itself is unavailable.
+		s.reportCompletion(context.Background(), record)
+		return
+	}
+	s.wakeCompletionDelivery()
 }
 
-func (s *GRPCServer) reportCompletion(request *executorv1.DispatchRequest, succeeded bool, message string) {
-	reportCtx, cancelReport := context.WithTimeout(context.Background(), s.completionReportTimeout)
+func (s *GRPCServer) reportCompletion(ctx context.Context, record CompletionRecord) bool {
+	reportCtx, cancelReport := context.WithTimeout(ctx, s.completionReportTimeout)
 	defer cancelReport()
 	backoff := s.completionInitialBackoff
 	for attempt := 1; attempt <= s.completionMaxAttempts; attempt++ {
 		attemptCtx, cancelAttempt := context.WithTimeout(reportCtx, s.completionAttemptTimeout)
-		err := s.reporter.Complete(attemptCtx, request.GetRunId(), request.GetCallbackToken(), succeeded, message)
+		err := s.reporter.Complete(attemptCtx, record.RunID, record.Token, record.Succeeded, record.Message)
 		cancelAttempt()
 		if err == nil || isPermanentCompletionError(err) {
-			return
+			return true
 		}
 		if attempt == s.completionMaxAttempts {
-			slog.Error("executor completion report exhausted", "run_id", request.GetRunId(), "attempts", attempt, "error", err)
-			return
+			slog.Error("executor completion report exhausted", "run_id", record.RunID, "attempts", attempt, "error", err)
+			return false
 		}
 		timer := time.NewTimer(backoff)
 		select {
 		case <-reportCtx.Done():
 			timer.Stop()
-			slog.Error("executor completion report timed out", "run_id", request.GetRunId(), "attempts", attempt, "error", reportCtx.Err())
-			return
+			slog.Error("executor completion report timed out", "run_id", record.RunID, "attempts", attempt, "error", reportCtx.Err())
+			return false
 		case <-timer.C:
 		}
 		backoff = min(backoff*2, s.completionMaxBackoff)
 	}
+	return false
+}
+
+func (s *GRPCServer) RunCompletionDelivery(ctx context.Context) {
+	if s.completionStore == nil {
+		return
+	}
+	s.completionDeliveryOnce.Do(func() {
+		s.completionDeliveryWG.Add(1)
+		go func() {
+			defer s.completionDeliveryWG.Done()
+			timer := time.NewTimer(0)
+			defer timer.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-s.completionWake:
+				case <-timer.C:
+				}
+				s.deliverPersistedCompletions(ctx)
+				timer.Reset(time.Second)
+			}
+		}()
+	})
+}
+
+func (s *GRPCServer) WaitCompletionDelivery() { s.completionDeliveryWG.Wait() }
+
+func (s *GRPCServer) wakeCompletionDelivery() {
+	select {
+	case s.completionWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *GRPCServer) deliverPersistedCompletions(ctx context.Context) {
+	records, err := s.completionStore.List(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("list persisted executor completions", "error", err)
+		}
+		return
+	}
+	semaphore := make(chan struct{}, completionDeliveryConcurrency)
+	var group sync.WaitGroup
+	for _, record := range records {
+		select {
+		case semaphore <- struct{}{}:
+			group.Add(1)
+			go func(record CompletionRecord) {
+				defer group.Done()
+				defer func() { <-semaphore }()
+				if !s.reportCompletionOnce(ctx, record) {
+					return
+				}
+				if deleteErr := s.completionStore.Delete(ctx, record.RunID); deleteErr != nil && ctx.Err() == nil {
+					slog.Error("delete delivered executor completion", "run_id", record.RunID, "error", deleteErr)
+				}
+			}(record)
+		case <-ctx.Done():
+			group.Wait()
+			return
+		}
+	}
+	group.Wait()
+}
+
+func (s *GRPCServer) reportCompletionOnce(ctx context.Context, record CompletionRecord) bool {
+	attemptCtx, cancel := context.WithTimeout(ctx, s.completionAttemptTimeout)
+	defer cancel()
+	err := s.reporter.Complete(attemptCtx, record.RunID, record.Token, record.Succeeded, record.Message)
+	if err == nil || isPermanentCompletionError(err) {
+		return true
+	}
+	if ctx.Err() == nil {
+		slog.Warn("executor completion remains pending", "run_id", record.RunID, "error", err)
+	}
+	return false
 }
 
 func isPermanentCompletionError(err error) bool {

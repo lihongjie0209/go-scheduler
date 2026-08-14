@@ -55,6 +55,47 @@ type blockingReporter struct {
 	once    sync.Once
 }
 
+type blockingCompletionStore struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+type selectiveCompletionReporter struct {
+	delivered chan string
+}
+
+type failingCompletionStore struct{}
+
+func (*failingCompletionStore) Save(context.Context, CompletionRecord) error {
+	return errors.New("disk full")
+}
+func (*failingCompletionStore) List(context.Context) ([]CompletionRecord, error) { return nil, nil }
+func (*failingCompletionStore) Delete(context.Context, string) error             { return nil }
+
+func (*selectiveCompletionReporter) AppendLog(context.Context, string, string, string, string) error {
+	return nil
+}
+func (r *selectiveCompletionReporter) Complete(ctx context.Context, runID, _ string, _ bool, _ string) error {
+	if runID == "blocked-run" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	r.delivered <- runID
+	return nil
+}
+
+func (s *blockingCompletionStore) Save(ctx context.Context, _ CompletionRecord) error {
+	close(s.started)
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (*blockingCompletionStore) List(context.Context) ([]CompletionRecord, error) { return nil, nil }
+func (*blockingCompletionStore) Delete(context.Context, string) error             { return nil }
+
 func (r *blockingReporter) AppendLog(context.Context, string, string, string, string) error {
 	return nil
 }
@@ -268,6 +309,71 @@ func TestGRPCExecutionSlotReleasesBeforeCompletionReport(t *testing.T) {
 	}
 }
 
+func TestGRPCCompletionIsPersistedBeforeTerminalState(t *testing.T) {
+	t.Parallel()
+	store := &blockingCompletionStore{started: make(chan struct{}), release: make(chan struct{})}
+	service := completionRetryTestServer(&recordingReporter{completed: make(chan bool, 1)})
+	service.completionStore = store
+	service.completionWake = make(chan struct{}, 1)
+	service.historyLimit = defaultExecutionHistoryLimit
+	service.historyRetention = defaultExecutionHistoryRetention
+	service.runs = map[string]*execution{"durable-order": {cancel: func() {}, executionID: "execution", state: "running"}}
+	request := &executorv1.DispatchRequest{RunId: "durable-order", CallbackToken: "token"}
+	finished := make(chan struct{})
+	go func() {
+		service.finish(request, nil)
+		close(finished)
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("completion persistence did not start")
+	}
+	state, err := service.Inspect(t.Context(), &executorv1.InspectRequest{RunId: request.GetRunId()})
+	if err != nil || state.GetState() != "running" {
+		t.Fatalf("state before durable save = %q, %v", state.GetState(), err)
+	}
+	close(store.release)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("completion did not finish after durable save")
+	}
+	state, err = service.Inspect(t.Context(), &executorv1.InspectRequest{RunId: request.GetRunId()})
+	if err != nil || state.GetState() != "succeeded" {
+		t.Fatalf("state after durable save = %q, %v", state.GetState(), err)
+	}
+}
+
+func TestGRPCRejectsDispatchAfterCompletionPersistenceFailure(t *testing.T) {
+	t.Parallel()
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Handle("instant", func(context.Context, Task) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	reporter := &recordingReporter{completed: make(chan bool, 1)}
+	service, err := NewGRPCServer(server, reporter, GRPCServerOptions{MaxConcurrentExecutions: 1, CompletionStore: &failingCompletionStore{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := &executorv1.DispatchRequest{RunId: "persistence-failure-1", JobId: "job", Handler: "instant", CallbackToken: "token", TimeoutSeconds: 10}
+	if _, err = service.Dispatch(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reporter.completed:
+	case <-time.After(time.Second):
+		t.Fatal("best-effort completion was not reported after persistence failure")
+	}
+	second := &executorv1.DispatchRequest{RunId: "persistence-failure-2", JobId: "job", Handler: "instant", CallbackToken: "token", TimeoutSeconds: 10}
+	if _, err = service.Dispatch(t.Context(), second); status.Code(err) != codes.Unavailable {
+		t.Fatalf("dispatch after persistence failure error = %v, want Unavailable", err)
+	}
+}
+
 func TestGRPCDrainWaitsAndRejectsNewDispatches(t *testing.T) {
 	t.Parallel()
 	started := make(chan struct{})
@@ -400,7 +506,7 @@ func TestGRPCCancelStopsExecution(t *testing.T) {
 	select {
 	case <-reporter.completed:
 		t.Fatal("cancelled execution reported a conflicting completion")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(250 * time.Millisecond):
 	}
 }
 
@@ -481,7 +587,7 @@ func TestGRPCCompletionReportRetriesTransientErrors(t *testing.T) {
 		nil,
 	}}
 	service := completionRetryTestServer(reporter)
-	service.reportCompletion(&executorv1.DispatchRequest{RunId: "retry-run", CallbackToken: "token"}, true, "")
+	service.reportCompletion(t.Context(), CompletionRecord{RunID: "retry-run", Token: "token", Succeeded: true})
 	if calls := reporter.callCount(); calls != 3 {
 		t.Fatalf("completion report calls = %d, want 3", calls)
 	}
@@ -495,7 +601,7 @@ func TestGRPCCompletionReportStopsOnPermanentError(t *testing.T) {
 			t.Parallel()
 			reporter := &scriptedReporter{results: []error{status.Error(code, "permanent")}}
 			service := completionRetryTestServer(reporter)
-			service.reportCompletion(&executorv1.DispatchRequest{RunId: "permanent-run", CallbackToken: "token"}, false, "failed")
+			service.reportCompletion(t.Context(), CompletionRecord{RunID: "permanent-run", Token: "token", Message: "failed"})
 			if calls := reporter.callCount(); calls != 1 {
 				t.Fatalf("completion report calls = %d, want 1", calls)
 			}
@@ -511,7 +617,7 @@ func TestGRPCCompletionReportHasAttemptLimit(t *testing.T) {
 		status.Error(codes.Unavailable, "five"), status.Error(codes.Unavailable, "six"),
 	}}
 	service := completionRetryTestServer(reporter)
-	service.reportCompletion(&executorv1.DispatchRequest{RunId: "exhausted-run", CallbackToken: "token"}, true, "")
+	service.reportCompletion(t.Context(), CompletionRecord{RunID: "exhausted-run", Token: "token", Succeeded: true})
 	if calls := reporter.callCount(); calls != service.completionMaxAttempts {
 		t.Fatalf("completion report calls = %d, want %d", calls, service.completionMaxAttempts)
 	}
@@ -524,10 +630,105 @@ func TestGRPCCompletionReportHasOverallDeadline(t *testing.T) {
 	service.completionAttemptTimeout = time.Second
 	service.completionReportTimeout = 20 * time.Millisecond
 	started := time.Now()
-	service.reportCompletion(&executorv1.DispatchRequest{RunId: "deadline-run", CallbackToken: "token"}, true, "")
+	service.reportCompletion(t.Context(), CompletionRecord{RunID: "deadline-run", Token: "token", Succeeded: true})
 	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
 		t.Fatalf("completion report exceeded overall deadline: %s", elapsed)
 	}
+}
+
+func TestGRPCCompletionDeliveryRecoversPersistedRecordAfterRestart(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	firstStore, err := NewFileCompletionStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := CompletionRecord{RunID: "restart-run", Token: "restart-token", Succeeded: true, CreatedAt: time.Now().UTC()}
+	if err = firstStore.Save(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	secondStore, err := NewFileCompletionStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reporter := &recordingReporter{completed: make(chan bool, 1)}
+	service := completionRetryTestServer(reporter)
+	service.completionStore = secondStore
+	service.completionWake = make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	service.RunCompletionDelivery(ctx)
+	select {
+	case succeeded := <-reporter.completed:
+		if !succeeded {
+			t.Fatal("persisted successful completion was changed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("persisted completion was not delivered after restart")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		records, listErr := secondStore.List(t.Context())
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(records) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delivered completion was not deleted: %+v", records)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	service.WaitCompletionDelivery()
+}
+
+func TestGRPCDurableCompletionDoesNotHeadOfLineBlock(t *testing.T) {
+	t.Parallel()
+	store, err := NewFileCompletionStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Now().UTC()
+	for _, record := range []CompletionRecord{
+		{RunID: "blocked-run", Token: "blocked-token", CreatedAt: createdAt},
+		{RunID: "healthy-run", Token: "healthy-token", Succeeded: true, CreatedAt: createdAt.Add(time.Nanosecond)},
+	} {
+		if err = store.Save(t.Context(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reporter := &selectiveCompletionReporter{delivered: make(chan string, 1)}
+	service := completionRetryTestServer(reporter)
+	service.completionStore = store
+	service.completionWake = make(chan struct{}, 1)
+	service.completionAttemptTimeout = 500 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	service.RunCompletionDelivery(ctx)
+	select {
+	case runID := <-reporter.delivered:
+		if runID != "healthy-run" {
+			t.Fatalf("delivered run = %q, want healthy-run", runID)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("healthy completion was blocked behind unavailable completion")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		records, listErr := store.List(t.Context())
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(records) == 1 && records[0].RunID == "blocked-run" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("completion outbox records = %+v", records)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	service.WaitCompletionDelivery()
 }
 
 func completionRetryTestServer(reporter Reporter) *GRPCServer {

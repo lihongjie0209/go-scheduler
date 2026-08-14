@@ -72,6 +72,14 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	completionMaxPending, err := positiveIntEnv("EXECUTOR_COMPLETION_MAX_PENDING", 10_000)
+	if err != nil {
+		return err
+	}
+	completionStore, err := executor.NewFileCompletionStore(envOr("EXECUTOR_STATE_DIR", "./executor-state"), executor.FileCompletionStoreOptions{MaxRecords: completionMaxPending})
+	if err != nil {
+		return err
+	}
 	shutdownTimeout, err := durationEnv("EXECUTOR_SHUTDOWN_TIMEOUT", 30*time.Second, time.Second, 24*time.Hour)
 	if err != nil {
 		return err
@@ -90,7 +98,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	executorService, err := executor.NewGRPCServer(server, reporter, executor.GRPCServerOptions{MaxConcurrentExecutions: maxConcurrency})
+	executorService, err := executor.NewGRPCServer(server, reporter, executor.GRPCServerOptions{MaxConcurrentExecutions: maxConcurrency, CompletionStore: completionStore})
 	if err != nil {
 		return err
 	}
@@ -100,6 +108,12 @@ func Run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
+	defer func() {
+		cancelDelivery()
+		executorService.WaitCompletionDelivery()
+	}()
+	executorService.RunCompletionDelivery(deliveryCtx)
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", listen)
 	if err != nil {
 		return err
@@ -141,6 +155,8 @@ func Run() error {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
 	drainErr := executorService.Drain(shutdownCtx)
 	cancelShutdown()
+	cancelDelivery()
+	executorService.WaitCompletionDelivery()
 	grpcServer.GracefulStop()
 	if err != nil {
 		return err

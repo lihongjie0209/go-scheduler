@@ -120,6 +120,7 @@ Migration 23 增加：
 - 所有跨进程 gRPC 方向都支持 TLS，但为了兼容本地开发，未配置证书时仍允许明文。生产必须配置 CA/证书或由 service mesh 强制 mTLS；应用原生双向客户端证书校验仍是后续增强项。
 - `/metrics` 默认未鉴权，应只通过内网 Service 或网络策略暴露。
 - 执行器取消指令通过 PostgreSQL 租约队列持久化；Docker 容器和 Kubernetes Job 使用稳定外部执行 ID 在执行器重启后恢复取消，并在删除前校验托管标签。应对 `scheduler_executor_command_queue_pending` 和最老积压时长设置告警。
+- Executor 完成回报先写节点本地 durable outbox，再异步发送给 Core；Core 短暂不可达或 Executor 重启不会丢失已经完成的结果。该目录包含短期 callback token，部署必须使用每节点独占的受限持久卷。
 - 应用内登录限流是单实例状态。集群模式还应由网关实施共享限流，避免攻击者把额度乘以 API 实例数。
 - Kubernetes 配置允许 `insecure_skip_tls_verify`，这是显式运维选项；生产审计应检测并告警，而不是静默启用。
 

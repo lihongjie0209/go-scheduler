@@ -60,6 +60,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - "${DOCKER_CONFIG_DIR:-./docker-auth}:/docker-auth:ro"
+      - executor-state:/var/lib/go-scheduler/executor
     depends_on:
       scheduler-server: {condition: service_started}
     stop_grace_period: 40s
+
+volumes:
+  executor-state:

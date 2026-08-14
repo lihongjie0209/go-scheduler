@@ -25,8 +25,10 @@ RUN apk add --no-cache ca-certificates docker-cli icu-libs krb5-libs libgcc libi
     && rm /tmp/powershell.tar.gz \
     && apk del .powershell-download \
     && addgroup -S executor \
-    && adduser -S -G executor executor
+    && adduser -S -G executor executor \
+    && install -d -m 0700 -o executor -g executor /var/lib/go-scheduler/executor
 COPY --from=build /out/scheduler /usr/local/bin/scheduler
+ENV EXECUTOR_STATE_DIR=/var/lib/go-scheduler/executor
 USER executor:executor
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/scheduler"]
 CMD ["executor"]

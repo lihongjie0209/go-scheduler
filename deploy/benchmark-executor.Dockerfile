@@ -9,8 +9,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tini \
     && addgroup -S executor \
-    && adduser -S -G executor executor
+    && adduser -S -G executor executor \
+    && install -d -m 0700 -o executor -g executor /var/lib/go-scheduler/executor
 COPY --from=build /out/executor /usr/local/bin/executor
+ENV EXECUTOR_STATE_DIR=/var/lib/go-scheduler/executor
 USER executor
 EXPOSE 9999
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/executor"]

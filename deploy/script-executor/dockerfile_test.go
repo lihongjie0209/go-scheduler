@@ -33,3 +33,20 @@ func TestDockerfileRejectsArchitecturesWithoutPowerShellMuslBuild(t *testing.T) 
 		t.Fatal("executor workflow publishes an architecture without a PowerShell musl build")
 	}
 }
+
+func TestExecutorDockerfilesProvidePrivateCompletionStateDirectory(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"Dockerfile", filepath.Join("..", "benchmark-executor.Dockerfile")} {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := string(raw)
+		if !strings.Contains(content, "install -d -m 0700 -o executor -g executor /var/lib/go-scheduler/executor") {
+			t.Errorf("%s does not create a private executor state directory", name)
+		}
+		if !strings.Contains(content, "ENV EXECUTOR_STATE_DIR=/var/lib/go-scheduler/executor") {
+			t.Errorf("%s does not configure the executor state directory", name)
+		}
+	}
+}
