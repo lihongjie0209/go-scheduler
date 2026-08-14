@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
@@ -17,6 +18,7 @@ type GRPCRegistrarOptions struct {
 type GRPCRegistrar struct {
 	client  schedulerv1.SchedulerServiceClient
 	options GRPCRegistrarOptions
+	logger  *slog.Logger
 }
 
 func NewGRPCRegistrar(client schedulerv1.SchedulerServiceClient, options GRPCRegistrarOptions) (*GRPCRegistrar, error) {
@@ -26,7 +28,7 @@ func NewGRPCRegistrar(client schedulerv1.SchedulerServiceClient, options GRPCReg
 	if options.TTL < 5*time.Second || options.TTL > 300*time.Second {
 		return nil, errors.New("TTL must be between 5 and 300 seconds")
 	}
-	return &GRPCRegistrar{client: client, options: options}, nil
+	return &GRPCRegistrar{client: client, options: options, logger: slog.Default()}, nil
 }
 
 func (r *GRPCRegistrar) Run(ctx context.Context) error {
@@ -40,7 +42,10 @@ func (r *GRPCRegistrar) Run(ctx context.Context) error {
 	for {
 		heartbeatCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		ttlSeconds := int32(r.options.TTL / time.Second) // #nosec G115 -- constructor bounds TTL to 5..300 seconds.
-		_, _ = r.client.RegisterExecutorNode(heartbeatCtx, &schedulerv1.RegisterExecutorNodeRequest{TenantId: r.options.TenantID, GroupId: r.options.GroupID, NodeId: r.options.NodeID, Address: r.options.Address, TtlSeconds: ttlSeconds, Labels: r.options.Labels})
+		_, err := r.client.RegisterExecutorNode(heartbeatCtx, &schedulerv1.RegisterExecutorNodeRequest{TenantId: r.options.TenantID, GroupId: r.options.GroupID, NodeId: r.options.NodeID, Address: r.options.Address, TtlSeconds: ttlSeconds, Labels: r.options.Labels})
+		if err != nil {
+			r.logger.WarnContext(heartbeatCtx, "executor heartbeat registration failed", "tenant_id", r.options.TenantID, "group_id", r.options.GroupID, "node_id", r.options.NodeID, "error", err)
+		}
 		cancel()
 		select {
 		case <-ctx.Done():

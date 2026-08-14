@@ -21,4 +21,4 @@ spec:
               valueFrom: {fieldRef: {fieldPath: status.podIP}}
           readinessProbe: {grpc: {port: 9999}, periodSeconds: 5}
           livenessProbe: {grpc: {port: 9999}, periodSeconds: 10}
-          securityContext: {allowPrivilegeEscalation: false, runAsNonRoot: true}
+          securityContext: {allowPrivilegeEscalation: false, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532}
