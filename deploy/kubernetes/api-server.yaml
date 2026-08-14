@@ -9,9 +9,13 @@ spec:
     spec:
       containers:
         - name: api
-          image: scheduler-api:latest
+          image: ghcr.io/lihongjie0209/go-scheduler:latest
+          args: ["api-server"]
           ports: [{name: http, containerPort: 8080}]
           envFrom: [{secretRef: {name: scheduler-secrets}}, {configMapRef: {name: scheduler-config}}]
+          env:
+            - {name: DISCOVERY_MODE, value: kubernetes}
+            - {name: CORE_GRPC_TARGET, value: "dns:///scheduler-core:9090"}
           readinessProbe: {httpGet: {path: /health/ready, port: http}, periodSeconds: 5}
           livenessProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 10}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true}

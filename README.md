@@ -5,12 +5,12 @@
 ## 组件
 
 - `scheduler server`：默认部署入口；REST API 与调度 Core 位于同一进程，通过内存 gRPC 通信，不需要 etcd；同时监听内部 gRPC 端口供 Executor 注册和回报。
-- `scheduler api-server` / `scheduler core`：分布式部署入口，需要 etcd 服务发现。
+- `scheduler api-server` / `scheduler core`：分布式部署入口；Kubernetes 内可使用无头 Service + gRPC DNS 服务发现，集群外可使用 etcd。
 - `scheduler executor`：脚本、HTTP、Docker 与 Kubernetes Job 执行器。
 - `scheduler migrate` / `scheduler bootstrap`：数据库迁移和首次初始化。
 - `schedulerctl`：独立的 API 运维客户端，支持账号密码、JWT 和 API Key 认证。发行包只包含 `scheduler` 与 `schedulerctl` 两个二进制。
 - PostgreSQL：任务和运行状态的唯一事实来源。
-- etcd：仅在选择分布式入口时用于服务注册与发现。
+- etcd：仅在集群外选择分布式入口时用于服务注册与发现；Kubernetes 部署不需要 etcd。
 
 ## 本地启动
 
@@ -58,6 +58,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `HTTP_ADDRESS` | `:8080` | API 监听地址 |
 | `API_CONTEXT_PATH` | 空 | API URL 前缀，例如 `/scheduler`；健康检查、指标、REST、回调和执行器注册均使用此前缀 |
 | `PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | HTTP 任务异步回调使用的公开 API 地址 |
+| `DISCOVERY_MODE` | `etcd` | 分布式 API/Core 的服务发现模式：`etcd` 或 `kubernetes`；单进程 `server` 不使用该配置 |
+| `CORE_GRPC_TARGET` | `dns:///scheduler-core:9090` | Kubernetes 模式下 API 和 Executor 连接 Core 无头 Service 的 gRPC DNS target |
 | `WORKERS` | `64` | 单 Core 最大并发下发数；执行任务本身在 Executor 运行，不长期占用该槽位 |
 | `API_DATABASE_MAX_CONNS` / `API_DATABASE_MIN_CONNS` | `8` / `1` | API PostgreSQL 连接池上限与保底连接数 |
 | `CORE_DATABASE_MAX_CONNS` / `CORE_DATABASE_MIN_CONNS` | `24` / `2` | 调度、执行状态和通知 PostgreSQL 连接池上限与保底连接数 |
@@ -72,7 +74,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 
 Executor 连接 Core/standalone 时可设置 `SCHEDULER_GRPC_TLS_CA` 和 `SCHEDULER_GRPC_TLS_SERVER_NAME`；Executor 自身的 gRPC 服务端可设置 `EXECUTOR_GRPC_TLS_CERT` 和 `EXECUTOR_GRPC_TLS_KEY`。生产跨主机部署应同时启用两个方向的 TLS。
 
-单进程模式的 API/Core 调用使用 `bufconn` 内存传输，同时监听内部 gRPC 端口供 Executor 注册、回报和接收调度。需要 API/Core 独立扩缩容时可继续使用分布式入口；它们通过 etcd 动态发现并依靠 PostgreSQL 行锁避免重复执行。
+单进程模式的 API/Core 调用使用 `bufconn` 内存传输，同时监听内部 gRPC 端口供 Executor 注册、回报和接收调度。需要 API/Core 独立扩缩容时可继续使用分布式入口：集群外设置 `DISCOVERY_MODE=etcd`；Kubernetes 内设置 `DISCOVERY_MODE=kubernetes`，API 和 Executor 使用 `dns:///scheduler-core:9090`，由无头 Service 只发布 ready Core Pod，并由 gRPC `round_robin` 动态更新连接。Kubernetes 模式不访问 Kubernetes API、不需要 ServiceAccount RBAC，也不连接 etcd。动态 Executor 心跳直接写入 PostgreSQL TTL 投影；多 Core 仍依靠 PostgreSQL 行锁避免重复执行。参考 [`deploy/kubernetes`](deploy/kubernetes) 清单。
 
 `pg_partman` 是可选增强项。迁移会检测扩展是否存在且当前账号是否可安装：可用时配置月分区并由服务每小时调用 pg_partman maintenance；不可用时，迁移先创建近 90 天及未来 3 个月的月分区，Scheduler 再通过 PostgreSQL advisory lock 每小时续建并删除无活跃运行的过期分区。多个服务实例可以共享同一普通 PostgreSQL，不需要超级用户或 pg_partman。
 

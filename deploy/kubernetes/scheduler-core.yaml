@@ -10,13 +10,21 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: core
-          image: go-scheduler:latest
+          image: ghcr.io/lihongjie0209/go-scheduler:latest
           args: ["core"]
           ports: [{name: grpc, containerPort: 9090}, {name: admin, containerPort: 8081}]
           envFrom: [{secretRef: {name: scheduler-secrets}}, {configMapRef: {name: scheduler-config}}]
           env:
             - {name: INSTANCE_ID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}
-            - {name: ADVERTISE_GRPC_ADDRESS, value: scheduler-core:9090}
+            - {name: DISCOVERY_MODE, value: kubernetes}
           readinessProbe: {httpGet: {path: /health/ready, port: admin}, periodSeconds: 5}
           livenessProbe: {httpGet: {path: /health/live, port: admin}, periodSeconds: 10}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: scheduler-core}
+spec:
+  clusterIP: None
+  selector: {app: scheduler-core}
+  ports: [{name: grpc, port: 9090, targetPort: grpc}]

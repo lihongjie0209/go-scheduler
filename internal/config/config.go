@@ -20,6 +20,8 @@ type Config struct {
 	AdvertiseHTTP             string
 	PublicBaseURL             string
 	DatabaseURL               string
+	DiscoveryMode             string
+	CoreGRPCTarget            string
 	EtcdEndpoints             []string
 	EtcdPrefix                string
 	EtcdUsername              string
@@ -72,6 +74,8 @@ func Load(serviceName string) (Config, error) {
 		AdvertiseHTTP:             env("ADVERTISE_HTTP_ADDRESS", "http://127.0.0.1:8080"),
 		PublicBaseURL:             env("PUBLIC_BASE_URL", "http://127.0.0.1:8080"),
 		DatabaseURL:               os.Getenv("DATABASE_URL"),
+		DiscoveryMode:             strings.ToLower(env("DISCOVERY_MODE", "etcd")),
+		CoreGRPCTarget:            env("CORE_GRPC_TARGET", "dns:///scheduler-core:9090"),
 		EtcdEndpoints:             strings.Split(env("ETCD_ENDPOINTS", "127.0.0.1:2379"), ","),
 		EtcdPrefix:                env("ETCD_PREFIX", "/go-scheduler/dev/services"),
 		EtcdUsername:              os.Getenv("ETCD_USERNAME"),
@@ -109,6 +113,12 @@ func Load(serviceName string) (Config, error) {
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
+	if c.DiscoveryMode != "etcd" && c.DiscoveryMode != "kubernetes" {
+		return Config{}, fmt.Errorf("DISCOVERY_MODE must be etcd or kubernetes")
+	}
+	if c.DiscoveryMode == "kubernetes" && strings.TrimSpace(c.CoreGRPCTarget) == "" {
+		return Config{}, fmt.Errorf("CORE_GRPC_TARGET is required in kubernetes discovery mode")
+	}
 	if c.ServiceToken == "" {
 		return Config{}, fmt.Errorf("SERVICE_TOKEN is required")
 	}
@@ -136,7 +146,7 @@ func Load(serviceName string) (Config, error) {
 	if err := validatePoolSize("CORE", c.CoreDatabaseMinConns, c.CoreDatabaseMaxConns); err != nil {
 		return Config{}, err
 	}
-	if serviceName != "scheduler-server" && (c.EtcdCert == "") != (c.EtcdKey == "") {
+	if serviceName != "scheduler-server" && c.DiscoveryMode == "etcd" && (c.EtcdCert == "") != (c.EtcdKey == "") {
 		return Config{}, fmt.Errorf("ETCD_CERT and ETCD_KEY must be configured together")
 	}
 	return c, nil

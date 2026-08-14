@@ -63,6 +63,9 @@ func registerDatabasePoolMetrics(s *store.Store) error {
 	}))
 }
 func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
+	if c.DiscoveryMode == "kubernetes" {
+		return nil, nil
+	}
 	client, err := discovery.NewClient(c.EtcdEndpoints, c.EtcdUsername, c.EtcdPassword, c.EtcdCA, c.EtcdCert, c.EtcdKey)
 	if err == nil {
 		lc.Append(fx.Hook{OnStop: func(context.Context) error { return client.Close() }})
@@ -70,6 +73,9 @@ func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
 	return client, err
 }
 func newExecutorRegistry(c config.Config, client *clientv3.Client, s *store.Store) core.ExecutorRegistry {
+	if c.DiscoveryMode == "kubernetes" {
+		return s
+	}
 	return discovery.NewExecutorRegistry(client, c.EtcdPrefix, s)
 }
 func newExecutorController(c config.Config) (*core.ExecutorController, error) {
@@ -98,7 +104,10 @@ func newGRPCServer(c config.Config, svc *core.Service) (*grpc.Server, error) {
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	return server, nil
 }
-func newRegistrar(c config.Config, client *clientv3.Client) (*discovery.Registrar, error) {
+func newRegistrar(c config.Config, client *clientv3.Client) (discovery.ServiceRegistrar, error) {
+	if c.DiscoveryMode == "kubernetes" {
+		return discovery.NewNoopRegistrar(), nil
+	}
 	return discovery.NewRegistrar(client, c.EtcdPrefix, "scheduler-core", discovery.Metadata{InstanceID: c.InstanceID, GRPCAddress: c.AdvertiseGRPC, Version: "dev", StartedAt: time.Now().UTC()})
 }
 func newEngine(c config.Config, s *store.Store, controller *core.ExecutorController) (*core.Engine, error) {
@@ -126,7 +135,7 @@ func newCoreHTTPServer(c config.Config, s *store.Store) *http.Server {
 	mux.Handle("/metrics", promhttp.Handler())
 	return &http.Server{Addr: c.CoreHTTPAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 }
-func run(lc fx.Lifecycle, c config.Config, server *grpc.Server, registrar *discovery.Registrar, engine *core.Engine, notifications *notifier.Worker, adminServer *http.Server) {
+func run(lc fx.Lifecycle, c config.Config, server *grpc.Server, registrar discovery.ServiceRegistrar, engine *core.Engine, notifications *notifier.Worker, adminServer *http.Server) {
 	var listener net.Listener
 	var adminListener net.Listener
 	var cancel context.CancelFunc

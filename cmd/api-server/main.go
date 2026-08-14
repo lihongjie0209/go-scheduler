@@ -49,6 +49,9 @@ func registerDatabasePoolMetrics(s *store.Store) error {
 	return prometheus.Register(observability.NewDatabasePoolCollector("api", s.PoolStats))
 }
 func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
+	if c.DiscoveryMode == "kubernetes" {
+		return nil, nil
+	}
 	client, err := discovery.NewClient(c.EtcdEndpoints, c.EtcdUsername, c.EtcdPassword, c.EtcdCA, c.EtcdCert, c.EtcdKey)
 	if err == nil {
 		lc.Append(fx.Hook{OnStop: func(context.Context) error { return client.Close() }})
@@ -56,19 +59,30 @@ func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
 	return client, err
 }
 func newCoreClient(lc fx.Lifecycle, c config.Config, etcd *clientv3.Client) (schedulerv1.SchedulerServiceClient, error) {
-	builder := discovery.NewBuilder(etcd, c.EtcdPrefix)
 	transport, err := rpc.ClientTransportCredentials(c.GRPCTLSCA, c.GRPCTLSServerName)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := grpc.NewClient("etcd:///scheduler-core", grpc.WithResolvers(builder), grpc.WithTransportCredentials(transport), grpc.WithDefaultServiceConfig(fmt.Sprintf(`{"loadBalancingConfig":[{"%s":{}}]}`, roundrobin.Name)), grpc.WithUnaryInterceptor(rpc.UnaryClientAuth(c.ServiceToken)))
+	target := c.CoreGRPCTarget
+	options := []grpc.DialOption{grpc.WithTransportCredentials(transport), grpc.WithDefaultServiceConfig(fmt.Sprintf(`{"loadBalancingConfig":[{"%s":{}}]}`, roundrobin.Name)), grpc.WithUnaryInterceptor(rpc.UnaryClientAuth(c.ServiceToken))}
+	if c.DiscoveryMode == "etcd" {
+		if etcd == nil {
+			return nil, fmt.Errorf("etcd client is required in etcd discovery mode")
+		}
+		target = "etcd:///scheduler-core"
+		options = append(options, grpc.WithResolvers(discovery.NewBuilder(etcd, c.EtcdPrefix)))
+	}
+	conn, err := grpc.NewClient(target, options...)
 	if err != nil {
 		return nil, err
 	}
 	lc.Append(fx.Hook{OnStop: func(context.Context) error { return conn.Close() }})
 	return schedulerv1.NewSchedulerServiceClient(conn), nil
 }
-func newRegistrar(c config.Config, client *clientv3.Client) (*discovery.Registrar, error) {
+func newRegistrar(c config.Config, client *clientv3.Client) (discovery.ServiceRegistrar, error) {
+	if c.DiscoveryMode == "kubernetes" {
+		return discovery.NewNoopRegistrar(), nil
+	}
 	return discovery.NewRegistrar(client, c.EtcdPrefix, "api-server", discovery.Metadata{InstanceID: c.InstanceID, HTTPAddress: c.AdvertiseHTTP, Version: "dev", StartedAt: time.Now().UTC()})
 }
 func newAuthManager(c config.Config) (*auth.Manager, error) {
@@ -80,7 +94,7 @@ func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s
 	handler.SetDiscovery(etcd, c.EtcdPrefix)
 	return &http.Server{Addr: c.HTTPAddress, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 }
-func run(lc fx.Lifecycle, server *http.Server, registrar *discovery.Registrar) {
+func run(lc fx.Lifecycle, server *http.Server, registrar discovery.ServiceRegistrar) {
 	var cancel context.CancelFunc
 	var listener net.Listener
 	lc.Append(fx.Hook{OnStart: func(startCtx context.Context) error {

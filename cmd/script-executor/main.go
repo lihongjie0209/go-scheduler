@@ -24,11 +24,15 @@ import (
 func Run() error {
 	schedulerAddress := os.Getenv("SCHEDULER_GRPC_ADDRESS")
 	token, groupID := os.Getenv("SCHEDULER_TOKEN"), os.Getenv("EXECUTOR_GROUP_ID")
-	nodeID, address := os.Getenv("EXECUTOR_NODE_ID"), os.Getenv("EXECUTOR_ADVERTISE_ADDRESS")
+	nodeID := os.Getenv("EXECUTOR_NODE_ID")
 	tenantID := envOr("EXECUTOR_TENANT_ID", "00000000-0000-0000-0000-000000000001")
 	listen := envOr("EXECUTOR_LISTEN", ":9999")
-	if schedulerAddress == "" || token == "" || groupID == "" || nodeID == "" || address == "" {
-		return errors.New("SCHEDULER_GRPC_ADDRESS, SCHEDULER_TOKEN, EXECUTOR_GROUP_ID, EXECUTOR_NODE_ID and EXECUTOR_ADVERTISE_ADDRESS are required")
+	address, err := executorAdvertiseAddress(os.Getenv("EXECUTOR_ADVERTISE_ADDRESS"), os.Getenv("EXECUTOR_ADVERTISE_HOST"), listen)
+	if err != nil {
+		return err
+	}
+	if schedulerAddress == "" || token == "" || groupID == "" || nodeID == "" {
+		return errors.New("SCHEDULER_GRPC_ADDRESS, SCHEDULER_TOKEN, EXECUTOR_GROUP_ID and EXECUTOR_NODE_ID are required")
 	}
 	languages := splitLanguages(envOr("SCRIPT_LANGUAGES", "shell,python,nodejs,php,powershell"))
 	labels := splitLanguages(os.Getenv("EXECUTOR_LABELS"))
@@ -193,6 +197,21 @@ func Run() error {
 		}
 	}
 	return nil
+}
+
+func executorAdvertiseAddress(explicit, host, listen string) (string, error) {
+	if explicit = strings.TrimSpace(explicit); explicit != "" {
+		return explicit, nil
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", errors.New("EXECUTOR_ADVERTISE_ADDRESS or EXECUTOR_ADVERTISE_HOST is required")
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil || port == "" {
+		return "", fmt.Errorf("EXECUTOR_LISTEN must include a port when deriving the advertise address")
+	}
+	return "grpc://" + net.JoinHostPort(host, port), nil
 }
 func splitLanguages(raw string) []string {
 	fields := strings.Split(raw, ",")

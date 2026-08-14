@@ -6,6 +6,54 @@ import (
 	"testing"
 )
 
+func setRequiredEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("SERVICE_TOKEN", "service-token")
+	t.Setenv("MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	t.Setenv("JWT_SECRET", strings.Repeat("j", 32))
+}
+
+func TestLoadDiscoveryMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       string
+		coreTarget string
+		wantErr    bool
+	}{
+		{name: "etcd remains the distributed default"},
+		{name: "kubernetes uses configured DNS target", mode: "kubernetes", coreTarget: "dns:///core.platform.svc:9090"},
+		{name: "kubernetes requires target", mode: "kubernetes", coreTarget: " ", wantErr: true},
+		{name: "rejects unknown provider", mode: "consul", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setRequiredEnvironment(t)
+			t.Setenv("DISCOVERY_MODE", test.mode)
+			if test.mode == "kubernetes" {
+				t.Setenv("CORE_GRPC_TARGET", test.coreTarget)
+			}
+			got, err := Load("api-server")
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Load() error = %v, wantErr %v", err, test.wantErr)
+			}
+			if err == nil && test.mode == "kubernetes" && got.CoreGRPCTarget != test.coreTarget {
+				t.Fatalf("CoreGRPCTarget = %q, want %q", got.CoreGRPCTarget, test.coreTarget)
+			}
+		})
+	}
+}
+
+func TestKubernetesDiscoveryDoesNotValidateEtcdCredentials(t *testing.T) {
+	setRequiredEnvironment(t)
+	t.Setenv("DISCOVERY_MODE", "kubernetes")
+	t.Setenv("ETCD_CERT", "/unused/client.crt")
+	t.Setenv("ETCD_KEY", "")
+	if _, err := Load("scheduler-core"); err != nil {
+		t.Fatalf("kubernetes discovery unexpectedly depends on etcd: %v", err)
+	}
+}
+
 func TestNormalizeContextPath(t *testing.T) {
 	tests := []struct {
 		name, input, want string
