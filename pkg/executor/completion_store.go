@@ -294,7 +294,8 @@ func (s *FileCompletionStore) SaveExecution(ctx context.Context, request *execut
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	target := s.executionPath(request.GetRunId())
-	if existing, readErr := os.ReadFile(target); readErr == nil { // #nosec G304 -- path is derived from a validated run ID.
+	// #nosec G304 -- target is derived from the configured state directory and a validated run ID.
+	if existing, readErr := os.ReadFile(target); readErr == nil {
 		if bytes.Equal(existing, raw) {
 			return nil
 		}
