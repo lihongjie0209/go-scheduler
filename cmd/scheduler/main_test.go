@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -23,8 +22,7 @@ func TestRootCommandContainsAllRuntimeModes(t *testing.T) {
 
 func TestDockerReleaseInjectsVersion(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join("..", "..")
-	dockerfile, err := os.ReadFile(filepath.Join(root, "Dockerfile"))
+	dockerfile, err := os.ReadFile("../../Dockerfile")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +31,7 @@ func TestDockerReleaseInjectsVersion(t *testing.T) {
 			t.Errorf("Dockerfile does not contain %q", required)
 		}
 	}
-	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "docker.yml"))
+	workflow, err := os.ReadFile("../../.github/workflows/docker.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
