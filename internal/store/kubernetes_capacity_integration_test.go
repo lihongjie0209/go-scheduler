@@ -125,4 +125,81 @@ func TestKubernetesClusterCapacityAcrossConcurrentCoreClaims(t *testing.T) {
 	if nextKubernetes != 1 {
 		t.Fatalf("claims after one slot release = %d, want 1", nextKubernetes)
 	}
+	if _, err = first.pool.Exec(ctx, `UPDATE job_runs SET status='succeeded',finished_at=now(),lease_owner=NULL,lease_token=NULL,lease_until=NULL WHERE status IN ('pending','running')`); err != nil {
+		t.Fatal(err)
+	}
+	secretJob, err := first.CreateJob(ctx, Job{TenantID: tenantID, Name: "encrypted-claim", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: "https://example.com", HTTPMethod: http.MethodPost, Headers: map[string]string{"Authorization": "Bearer secret"}, TimeoutSeconds: 60, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretRun, err := first.TriggerJob(ctx, tenantID, secretJob.ID, "encrypted-claim", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeWithoutCipher, err := New(ctx, dsn, WithPoolSize(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeWithoutCipher.Close()
+	if _, err = storeWithoutCipher.ClaimRuns(ctx, "missing-cipher", 1, time.Minute); err == nil {
+		t.Fatal("claim without the configured cipher unexpectedly succeeded")
+	}
+	if err = storeWithoutCipher.Ping(ctx); err != nil {
+		t.Fatalf("claim rollback left the pooled connection unusable: %v", err)
+	}
+	var secretStatus string
+	if err = first.pool.QueryRow(ctx, `SELECT status FROM job_runs WHERE id=$1`, secretRun.ID).Scan(&secretStatus); err != nil {
+		t.Fatal(err)
+	}
+	if secretStatus != "pending" {
+		t.Fatalf("run status after claim decoding failure = %q, want pending", secretStatus)
+	}
+	secretClaims, err := first.ClaimRuns(ctx, "configured-cipher", 1, time.Minute)
+	if err != nil || len(secretClaims) != 1 || secretClaims[0].Run.ID != secretRun.ID {
+		t.Fatalf("claim after rollback = %+v, %v", secretClaims, err)
+	}
+}
+
+func BenchmarkClaimRunsEmpty(b *testing.B) {
+	ctx := b.Context()
+	projectRoot, err := filepath.Abs("../..")
+	if err != nil {
+		b.Fatal(err)
+	}
+	container, err := postgres.Run(ctx, "", testcontainers.WithDockerfile(testcontainers.FromDockerfile{Context: projectRoot, Dockerfile: "deploy/postgres/Dockerfile", Repo: "go-scheduler-postgres-test", Tag: "16-partman-5.5.0", KeepImage: true}), postgres.WithDatabase("scheduler"), postgres.WithUsername("scheduler"), postgres.WithPassword("scheduler"), postgres.BasicWaitStrategies())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		b.Fatal(err)
+	}
+	connection, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, migration := range migrations.All {
+		if _, err = connection.Exec(ctx, migration.SQL); err != nil {
+			b.Fatalf("migration %d: %v", migration.Version, err)
+		}
+	}
+	if err = connection.Close(ctx); err != nil {
+		b.Fatal(err)
+	}
+	schedulerStore, err := New(ctx, dsn)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(schedulerStore.Close)
+	b.ResetTimer()
+	for b.Loop() {
+		claims, claimErr := schedulerStore.ClaimRuns(ctx, "benchmark-core", 64, time.Minute)
+		if claimErr != nil {
+			b.Fatal(claimErr)
+		}
+		if len(claims) != 0 {
+			b.Fatalf("claimed %d runs from an empty database", len(claims))
+		}
+	}
 }

@@ -16,6 +16,19 @@ var (
 		Name: "scheduler_worker_saturation_ticks_total",
 		Help: "Scheduler ticks that could not claim work because every execution worker was occupied.",
 	})
+	RunClaimAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "scheduler_run_claim_attempts_total",
+		Help: "PostgreSQL run claim attempts by outcome.",
+	}, []string{"outcome"})
+	RunClaimDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "scheduler_run_claim_duration_seconds",
+		Help:    "Time spent claiming runnable work from PostgreSQL, including Kubernetes capacity lock waits.",
+		Buckets: []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
+	}, []string{"outcome"})
+	RunClaims = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "scheduler_run_claimed_total",
+		Help: "Runs successfully claimed from PostgreSQL.",
+	})
 	// Delivery success rate:
 	// sum by (provider, outcome) (rate(scheduler_notification_deliveries_total[5m]))
 	NotificationDeliveries = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -32,5 +45,5 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(HTTPRequests, HTTPDuration, Runs, RunDuration, DispatchDelay, WorkerSaturationTicks, NotificationDeliveries, NotificationDeliveryDuration)
+	prometheus.MustRegister(HTTPRequests, HTTPDuration, Runs, RunDuration, DispatchDelay, WorkerSaturationTicks, RunClaimAttempts, RunClaimDuration, RunClaims, NotificationDeliveries, NotificationDeliveryDuration)
 }

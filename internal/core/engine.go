@@ -240,7 +240,9 @@ func (e *Engine) dispatch(ctx context.Context, sem chan struct{}) error {
 	if available == 0 {
 		return nil
 	}
+	claimStartedAt := time.Now()
 	runs, err := e.store.ClaimRuns(ctx, e.owner, available, 2*time.Minute)
+	observeRunClaim(claimStartedAt, len(runs), err)
 	if err != nil {
 		return fmt.Errorf("claim runs: %w", err)
 	}
@@ -258,6 +260,18 @@ func (e *Engine) dispatch(ctx context.Context, sem chan struct{}) error {
 		}
 	}
 	return nil
+}
+
+func observeRunClaim(startedAt time.Time, count int, err error) {
+	outcome := "success"
+	if err != nil {
+		outcome = "error"
+	}
+	observability.RunClaimAttempts.WithLabelValues(outcome).Inc()
+	observability.RunClaimDuration.WithLabelValues(outcome).Observe(time.Since(startedAt).Seconds())
+	if count > 0 {
+		observability.RunClaims.Add(float64(count))
+	}
 }
 
 func (e *Engine) releaseWorker(sem chan struct{}) {

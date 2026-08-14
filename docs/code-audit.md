@@ -67,6 +67,8 @@ api-server ── gRPC + etcd discovery ── scheduler core ── gRPC ──
 
 `pg_stat_statements` 证据表明主要成本是运行状态写入、Claim 和事务往返，而不是普通任务查询。已有批量到期入队、单活跃节点快路径、批量日志写入和原子回调终态更新。
 
+集群级 Kubernetes 容量控制最初使 Claim 增加到四次数据库往返，并让全部 active run 提前关联 jobs。现已把 `BEGIN + 集群容量锁 + Claim` 通过 pgx batch 合并发送，job/tenant 活跃统计恢复为只扫描 `job_runs`，仅 Kubernetes 聚合支路关联 jobs。空 Claim 的六轮 Testcontainers 微基准中位数约从 3.34 ms/op 降至 2.33 ms/op；双 Core 并发测试继续证明容量不会超卖。新增 `scheduler_run_claim_duration_seconds`、`scheduler_run_claim_attempts_total` 和 `scheduler_run_claimed_total` 用于线上观察锁等待和 Claim 效率。
+
 ### 本轮数据库改进
 
 Migration 23 增加：

@@ -883,38 +883,18 @@ type ClaimedRun struct {
 	Job Job
 }
 
-func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease time.Duration) ([]ClaimedRun, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	clusterRows, err := tx.Query(ctx, `SELECT kc.id FROM kubernetes_clusters kc
-		WHERE EXISTS (SELECT 1 FROM jobs j JOIN job_runs r ON r.job_id=j.id WHERE j.kubernetes_cluster_id=kc.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())))
-		ORDER BY kc.id FOR UPDATE OF kc`)
-	if err != nil {
-		return nil, fmt.Errorf("lock Kubernetes cluster capacity: %w", err)
-	}
-	for clusterRows.Next() {
-		var clusterID string
-		if err = clusterRows.Scan(&clusterID); err != nil {
-			clusterRows.Close()
-			return nil, err
-		}
-	}
-	err = clusterRows.Err()
-	clusterRows.Close()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := tx.Query(ctx, `WITH active AS MATERIALIZED (
-	 SELECT r.job_id,r.tenant_id,j.kubernetes_cluster_id FROM job_runs r JOIN jobs j ON j.id=r.job_id WHERE (r.status='running' AND r.lease_until>=now()) OR r.status='waiting_callback'
+const lockKubernetesClaimCapacitySQL = `SELECT kc.id FROM kubernetes_clusters kc
+	WHERE EXISTS (SELECT 1 FROM jobs j JOIN job_runs r ON r.job_id=j.id WHERE j.kubernetes_cluster_id=kc.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())))
+	ORDER BY kc.id FOR UPDATE OF kc`
+
+const claimRunsSQL = `WITH active AS MATERIALIZED (
+	 SELECT job_id,tenant_id FROM job_runs WHERE (status='running' AND lease_until>=now()) OR status='waiting_callback'
 	), active_job AS (
 	 SELECT job_id,count(*) AS n FROM active GROUP BY job_id
 	), active_tenant AS (
 	 SELECT tenant_id,count(*) AS n FROM active GROUP BY tenant_id
 	), active_cluster AS (
-	 SELECT kubernetes_cluster_id,count(*) AS n FROM active WHERE kubernetes_cluster_id IS NOT NULL GROUP BY kubernetes_cluster_id
+	 SELECT j.kubernetes_cluster_id,count(*) AS n FROM jobs j JOIN active a ON a.job_id=j.id WHERE j.kubernetes_cluster_id IS NOT NULL GROUP BY j.kubernetes_cluster_id
 	), candidates AS (
 	 SELECT r.id,r.job_id,r.tenant_id,
 	 row_number() OVER(PARTITION BY r.job_id ORDER BY r.available_at,r.id) AS job_rank,
@@ -937,7 +917,52 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 	), emitted AS (INSERT INTO outbox_events(id,tenant_id,topic,payload)
 	 SELECT gen_random_uuid(),c.tenant_id,'job.run.running',jsonb_build_object('run_id',c.id::text,'job_id',c.job_id::text,'tenant_id',c.tenant_id::text,'status','running','attempt',c.attempt,'trigger_type',c.trigger_type,'scheduled_at',c.scheduled_at,'occurred_at',now())
 	 FROM claimed c WHERE c.emit_running)
-	 SELECT c.id,c.tenant_id,c.job_id,c.trigger_type,c.status,c.attempt,c.scheduled_at,c.runtime_input,COALESCE(c.parent_run_id::text,''),COALESCE(c.retry_of_run_id::text,''),c.external_execution_id,COALESCE(c.executor_node_id,''),COALESCE(c.executor_address,''),COALESCE(c.broadcast_group_id::text,''),COALESCE(c.shard_index,0),COALESCE(c.shard_total,0),c.reschedule_on_terminal,c.override_addresses,c.lease_token,`+jobColumnsWithAlias("j")+` FROM claimed c JOIN jobs j ON j.id=c.job_id`, limit, owner, lease.Seconds())
+	 SELECT c.id,c.tenant_id,c.job_id,c.trigger_type,c.status,c.attempt,c.scheduled_at,c.runtime_input,COALESCE(c.parent_run_id::text,''),COALESCE(c.retry_of_run_id::text,''),c.external_execution_id,COALESCE(c.executor_node_id,''),COALESCE(c.executor_address,''),COALESCE(c.broadcast_group_id::text,''),COALESCE(c.shard_index,0),COALESCE(c.shard_total,0),c.reschedule_on_terminal,c.override_addresses,c.lease_token,`
+
+func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease time.Duration) ([]ClaimedRun, error) {
+	connection, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer connection.Release()
+	// Send the transaction start, deterministic capacity locks, and claim as one
+	// protocol batch. Claim remains a separate READ COMMITTED statement, so it
+	// sees work committed by a competing Core before that Core released the lock.
+	batch := &pgx.Batch{}
+	batch.Queue("BEGIN")
+	batch.Queue(lockKubernetesClaimCapacitySQL)
+	batch.Queue(claimRunsSQL+jobColumnsWithAlias("j")+` FROM claimed c JOIN jobs j ON j.id=c.job_id`, limit, owner, lease.Seconds())
+	results := connection.SendBatch(ctx, batch)
+	transactionOpen := false
+	defer func() {
+		_ = results.Close()
+		if transactionOpen {
+			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_, _ = connection.Exec(rollbackCtx, "ROLLBACK")
+		}
+	}()
+	if _, err = results.Exec(); err != nil {
+		return nil, fmt.Errorf("begin run claim: %w", err)
+	}
+	transactionOpen = true
+	clusterRows, err := results.Query()
+	if err != nil {
+		return nil, fmt.Errorf("lock Kubernetes cluster capacity: %w", err)
+	}
+	for clusterRows.Next() {
+		var clusterID string
+		if err = clusterRows.Scan(&clusterID); err != nil {
+			clusterRows.Close()
+			return nil, err
+		}
+	}
+	err = clusterRows.Err()
+	clusterRows.Close()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := results.Query()
 	if err != nil {
 		return nil, err
 	}
@@ -972,9 +997,13 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 		return nil, err
 	}
 	rows.Close()
-	if err = tx.Commit(ctx); err != nil {
+	if err = results.Close(); err != nil {
 		return nil, err
 	}
+	if _, err = connection.Exec(ctx, "COMMIT"); err != nil {
+		return nil, err
+	}
+	transactionOpen = false
 	return out, nil
 }
 func jobColumnsWithAlias(a string) string {

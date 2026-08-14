@@ -1,9 +1,32 @@
 package core
 
 import (
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/lihongjie0209/go-scheduler/internal/observability"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+func TestObserveRunClaim(t *testing.T) {
+	successBefore := testutil.ToFloat64(observability.RunClaimAttempts.WithLabelValues("success"))
+	errorBefore := testutil.ToFloat64(observability.RunClaimAttempts.WithLabelValues("error"))
+	claimsBefore := testutil.ToFloat64(observability.RunClaims)
+
+	observeRunClaim(time.Now().Add(-time.Millisecond), 3, nil)
+	observeRunClaim(time.Now().Add(-time.Millisecond), 0, errors.New("database unavailable"))
+
+	if got := testutil.ToFloat64(observability.RunClaimAttempts.WithLabelValues("success")); got != successBefore+1 {
+		t.Fatalf("successful claim attempts = %v, want %v", got, successBefore+1)
+	}
+	if got := testutil.ToFloat64(observability.RunClaimAttempts.WithLabelValues("error")); got != errorBefore+1 {
+		t.Fatalf("failed claim attempts = %v, want %v", got, errorBefore+1)
+	}
+	if got := testutil.ToFloat64(observability.RunClaims); got != claimsBefore+3 {
+		t.Fatalf("claimed runs = %v, want %v", got, claimsBefore+3)
+	}
+}
 
 func TestDispatchDelay(t *testing.T) {
 	t.Parallel()

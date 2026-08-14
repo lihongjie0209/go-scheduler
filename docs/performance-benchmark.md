@@ -37,6 +37,8 @@
 | 调度延迟 | sink 接收时间减任务计划时间，报告 P50/P90/P95/P99/P99.9/max |
 | 引擎派发延迟 | `scheduler_dispatch_delay_seconds`，计划时间到本项目 worker 开始处理 |
 | worker 饱和 | `scheduler_worker_saturation_ticks_total`，没有空闲执行槽位的调度 tick 数 |
+| Claim 延迟 | `scheduler_run_claim_duration_seconds{outcome}`，包含 PostgreSQL 查询和 Kubernetes 集群容量锁等待 |
+| Claim 效率 | `scheduler_run_claim_attempts_total{outcome}` 与 `scheduler_run_claimed_total`，用于计算错误率和每次 Claim 的平均领取数 |
 | 数据库池等待 | `scheduler_database_pool_empty_acquires_total` 和 `scheduler_database_pool_acquire_duration_seconds_total`，按 API/Core 池区分 |
 | 端到端完成延迟 | 任务计划时间到运行进入成功终态 |
 | 错误率 | 失败、超时和丢失执行数除以期望执行数 |
@@ -208,3 +210,16 @@ Go Scheduler 压测必须指定 `--go-executor-group`，确保覆盖生产使用
 | 中位数 | 514.27/s | 1,086 ms | 1,943 ms |
 
 三轮均为 1,000/1,000 成功且零丢失、零重复。相对上一阶段 435.17/s、P99 2,289 ms，中位吞吐提高 18.2%，P99 降低 15.1%；相对最初 gRPC 基线，吞吐累计提高 86.3%，P99 降低 46.3%。
+
+### Kubernetes 容量锁往返优化
+
+增加集群级 `max_concurrent_jobs` 后，Claim 需要在同一 READ COMMITTED 事务内先锁定涉及的 Kubernetes 集群，再用锁释放后的新快照计算容量。直接执行 `BEGIN`、锁查询、Claim 和 `COMMIT` 会产生四次数据库往返。当前实现通过 pgx batch 在一个协议批次中发送 `BEGIN + 锁查询 + Claim`，扫描结果后单独提交，从而保持多 Core 防超卖语义并减少网络等待；普通 job/tenant 活跃计数继续只物化 `job_runs`，仅 Kubernetes 聚合支路关联 jobs。
+
+本机 PostgreSQL 16 Testcontainers、空数据库、每轮固定 200 次 Claim 的六轮微基准如下。该数据只隔离 Claim 往返，不代表端到端调度容量：
+
+| 实现 | 六轮中位数 | 分配 |
+| --- | ---: | ---: |
+| 独立执行四个事务阶段 | 约 3.34 ms/op | 约 9.7 KiB、32 allocs/op |
+| 批处理前三个阶段 | 约 2.33 ms/op | 约 10.1 KiB、56 allocs/op |
+
+数据库往返延迟下降约 30%，代价是 pgx batch 每次增加约 24 个小对象分配。由于该路径以数据库等待为主，保留批处理实现；线上通过 `scheduler_run_claim_duration_seconds` 继续观察真实网络和锁竞争。
