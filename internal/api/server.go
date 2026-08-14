@@ -153,15 +153,16 @@ type kubernetesClusterRequest struct {
 	Token                 string `json:"token"`
 	CAData                string `json:"ca_data"`
 	InsecureSkipTLSVerify bool   `json:"insecure_skip_tls_verify"`
+	MaxConcurrentJobs     int32  `json:"max_concurrent_jobs"`
 	Version               int64  `json:"version"`
 }
 
 func publicKubernetesCluster(cluster store.KubernetesCluster) map[string]any {
-	return map[string]any{"id": cluster.ID, "tenant_id": cluster.TenantID, "name": cluster.Name, "auth_mode": cluster.AuthMode, "api_server": cluster.APIServer, "namespace": cluster.Namespace, "insecure_skip_tls_verify": cluster.InsecureSkipTLSVerify, "credentials_configured": true, "version": cluster.Version, "created_at": cluster.CreatedAt, "updated_at": cluster.UpdatedAt}
+	return map[string]any{"id": cluster.ID, "tenant_id": cluster.TenantID, "name": cluster.Name, "auth_mode": cluster.AuthMode, "api_server": cluster.APIServer, "namespace": cluster.Namespace, "insecure_skip_tls_verify": cluster.InsecureSkipTLSVerify, "max_concurrent_jobs": cluster.MaxConcurrentJobs, "credentials_configured": true, "version": cluster.Version, "created_at": cluster.CreatedAt, "updated_at": cluster.UpdatedAt}
 }
 
 func clusterFromRequest(tenant, id string, body kubernetesClusterRequest) store.KubernetesCluster {
-	return store.KubernetesCluster{ID: id, TenantID: tenant, Name: body.Name, AuthMode: body.AuthMode, APIServer: body.APIServer, Namespace: body.Namespace, Credentials: store.KubernetesCredentials{Kubeconfig: body.Kubeconfig, Token: body.Token, CAData: body.CAData}, InsecureSkipTLSVerify: body.InsecureSkipTLSVerify, Version: body.Version}
+	return store.KubernetesCluster{ID: id, TenantID: tenant, Name: body.Name, AuthMode: body.AuthMode, APIServer: body.APIServer, Namespace: body.Namespace, Credentials: store.KubernetesCredentials{Kubeconfig: body.Kubeconfig, Token: body.Token, CAData: body.CAData}, InsecureSkipTLSVerify: body.InsecureSkipTLSVerify, MaxConcurrentJobs: body.MaxConcurrentJobs, Version: body.Version}
 }
 
 func (s *Server) listKubernetesClusters(w http.ResponseWriter, r *http.Request) {

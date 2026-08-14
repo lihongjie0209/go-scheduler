@@ -168,3 +168,50 @@ func TestFileCompletionStorePersistsExecutionsAcrossInstances(t *testing.T) {
 		t.Fatalf("execution remained after delete: %+v, %v", requests, err)
 	}
 }
+
+func TestFileCompletionStoreRetainsCompletionWhenExecutionCleanupFails(t *testing.T) {
+	t.Parallel()
+	store, err := NewFileCompletionStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := CompletionRecord{RunID: "cleanup-failure", Token: "secret", Succeeded: true, CreatedAt: time.Now().UTC()}
+	if err = store.Save(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	executionPath := store.executionPath(record.RunID)
+	if err = os.Mkdir(executionPath, completionStoreDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(executionPath, "block-removal"), []byte("state"), completionStoreFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Delete(t.Context(), record.RunID); err == nil {
+		t.Fatal("completion deletion succeeded despite execution cleanup failure")
+	}
+	records, err := store.List(t.Context())
+	if err != nil || len(records) != 1 || records[0].RunID != record.RunID {
+		t.Fatalf("completion was lost before execution cleanup: records=%+v err=%v", records, err)
+	}
+}
+
+func TestFileCompletionStoreAtomicallyUpgradesLegacyExecutionDeadline(t *testing.T) {
+	t.Parallel()
+	store, err := NewFileCompletionStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := &executorv1.DispatchRequest{RunId: "legacy-deadline", JobId: "job", Handler: "runner", CallbackToken: "token", TimeoutSeconds: 10, ScriptLanguage: "docker"}
+	if err = store.SaveExecution(t.Context(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := proto.Clone(legacy).(*executorv1.DispatchRequest)
+	upgraded.ExecutionDeadlineUnixMilli = time.Now().Add(10 * time.Second).UnixMilli()
+	if err = store.SaveExecution(t.Context(), upgraded); err != nil {
+		t.Fatalf("upgrade legacy execution deadline: %v", err)
+	}
+	executions, err := store.ListExecutions(t.Context())
+	if err != nil || len(executions) != 1 || executions[0].GetExecutionDeadlineUnixMilli() != upgraded.GetExecutionDeadlineUnixMilli() {
+		t.Fatalf("upgraded executions = %+v, err=%v", executions, err)
+	}
+}

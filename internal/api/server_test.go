@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
+	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
 
 func TestRoutesDoNotServeWebUI(t *testing.T) {
@@ -77,5 +78,17 @@ func TestDecodeStandardJSONRejectsTrailingDocument(t *testing.T) {
 	}
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestKubernetesClusterCapacityRoundTripsThroughAPIModel(t *testing.T) {
+	t.Parallel()
+	cluster := clusterFromRequest("tenant", "cluster", kubernetesClusterRequest{Name: "production", MaxConcurrentJobs: 250})
+	if cluster.MaxConcurrentJobs != 250 {
+		t.Fatalf("store cluster capacity = %d", cluster.MaxConcurrentJobs)
+	}
+	public := publicKubernetesCluster(store.KubernetesCluster{ID: "cluster", MaxConcurrentJobs: 250})
+	if public["max_concurrent_jobs"] != int32(250) {
+		t.Fatalf("public cluster capacity = %#v", public["max_concurrent_jobs"])
 	}
 }

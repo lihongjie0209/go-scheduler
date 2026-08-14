@@ -552,6 +552,7 @@ func kubernetesClustersCommand(c *cliConfig) *cobra.Command {
 	addWrite := func(update bool) *cobra.Command {
 		var name, authMode, apiServer, namespace, kubeconfigFile, token, caFile string
 		var insecure bool
+		var maxConcurrentJobs int32
 		var version int64
 		use := "create"
 		argsValidator := cobra.NoArgs
@@ -577,7 +578,7 @@ func kubernetesClustersCommand(c *cliConfig) *cobra.Command {
 				}
 			}
 			payload := func() ([]byte, error) {
-				return json.Marshal(map[string]any{"name": name, "auth_mode": authMode, "api_server": apiServer, "namespace": namespace, "kubeconfig": string(kubeconfig), "token": token, "ca_data": string(caData), "insecure_skip_tls_verify": insecure, "version": version})
+				return json.Marshal(map[string]any{"name": name, "auth_mode": authMode, "api_server": apiServer, "namespace": namespace, "kubeconfig": string(kubeconfig), "token": token, "ca_data": string(caData), "insecure_skip_tls_verify": insecure, "max_concurrent_jobs": maxConcurrentJobs, "version": version})
 			}
 			path := "/api/v1/kubernetes-clusters"
 			if update {
@@ -593,6 +594,7 @@ func kubernetesClustersCommand(c *cliConfig) *cobra.Command {
 		write.Flags().StringVar(&token, "service-account-token", "", "ServiceAccount bearer token")
 		write.Flags().StringVar(&caFile, "ca-file", "", "path to API Server CA certificate")
 		write.Flags().BoolVar(&insecure, "insecure-skip-tls-verify", false, "skip API Server TLS verification")
+		write.Flags().Int32Var(&maxConcurrentJobs, "max-concurrent-jobs", 100, "maximum active jobs across this Kubernetes cluster")
 		write.Flags().Int64Var(&version, "version", 0, "expected cluster version (update only)")
 		_ = write.MarkFlagRequired("name")
 		if update {

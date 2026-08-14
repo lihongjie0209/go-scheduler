@@ -884,25 +884,54 @@ type ClaimedRun struct {
 }
 
 func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease time.Duration) ([]ClaimedRun, error) {
-	rows, err := s.pool.Query(ctx, `WITH active AS MATERIALIZED (
-	 SELECT job_id,tenant_id FROM job_runs WHERE (status='running' AND lease_until>=now()) OR status='waiting_callback'
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	clusterRows, err := tx.Query(ctx, `SELECT kc.id FROM kubernetes_clusters kc
+		WHERE EXISTS (SELECT 1 FROM jobs j JOIN job_runs r ON r.job_id=j.id WHERE j.kubernetes_cluster_id=kc.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())))
+		ORDER BY kc.id FOR UPDATE OF kc`)
+	if err != nil {
+		return nil, fmt.Errorf("lock Kubernetes cluster capacity: %w", err)
+	}
+	for clusterRows.Next() {
+		var clusterID string
+		if err = clusterRows.Scan(&clusterID); err != nil {
+			clusterRows.Close()
+			return nil, err
+		}
+	}
+	err = clusterRows.Err()
+	clusterRows.Close()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `WITH active AS MATERIALIZED (
+	 SELECT r.job_id,r.tenant_id,j.kubernetes_cluster_id FROM job_runs r JOIN jobs j ON j.id=r.job_id WHERE (r.status='running' AND r.lease_until>=now()) OR r.status='waiting_callback'
 	), active_job AS (
 	 SELECT job_id,count(*) AS n FROM active GROUP BY job_id
 	), active_tenant AS (
 	 SELECT tenant_id,count(*) AS n FROM active GROUP BY tenant_id
+	), active_cluster AS (
+	 SELECT kubernetes_cluster_id,count(*) AS n FROM active WHERE kubernetes_cluster_id IS NOT NULL GROUP BY kubernetes_cluster_id
 	), candidates AS (
 	 SELECT r.id,r.job_id,r.tenant_id,
 	 row_number() OVER(PARTITION BY r.job_id ORDER BY r.available_at,r.id) AS job_rank,
 	 row_number() OVER(PARTITION BY r.tenant_id ORDER BY r.available_at,r.id) AS tenant_rank,
+	 CASE WHEN j.kubernetes_cluster_id IS NULL THEN 1 ELSE row_number() OVER(PARTITION BY j.kubernetes_cluster_id ORDER BY r.available_at,r.id) END AS cluster_rank,
 		 CASE WHEN r.broadcast_group_id IS NOT NULL THEN GREATEST(j.max_concurrent_runs,r.shard_total) ELSE j.max_concurrent_runs END AS max_concurrent_runs,t.max_concurrent_runs AS tenant_max,j.timeout_seconds,
+	 j.kubernetes_cluster_id,COALESCE(kc.max_concurrent_jobs,1) AS cluster_max,COALESCE(ac.n,0) AS cluster_active,
 	 COALESCE(aj.n,0) AS job_active,COALESCE(at.n,0) AS tenant_active
 	 FROM job_runs r JOIN jobs j ON j.id=r.job_id JOIN tenants t ON t.id=r.tenant_id
 	 LEFT JOIN active_job aj ON aj.job_id=r.job_id LEFT JOIN active_tenant at ON at.tenant_id=r.tenant_id
+	 LEFT JOIN kubernetes_clusters kc ON kc.id=j.kubernetes_cluster_id LEFT JOIN active_cluster ac ON ac.kubernetes_cluster_id=j.kubernetes_cluster_id
 	 WHERE (r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())
 	), eligible AS (
 	 SELECT r.id,c.timeout_seconds,r.status='pending' AS emit_running FROM job_runs r JOIN candidates c ON c.id=r.id
 	 WHERE c.job_rank<=GREATEST(c.max_concurrent_runs-c.job_active,0)
 	 AND c.tenant_rank<=GREATEST(c.tenant_max-c.tenant_active,0)
+	 AND (c.kubernetes_cluster_id IS NULL OR c.cluster_rank<=GREATEST(c.cluster_max-c.cluster_active,0))
 	 ORDER BY r.available_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT $1
 	), claimed AS (UPDATE job_runs r SET status='running',lease_owner=$2,lease_token=gen_random_uuid(),lease_until=now()+GREATEST($3,eligible.timeout_seconds+30)*interval '1 second',started_at=COALESCE(started_at,now()) FROM eligible WHERE r.id=eligible.id AND ((r.status='pending' AND r.available_at<=now()) OR (r.status='running' AND r.lease_until<now())) RETURNING r.id,r.tenant_id,r.job_id,r.trigger_type,r.status,r.attempt,r.scheduled_at,r.runtime_input,r.parent_run_id,r.retry_of_run_id,r.external_execution_id,r.executor_node_id,r.executor_address,r.broadcast_group_id,r.shard_index,r.shard_total,r.reschedule_on_terminal,r.override_addresses,r.lease_token,eligible.emit_running
 	), emitted AS (INSERT INTO outbox_events(id,tenant_id,topic,payload)
@@ -939,7 +968,14 @@ func (s *Store) ClaimRuns(ctx context.Context, owner string, limit int, lease ti
 		}
 		out = append(out, x)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 func jobColumnsWithAlias(a string) string {
 	return a + `.id,` + a + `.tenant_id,` + a + `.name,` + a + `.description,` + a + `.schedule_type,` + a + `.schedule_expression,` + a + `.timezone,` + a + `.target_url,` + a + `.http_method,` + a + `.headers,` + a + `.encrypted_headers,` + a + `.encryption_key_version,` + a + `.encrypted_docker_registry_auth,` + a + `.docker_registry_auth_key_version,` + a + `.body_template,` + a + `.timeout_seconds,` + a + `.max_retries,` + a + `.overlap_policy,` + a + `.misfire_policy,` + a + `.enabled,` + a + `.next_run_at,` + a + `.version,` + a + `.max_concurrent_runs,` + a + `.max_catch_up,` + a + `.callback_timeout_seconds,` + a + `.max_queue_size,COALESCE(` + a + `.executor_group_id::text,''),` + a + `.executor_handler,` + a + `.script_language,` + a + `.script_source,COALESCE(` + a + `.kubernetes_cluster_id::text,'')`

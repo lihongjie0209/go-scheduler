@@ -68,7 +68,23 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("parse EXECUTOR_TTL: %w", err)
 	}
-	maxConcurrency, err := positiveIntEnv("EXECUTOR_MAX_CONCURRENCY", 32)
+	legacyMaxConcurrency, err := positiveIntEnv("EXECUTOR_MAX_CONCURRENCY", 32)
+	if err != nil {
+		return err
+	}
+	maxScriptConcurrency, err := positiveIntEnv("EXECUTOR_SCRIPT_MAX_CONCURRENCY", legacyMaxConcurrency)
+	if err != nil {
+		return err
+	}
+	maxHTTPConcurrency, err := positiveIntEnv("EXECUTOR_HTTP_MAX_CONCURRENCY", 1000)
+	if err != nil {
+		return err
+	}
+	maxDockerConcurrency, err := positiveIntEnv("EXECUTOR_DOCKER_MAX_CONCURRENCY", 100)
+	if err != nil {
+		return err
+	}
+	executionMaxPending, err := positiveIntEnv("EXECUTOR_EXECUTION_MAX_PENDING", 10_000)
 	if err != nil {
 		return err
 	}
@@ -76,7 +92,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	completionStore, err := executor.NewFileCompletionStore(envOr("EXECUTOR_STATE_DIR", "./executor-state"), executor.FileCompletionStoreOptions{MaxRecords: completionMaxPending, MaxExecutions: maxConcurrency})
+	completionStore, err := executor.NewFileCompletionStore(envOr("EXECUTOR_STATE_DIR", "./executor-state"), executor.FileCompletionStoreOptions{MaxRecords: completionMaxPending, MaxExecutions: executionMaxPending})
 	if err != nil {
 		return err
 	}
@@ -98,7 +114,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	executorService, err := executor.NewGRPCServer(server, reporter, executor.GRPCServerOptions{MaxConcurrentExecutions: maxConcurrency, CompletionStore: completionStore})
+	executorService, err := executor.NewGRPCServer(server, reporter, executor.GRPCServerOptions{MaxScriptExecutions: maxScriptConcurrency, MaxHTTPExecutions: maxHTTPConcurrency, MaxDockerExecutions: maxDockerConcurrency, CompletionStore: completionStore})
 	if err != nil {
 		return err
 	}

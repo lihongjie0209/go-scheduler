@@ -12,6 +12,7 @@ import (
 	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // Reporter sends execution output back to Core. Implementations must be safe
@@ -42,12 +43,19 @@ const (
 	defaultCompletionReportTimeout   = 2 * time.Minute
 	defaultCompletionInitialBackoff  = 200 * time.Millisecond
 	defaultCompletionMaxBackoff      = 5 * time.Second
-	defaultMaxConcurrentExecutions   = 32
+	defaultMaxScriptExecutions       = 32
+	defaultMaxHTTPExecutions         = 1000
+	defaultMaxDockerExecutions       = 100
 	completionDeliveryConcurrency    = 8
 )
 
 type GRPCServerOptions struct {
+	// MaxConcurrentExecutions is retained for SDK compatibility. When set, it
+	// supplies every unspecified per-type limit.
 	MaxConcurrentExecutions int
+	MaxScriptExecutions     int
+	MaxHTTPExecutions       int
+	MaxDockerExecutions     int
 	CompletionStore         CompletionStore
 }
 
@@ -70,7 +78,9 @@ type GRPCServer struct {
 	completionReportTimeout  time.Duration
 	completionInitialBackoff time.Duration
 	completionMaxBackoff     time.Duration
-	executionSlots           chan struct{}
+	scriptSlots              chan struct{}
+	httpSlots                chan struct{}
+	dockerSlots              chan struct{}
 	completionStore          CompletionStore
 	executionStore           ExecutionStore
 	completionWake           chan struct{}
@@ -83,15 +93,36 @@ func NewGRPCServer(server *Server, reporter Reporter, options ...GRPCServerOptio
 	if server == nil || reporter == nil {
 		return nil, errors.New("executor server and reporter are required")
 	}
-	configuration := GRPCServerOptions{MaxConcurrentExecutions: defaultMaxConcurrentExecutions}
+	configuration := GRPCServerOptions{MaxScriptExecutions: defaultMaxScriptExecutions, MaxHTTPExecutions: defaultMaxHTTPExecutions, MaxDockerExecutions: defaultMaxDockerExecutions}
 	if len(options) > 1 {
 		return nil, errors.New("at most one gRPC server options value is supported")
 	}
 	if len(options) == 1 {
 		configuration = options[0]
+		fallback := configuration.MaxConcurrentExecutions
+		if fallback == 0 {
+			fallback = defaultMaxScriptExecutions
+		}
+		if configuration.MaxScriptExecutions == 0 {
+			configuration.MaxScriptExecutions = fallback
+		}
+		if configuration.MaxHTTPExecutions == 0 {
+			if configuration.MaxConcurrentExecutions > 0 {
+				configuration.MaxHTTPExecutions = fallback
+			} else {
+				configuration.MaxHTTPExecutions = defaultMaxHTTPExecutions
+			}
+		}
+		if configuration.MaxDockerExecutions == 0 {
+			if configuration.MaxConcurrentExecutions > 0 {
+				configuration.MaxDockerExecutions = fallback
+			} else {
+				configuration.MaxDockerExecutions = defaultMaxDockerExecutions
+			}
+		}
 	}
-	if configuration.MaxConcurrentExecutions < 1 {
-		return nil, errors.New("maximum concurrent executions must be positive")
+	if configuration.MaxScriptExecutions < 1 || configuration.MaxHTTPExecutions < 1 || configuration.MaxDockerExecutions < 1 {
+		return nil, errors.New("maximum concurrent script, HTTP, and Docker executions must be positive")
 	}
 	result := &GRPCServer{
 		server: server, reporter: reporter, runs: make(map[string]*execution),
@@ -99,7 +130,9 @@ func NewGRPCServer(server *Server, reporter Reporter, options ...GRPCServerOptio
 		completionMaxAttempts: defaultCompletionMaxAttempts, completionAttemptTimeout: defaultCompletionAttemptTimeout,
 		completionReportTimeout: defaultCompletionReportTimeout, completionInitialBackoff: defaultCompletionInitialBackoff,
 		completionMaxBackoff: defaultCompletionMaxBackoff,
-		executionSlots:       make(chan struct{}, configuration.MaxConcurrentExecutions),
+		scriptSlots:          make(chan struct{}, configuration.MaxScriptExecutions),
+		httpSlots:            make(chan struct{}, configuration.MaxHTTPExecutions),
+		dockerSlots:          make(chan struct{}, configuration.MaxDockerExecutions),
 		completionStore:      configuration.CompletionStore,
 		completionWake:       make(chan struct{}, 1),
 	}
@@ -108,8 +141,16 @@ func NewGRPCServer(server *Server, reporter Reporter, options ...GRPCServerOptio
 }
 
 func (s *GRPCServer) Dispatch(ctx context.Context, request *executorv1.DispatchRequest) (*executorv1.DispatchResponse, error) {
+	return s.dispatch(ctx, request, false)
+}
+
+func (s *GRPCServer) dispatch(ctx context.Context, request *executorv1.DispatchRequest, recovered bool) (*executorv1.DispatchResponse, error) {
 	if request.GetRunId() == "" || request.GetJobId() == "" || request.GetHandler() == "" || request.GetCallbackToken() == "" || request.GetTimeoutSeconds() < 1 || request.GetTimeoutSeconds() > 86400 {
 		return nil, status.Error(codes.InvalidArgument, "invalid dispatch request")
+	}
+	request = proto.Clone(request).(*executorv1.DispatchRequest)
+	if !recovered || request.GetExecutionDeadlineUnixMilli() == 0 {
+		request.ExecutionDeadlineUnixMilli = time.Now().Add(time.Duration(request.GetTimeoutSeconds()) * time.Second).UnixMilli()
 	}
 	s.server.mu.RLock()
 	registered, exists := s.server.handlers[request.GetHandler()]
@@ -132,15 +173,20 @@ func (s *GRPCServer) Dispatch(ctx context.Context, request *executorv1.DispatchR
 		s.mu.Unlock()
 		return response, nil
 	}
-	select {
-	case s.executionSlots <- struct{}{}:
-	default:
-		s.mu.Unlock()
-		return nil, status.Error(codes.ResourceExhausted, "executor concurrency limit reached")
+	slots, executionType := s.slotsFor(request)
+	if slots != nil {
+		select {
+		case slots <- struct{}{}:
+		default:
+			s.mu.Unlock()
+			return nil, status.Errorf(codes.ResourceExhausted, "executor %s concurrency limit reached", executionType)
+		}
 	}
 	if s.executionStore != nil {
 		if err := s.executionStore.SaveExecution(ctx, request); err != nil {
-			<-s.executionSlots
+			if slots != nil {
+				<-slots
+			}
 			s.completionStoreFailed = true
 			s.mu.Unlock()
 			return nil, status.Errorf(codes.Unavailable, "persist accepted execution: %v", err)
@@ -150,16 +196,17 @@ func (s *GRPCServer) Dispatch(ctx context.Context, request *executorv1.DispatchR
 	if executionID == "" {
 		executionID = uuid.NewString()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(request.GetTimeoutSeconds())*time.Second)
+	executionDeadline := time.UnixMilli(request.GetExecutionDeadlineUnixMilli())
+	executionCtx, cancel := context.WithDeadline(context.Background(), executionDeadline)
 	s.runs[request.GetRunId()] = &execution{cancel: cancel, executionID: executionID, state: "running"}
 	s.executionWG.Add(1)
 	s.mu.Unlock()
 
-	go s.execute(ctx, request, registered.handler)
+	go s.execute(executionCtx, request, registered.handler, slots)
 	return &executorv1.DispatchResponse{Accepted: true, ExecutionId: executionID, State: "running"}, nil
 }
 
-func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRequest, handler Handler) {
+func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRequest, handler Handler, slots chan struct{}) {
 	defer s.executionWG.Done()
 	s.server.markActive(request.GetJobId(), 1)
 	released := false
@@ -169,7 +216,9 @@ func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRe
 		}
 		released = true
 		s.server.markActive(request.GetJobId(), -1)
-		<-s.executionSlots
+		if slots != nil {
+			<-slots
+		}
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -195,6 +244,19 @@ func (s *GRPCServer) execute(ctx context.Context, request *executorv1.DispatchRe
 	err := invokeHandler(ctx, handler, Task{RunID: request.GetRunId(), ExternalExecutionID: request.GetExternalExecutionId(), JobID: request.GetJobId(), Input: request.GetInput(), BroadcastGroupID: request.GetBroadcastGroupId(), BroadcastIndex: request.GetBroadcastIndex(), BroadcastTotal: request.GetBroadcastTotal(), ScriptLanguage: request.GetScriptLanguage(), ScriptSource: request.GetScriptSource(), KubernetesCluster: kubernetes, HTTP: httpExecution, DockerRegistryAuth: dockerRegistryAuth, Logger: logger})
 	release()
 	s.finish(request, err)
+}
+
+func (s *GRPCServer) slotsFor(request *executorv1.DispatchRequest) (chan struct{}, string) {
+	if request.GetScriptLanguage() == "kubernetes" {
+		return nil, "kubernetes"
+	}
+	if request.GetScriptLanguage() == "docker" {
+		return s.dockerSlots, "docker"
+	}
+	if request.GetHttp() != nil || request.GetHandler() == "__http__" {
+		return s.httpSlots, "http"
+	}
+	return s.scriptSlots, "script"
 }
 
 // Drain rejects new dispatches and waits for accepted executions to finish.
@@ -368,6 +430,23 @@ func (s *GRPCServer) RecoverExecutions(ctx context.Context) error {
 			continue
 		}
 		if isExternallyRecoverable(request) {
+			if deadline := request.GetExecutionDeadlineUnixMilli(); deadline == 0 || time.Now().Before(time.UnixMilli(deadline)) {
+				continue
+			}
+			cancelCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err = s.cancelRecoveredExternalExecution(cancelCtx, request)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("cancel expired external execution %q: %w", request.GetRunId(), err)
+			}
+			record := CompletionRecord{RunID: request.GetRunId(), Token: request.GetCallbackToken(), Succeeded: false, Message: "execution deadline exceeded while executor was unavailable", CreatedAt: time.Now().UTC()}
+			if err = s.completionStore.Save(ctx, record); err != nil {
+				return fmt.Errorf("persist expired execution %q: %w", request.GetRunId(), err)
+			}
+			if err = s.executionStore.DeleteExecution(ctx, request.GetRunId()); err != nil {
+				return fmt.Errorf("remove expired execution %q: %w", request.GetRunId(), err)
+			}
+			completed[request.GetRunId()] = struct{}{}
 			continue
 		}
 		record := CompletionRecord{RunID: request.GetRunId(), Token: request.GetCallbackToken(), Succeeded: false, Message: "executor restarted before process-local execution completed", CreatedAt: time.Now().UTC()}
@@ -382,11 +461,25 @@ func (s *GRPCServer) RecoverExecutions(ctx context.Context) error {
 		if _, ok := completed[request.GetRunId()]; ok || !isExternallyRecoverable(request) {
 			continue
 		}
-		if _, err = s.Dispatch(ctx, request); err != nil {
+		if _, err = s.dispatch(ctx, request, true); err != nil {
 			return fmt.Errorf("resume external execution %q: %w", request.GetRunId(), err)
 		}
 	}
 	return nil
+}
+
+func (s *GRPCServer) cancelRecoveredExternalExecution(ctx context.Context, request *executorv1.DispatchRequest) error {
+	s.server.mu.RLock()
+	canceller := s.server.cancellers[request.GetScriptLanguage()]
+	s.server.mu.RUnlock()
+	if canceller == nil {
+		return fmt.Errorf("no %s external canceller is registered", request.GetScriptLanguage())
+	}
+	var cluster *KubernetesClusterConfig
+	if value := request.GetKubernetesCluster(); value != nil {
+		cluster = &KubernetesClusterConfig{AuthMode: value.GetAuthMode(), APIServer: value.GetApiServer(), Namespace: value.GetNamespace(), Kubeconfig: value.GetKubeconfig(), Token: value.GetToken(), CAData: value.GetCaData(), InsecureSkipTLSVerify: value.GetInsecureSkipTlsVerify()}
+	}
+	return canceller(ctx, ExternalCancellation{RunID: request.GetRunId(), ExternalExecutionID: request.GetExternalExecutionId(), JobID: request.GetJobId(), ScriptLanguage: request.GetScriptLanguage(), KubernetesCluster: cluster})
 }
 
 func isExternallyRecoverable(request *executorv1.DispatchRequest) bool {
@@ -452,7 +545,7 @@ func (s *GRPCServer) reportCompletionOnce(ctx context.Context, record Completion
 
 func isPermanentCompletionError(err error) bool {
 	switch status.Code(err) {
-	case codes.InvalidArgument, codes.NotFound, codes.AlreadyExists, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.Unimplemented:
+	case codes.InvalidArgument, codes.NotFound, codes.AlreadyExists:
 		return true
 	default:
 		return false

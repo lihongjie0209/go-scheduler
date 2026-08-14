@@ -22,25 +22,26 @@ const (
 )
 
 type DispatchRequest struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	RunId               string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	ExternalExecutionId string                 `protobuf:"bytes,2,opt,name=external_execution_id,json=externalExecutionId,proto3" json:"external_execution_id,omitempty"`
-	JobId               string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	Attempt             int32                  `protobuf:"varint,4,opt,name=attempt,proto3" json:"attempt,omitempty"`
-	Handler             string                 `protobuf:"bytes,5,opt,name=handler,proto3" json:"handler,omitempty"`
-	Input               string                 `protobuf:"bytes,6,opt,name=input,proto3" json:"input,omitempty"`
-	CallbackToken       string                 `protobuf:"bytes,7,opt,name=callback_token,json=callbackToken,proto3" json:"callback_token,omitempty"`
-	TimeoutSeconds      int32                  `protobuf:"varint,8,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
-	BroadcastGroupId    string                 `protobuf:"bytes,9,opt,name=broadcast_group_id,json=broadcastGroupId,proto3" json:"broadcast_group_id,omitempty"`
-	BroadcastIndex      int32                  `protobuf:"varint,10,opt,name=broadcast_index,json=broadcastIndex,proto3" json:"broadcast_index,omitempty"`
-	BroadcastTotal      int32                  `protobuf:"varint,11,opt,name=broadcast_total,json=broadcastTotal,proto3" json:"broadcast_total,omitempty"`
-	ScriptLanguage      string                 `protobuf:"bytes,12,opt,name=script_language,json=scriptLanguage,proto3" json:"script_language,omitempty"`
-	ScriptSource        string                 `protobuf:"bytes,13,opt,name=script_source,json=scriptSource,proto3" json:"script_source,omitempty"`
-	KubernetesCluster   *KubernetesCluster     `protobuf:"bytes,14,opt,name=kubernetes_cluster,json=kubernetesCluster,proto3" json:"kubernetes_cluster,omitempty"`
-	Http                *HttpExecution         `protobuf:"bytes,15,opt,name=http,proto3" json:"http,omitempty"`
-	DockerRegistryAuth  *DockerRegistryAuth    `protobuf:"bytes,16,opt,name=docker_registry_auth,json=dockerRegistryAuth,proto3" json:"docker_registry_auth,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	RunId                      string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ExternalExecutionId        string                 `protobuf:"bytes,2,opt,name=external_execution_id,json=externalExecutionId,proto3" json:"external_execution_id,omitempty"`
+	JobId                      string                 `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Attempt                    int32                  `protobuf:"varint,4,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	Handler                    string                 `protobuf:"bytes,5,opt,name=handler,proto3" json:"handler,omitempty"`
+	Input                      string                 `protobuf:"bytes,6,opt,name=input,proto3" json:"input,omitempty"`
+	CallbackToken              string                 `protobuf:"bytes,7,opt,name=callback_token,json=callbackToken,proto3" json:"callback_token,omitempty"`
+	TimeoutSeconds             int32                  `protobuf:"varint,8,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	BroadcastGroupId           string                 `protobuf:"bytes,9,opt,name=broadcast_group_id,json=broadcastGroupId,proto3" json:"broadcast_group_id,omitempty"`
+	BroadcastIndex             int32                  `protobuf:"varint,10,opt,name=broadcast_index,json=broadcastIndex,proto3" json:"broadcast_index,omitempty"`
+	BroadcastTotal             int32                  `protobuf:"varint,11,opt,name=broadcast_total,json=broadcastTotal,proto3" json:"broadcast_total,omitempty"`
+	ScriptLanguage             string                 `protobuf:"bytes,12,opt,name=script_language,json=scriptLanguage,proto3" json:"script_language,omitempty"`
+	ScriptSource               string                 `protobuf:"bytes,13,opt,name=script_source,json=scriptSource,proto3" json:"script_source,omitempty"`
+	KubernetesCluster          *KubernetesCluster     `protobuf:"bytes,14,opt,name=kubernetes_cluster,json=kubernetesCluster,proto3" json:"kubernetes_cluster,omitempty"`
+	Http                       *HttpExecution         `protobuf:"bytes,15,opt,name=http,proto3" json:"http,omitempty"`
+	DockerRegistryAuth         *DockerRegistryAuth    `protobuf:"bytes,16,opt,name=docker_registry_auth,json=dockerRegistryAuth,proto3" json:"docker_registry_auth,omitempty"`
+	ExecutionDeadlineUnixMilli int64                  `protobuf:"varint,17,opt,name=execution_deadline_unix_milli,json=executionDeadlineUnixMilli,proto3" json:"execution_deadline_unix_milli,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *DispatchRequest) Reset() {
@@ -183,6 +184,13 @@ func (x *DispatchRequest) GetDockerRegistryAuth() *DockerRegistryAuth {
 		return x.DockerRegistryAuth
 	}
 	return nil
+}
+
+func (x *DispatchRequest) GetExecutionDeadlineUnixMilli() int64 {
+	if x != nil {
+		return x.ExecutionDeadlineUnixMilli
+	}
+	return 0
 }
 
 type DockerRegistryAuth struct {
@@ -709,7 +717,7 @@ var File_executor_v1_executor_proto protoreflect.FileDescriptor
 
 const file_executor_v1_executor_proto_rawDesc = "" +
 	"\n" +
-	"\x1aexecutor/v1/executor.proto\x12\vexecutor.v1\"\xad\x05\n" +
+	"\x1aexecutor/v1/executor.proto\x12\vexecutor.v1\"\xf0\x05\n" +
 	"\x0fDispatchRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x122\n" +
 	"\x15external_execution_id\x18\x02 \x01(\tR\x13externalExecutionId\x12\x15\n" +
@@ -727,7 +735,8 @@ const file_executor_v1_executor_proto_rawDesc = "" +
 	"\rscript_source\x18\r \x01(\tR\fscriptSource\x12M\n" +
 	"\x12kubernetes_cluster\x18\x0e \x01(\v2\x1e.executor.v1.KubernetesClusterR\x11kubernetesCluster\x12.\n" +
 	"\x04http\x18\x0f \x01(\v2\x1a.executor.v1.HttpExecutionR\x04http\x12Q\n" +
-	"\x14docker_registry_auth\x18\x10 \x01(\v2\x1f.executor.v1.DockerRegistryAuthR\x12dockerRegistryAuth\"d\n" +
+	"\x14docker_registry_auth\x18\x10 \x01(\v2\x1f.executor.v1.DockerRegistryAuthR\x12dockerRegistryAuth\x12A\n" +
+	"\x1dexecution_deadline_unix_milli\x18\x11 \x01(\x03R\x1aexecutionDeadlineUnixMilli\"d\n" +
 	"\x12DockerRegistryAuth\x12\x16\n" +
 	"\x06server\x18\x01 \x01(\tR\x06server\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12\x1a\n" +

@@ -25,6 +25,7 @@ type KubernetesCluster struct {
 	ID, TenantID, Name, AuthMode, APIServer, Namespace string
 	Credentials                                        KubernetesCredentials `json:"-"`
 	InsecureSkipTLSVerify                              bool
+	MaxConcurrentJobs                                  int32
 	Version                                            int64
 	CreatedAt, UpdatedAt                               time.Time
 }
@@ -37,6 +38,9 @@ func validateKubernetesCluster(cluster KubernetesCluster) error {
 	}
 	if cluster.Namespace == "" || len(cluster.Namespace) > 253 {
 		return errors.New("namespace must be between 1 and 253 characters")
+	}
+	if cluster.MaxConcurrentJobs < 1 || cluster.MaxConcurrentJobs > 1_000_000 {
+		return errors.New("max_concurrent_jobs must be between 1 and 1000000")
 	}
 	switch cluster.AuthMode {
 	case "kubeconfig":
@@ -58,6 +62,9 @@ func validateKubernetesCluster(cluster KubernetesCluster) error {
 }
 
 func (s *Store) CreateKubernetesCluster(ctx context.Context, cluster KubernetesCluster) (KubernetesCluster, error) {
+	if cluster.MaxConcurrentJobs == 0 {
+		cluster.MaxConcurrentJobs = 100
+	}
 	if err := validateKubernetesCluster(cluster); err != nil {
 		return KubernetesCluster{}, err
 	}
@@ -74,8 +81,8 @@ func (s *Store) CreateKubernetesCluster(ctx context.Context, cluster KubernetesC
 	if err != nil {
 		return KubernetesCluster{}, fmt.Errorf("encrypt kubernetes credentials: %w", err)
 	}
-	err = s.pool.QueryRow(ctx, `INSERT INTO kubernetes_clusters(id,tenant_id,name,auth_mode,api_server,namespace,encrypted_credentials,encryption_key_version,insecure_skip_tls_verify)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING version,created_at,updated_at`, cluster.ID, cluster.TenantID, cluster.Name, cluster.AuthMode, strings.TrimSpace(cluster.APIServer), cluster.Namespace, encrypted, keyVersion, cluster.InsecureSkipTLSVerify).Scan(&cluster.Version, &cluster.CreatedAt, &cluster.UpdatedAt)
+	err = s.pool.QueryRow(ctx, `INSERT INTO kubernetes_clusters(id,tenant_id,name,auth_mode,api_server,namespace,encrypted_credentials,encryption_key_version,insecure_skip_tls_verify,max_concurrent_jobs)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING version,created_at,updated_at`, cluster.ID, cluster.TenantID, cluster.Name, cluster.AuthMode, strings.TrimSpace(cluster.APIServer), cluster.Namespace, encrypted, keyVersion, cluster.InsecureSkipTLSVerify, cluster.MaxConcurrentJobs).Scan(&cluster.Version, &cluster.CreatedAt, &cluster.UpdatedAt)
 	return cluster, err
 }
 
@@ -83,7 +90,7 @@ func (s *Store) scanKubernetesCluster(row pgx.Row) (KubernetesCluster, error) {
 	var cluster KubernetesCluster
 	var encrypted []byte
 	var keyVersion int
-	err := row.Scan(&cluster.ID, &cluster.TenantID, &cluster.Name, &cluster.AuthMode, &cluster.APIServer, &cluster.Namespace, &encrypted, &keyVersion, &cluster.InsecureSkipTLSVerify, &cluster.Version, &cluster.CreatedAt, &cluster.UpdatedAt)
+	err := row.Scan(&cluster.ID, &cluster.TenantID, &cluster.Name, &cluster.AuthMode, &cluster.APIServer, &cluster.Namespace, &encrypted, &keyVersion, &cluster.InsecureSkipTLSVerify, &cluster.MaxConcurrentJobs, &cluster.Version, &cluster.CreatedAt, &cluster.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return KubernetesCluster{}, ErrNotFound
@@ -103,7 +110,7 @@ func (s *Store) scanKubernetesCluster(row pgx.Row) (KubernetesCluster, error) {
 	return cluster, nil
 }
 
-const kubernetesClusterColumns = `id,tenant_id,name,auth_mode,api_server,namespace,encrypted_credentials,encryption_key_version,insecure_skip_tls_verify,version,created_at,updated_at`
+const kubernetesClusterColumns = `id,tenant_id,name,auth_mode,api_server,namespace,encrypted_credentials,encryption_key_version,insecure_skip_tls_verify,max_concurrent_jobs,version,created_at,updated_at`
 
 func (s *Store) GetKubernetesCluster(ctx context.Context, tenantID, id string) (KubernetesCluster, error) {
 	return s.scanKubernetesCluster(s.pool.QueryRow(ctx, `SELECT `+kubernetesClusterColumns+` FROM kubernetes_clusters WHERE tenant_id=$1 AND id=$2`, tenantID, id))
@@ -127,6 +134,9 @@ func (s *Store) ListKubernetesClusters(ctx context.Context, tenantID string) ([]
 }
 
 func (s *Store) UpdateKubernetesCluster(ctx context.Context, cluster KubernetesCluster) (KubernetesCluster, error) {
+	if cluster.MaxConcurrentJobs == 0 {
+		cluster.MaxConcurrentJobs = 100
+	}
 	if err := validateKubernetesCluster(cluster); err != nil {
 		return KubernetesCluster{}, err
 	}
@@ -141,8 +151,8 @@ func (s *Store) UpdateKubernetesCluster(ctx context.Context, cluster KubernetesC
 	if err != nil {
 		return KubernetesCluster{}, fmt.Errorf("encrypt kubernetes credentials: %w", err)
 	}
-	err = s.pool.QueryRow(ctx, `UPDATE kubernetes_clusters SET name=$3,auth_mode=$4,api_server=$5,namespace=$6,encrypted_credentials=$7,encryption_key_version=$8,insecure_skip_tls_verify=$9,version=version+1,updated_at=now()
-		WHERE tenant_id=$1 AND id=$2 AND version=$10 RETURNING version,created_at,updated_at`, cluster.TenantID, cluster.ID, strings.TrimSpace(cluster.Name), cluster.AuthMode, strings.TrimSpace(cluster.APIServer), strings.TrimSpace(cluster.Namespace), encrypted, keyVersion, cluster.InsecureSkipTLSVerify, cluster.Version).Scan(&cluster.Version, &cluster.CreatedAt, &cluster.UpdatedAt)
+	err = s.pool.QueryRow(ctx, `UPDATE kubernetes_clusters SET name=$3,auth_mode=$4,api_server=$5,namespace=$6,encrypted_credentials=$7,encryption_key_version=$8,insecure_skip_tls_verify=$9,max_concurrent_jobs=$10,version=version+1,updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND version=$11 RETURNING version,created_at,updated_at`, cluster.TenantID, cluster.ID, strings.TrimSpace(cluster.Name), cluster.AuthMode, strings.TrimSpace(cluster.APIServer), strings.TrimSpace(cluster.Namespace), encrypted, keyVersion, cluster.InsecureSkipTLSVerify, cluster.MaxConcurrentJobs, cluster.Version).Scan(&cluster.Version, &cluster.CreatedAt, &cluster.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return KubernetesCluster{}, ErrConflict
 	}

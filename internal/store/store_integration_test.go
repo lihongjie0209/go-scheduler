@@ -1303,7 +1303,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if _, err = unencryptedStore.CreateJob(ctx, Job{TenantID: tenantID, Name: "unencrypted-private-image", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 60, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", Enabled: false, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "__docker__", ScriptLanguage: "docker", ScriptSource: `{"image":"registry.example.com/team/image:latest"}`, DockerRegistryAuth: DockerRegistryAuth{Server: "registry.example.com", Username: "robot", Password: "registry-secret", Configured: true}}); err == nil {
 		t.Fatal("store without an encryption key accepted Docker registry credentials")
 	}
-	kubernetesCluster, err := encryptedStore.CreateKubernetesCluster(ctx, KubernetesCluster{TenantID: tenantID, Name: "integration-k8s", AuthMode: "service_account", APIServer: "https://k8s.example", Namespace: "jobs", Credentials: KubernetesCredentials{Token: "service-account-secret", CAData: "test-ca"}})
+	kubernetesCluster, err := encryptedStore.CreateKubernetesCluster(ctx, KubernetesCluster{TenantID: tenantID, Name: "integration-k8s", AuthMode: "service_account", APIServer: "https://k8s.example", Namespace: "jobs", Credentials: KubernetesCredentials{Token: "service-account-secret", CAData: "test-ca"}, MaxConcurrentJobs: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1315,7 +1315,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal("kubernetes credentials were stored in plaintext")
 	}
 	loadedCluster, err := encryptedStore.GetKubernetesCluster(ctx, tenantID, kubernetesCluster.ID)
-	if err != nil || loadedCluster.Credentials.Token != "service-account-secret" {
+	if err != nil || loadedCluster.Credentials.Token != "service-account-secret" || loadedCluster.MaxConcurrentJobs != 2 {
 		t.Fatalf("kubernetes cluster = %+v, %v", loadedCluster, err)
 	}
 	kubernetesJob, err := encryptedStore.CreateJob(ctx, Job{TenantID: tenantID, Name: "kubernetes-persistence", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 60, CallbackTimeoutSeconds: 60, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, ExecutorGroupID: routeGroup.ID, ExecutorHandler: "__kubernetes__", ScriptLanguage: "kubernetes", ScriptSource: `{"image":"alpine:3.22"}`, KubernetesClusterID: kubernetesCluster.ID})

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -245,6 +246,47 @@ func TestGRPCDispatchRejectsBeforeHandlerWhenExecutionCannotPersist(t *testing.T
 	}
 }
 
+func TestGRPCDispatchPersistsAbsoluteExecutionDeadline(t *testing.T) {
+	t.Parallel()
+	store, err := NewFileCompletionStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Handle("runner", func(ctx context.Context, _ Task) error {
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewGRPCServer(server, &recordingReporter{completed: make(chan bool, 1)}, GRPCServerOptions{MaxConcurrentExecutions: 1, CompletionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().Add(9 * time.Second).UnixMilli()
+	request := &executorv1.DispatchRequest{RunId: "deadline-run", JobId: "job", Handler: "runner", CallbackToken: "token", TimeoutSeconds: 10}
+	if _, err = service.Dispatch(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	executions, err := store.ListExecutions(t.Context())
+	if err != nil || len(executions) != 1 || executions[0].GetExecutionDeadlineUnixMilli() < before {
+		t.Fatalf("persisted execution deadline = %+v, err=%v", executions, err)
+	}
+	if request.GetExecutionDeadlineUnixMilli() != 0 {
+		t.Fatal("Dispatch mutated the caller request")
+	}
+	close(release)
+	service.executionWG.Wait()
+}
+
 func TestGRPCRecoverExecutionsFailsProcessLocalAndResumesExternal(t *testing.T) {
 	t.Parallel()
 	store, err := NewFileCompletionStore(t.TempDir(), FileCompletionStoreOptions{MaxExecutions: 2})
@@ -298,6 +340,61 @@ func TestGRPCRecoverExecutionsFailsProcessLocalAndResumesExternal(t *testing.T) 
 	}
 	if !foundLocalFailure {
 		t.Fatalf("local interruption was not persisted: %+v", records)
+	}
+}
+
+func TestGRPCRecoverExternalExecutionPreservesOriginalDeadline(t *testing.T) {
+	t.Parallel()
+	store, err := NewFileCompletionStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(-time.Second)
+	request := &executorv1.DispatchRequest{RunId: "expired-external", JobId: "job", Handler: "runner", CallbackToken: "token", TimeoutSeconds: 3600, ScriptLanguage: "docker", ExternalExecutionId: "container-id", ExecutionDeadlineUnixMilli: deadline.UnixMilli()}
+	if err = store.SaveExecution(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := make(chan struct{}, 1)
+	if err = server.Handle("runner", func(ctx context.Context, _ Task) error {
+		called <- struct{}{}
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := make(chan ExternalCancellation, 1)
+	if err = server.HandleExternalCancellation("docker", func(_ context.Context, cancellation ExternalCancellation) error {
+		cancelled <- cancellation
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewGRPCServer(server, &recordingReporter{completed: make(chan bool, 1)}, GRPCServerOptions{MaxConcurrentExecutions: 1, CompletionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.RecoverExecutions(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case cancellation := <-cancelled:
+		if cancellation.RunID != request.GetRunId() || cancellation.ExternalExecutionID != request.GetExternalExecutionId() {
+			t.Fatalf("expired cancellation = %+v", cancellation)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired external execution was not cancelled")
+	}
+	select {
+	case <-called:
+		t.Fatal("expired external execution was resumed")
+	default:
+	}
+	records, err := store.List(t.Context())
+	if err != nil || len(records) != 1 || records[0].Succeeded || !strings.Contains(records[0].Message, "deadline exceeded") {
+		t.Fatalf("expired completion = %+v, err=%v", records, err)
 	}
 }
 
@@ -359,6 +456,58 @@ func TestGRPCDispatchEnforcesConcurrencyAndBusyState(t *testing.T) {
 	release <- struct{}{}
 }
 
+func TestGRPCDispatchUsesIndependentExecutionTypeLimits(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Handle("runner", func(ctx context.Context, _ Task) error {
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewGRPCServer(server, &recordingReporter{completed: make(chan bool, 10)}, GRPCServerOptions{MaxScriptExecutions: 1, MaxHTTPExecutions: 2, MaxDockerExecutions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := func(runID, language string, httpSpec *executorv1.HttpExecution) error {
+		_, dispatchErr := service.Dispatch(t.Context(), &executorv1.DispatchRequest{RunId: runID, JobId: "job", Handler: "runner", CallbackToken: "token", TimeoutSeconds: 10, ScriptLanguage: language, Http: httpSpec})
+		return dispatchErr
+	}
+	if err = dispatch("script-1", "shell", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = dispatch("script-2", "shell", nil); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("second script error = %v", err)
+	}
+	if err = dispatch("http-1", "", &executorv1.HttpExecution{Url: "https://example.test"}); err != nil {
+		t.Fatalf("HTTP was blocked by script capacity: %v", err)
+	}
+	if err = dispatch("http-2", "", &executorv1.HttpExecution{Url: "https://example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = dispatch("http-3", "", &executorv1.HttpExecution{Url: "https://example.test"}); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("third HTTP error = %v", err)
+	}
+	if err = dispatch("docker-1", "docker", nil); err != nil {
+		t.Fatalf("Docker was blocked by other capacity: %v", err)
+	}
+	for _, runID := range []string{"kubernetes-1", "kubernetes-2"} {
+		if err = dispatch(runID, "kubernetes", nil); err != nil {
+			t.Fatalf("Kubernetes was limited by executor slots: %v", err)
+		}
+	}
+	close(release)
+	service.executionWG.Wait()
+}
+
 func TestNewGRPCServerRejectsInvalidConcurrency(t *testing.T) {
 	t.Parallel()
 	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
@@ -366,8 +515,8 @@ func TestNewGRPCServerRejectsInvalidConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 	reporter := &recordingReporter{completed: make(chan bool, 1)}
-	if _, err = NewGRPCServer(server, reporter, GRPCServerOptions{}); err == nil {
-		t.Fatal("zero executor concurrency was accepted")
+	if _, err = NewGRPCServer(server, reporter, GRPCServerOptions{MaxScriptExecutions: -1}); err == nil {
+		t.Fatal("negative script concurrency was accepted")
 	}
 }
 
@@ -687,9 +836,27 @@ func TestGRPCCompletionReportRetriesTransientErrors(t *testing.T) {
 	}
 }
 
+func TestGRPCCompletionReportRetriesAuthenticationAndVersionErrors(t *testing.T) {
+	t.Parallel()
+	for _, code := range []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.Unimplemented, codes.FailedPrecondition} {
+		code := code
+		t.Run(code.String(), func(t *testing.T) {
+			t.Parallel()
+			reporter := &scriptedReporter{results: []error{status.Error(code, "configuration not converged"), nil}}
+			service := completionRetryTestServer(reporter)
+			if !service.reportCompletion(t.Context(), CompletionRecord{RunID: "retry-configuration", Token: "token", Succeeded: true}) {
+				t.Fatal("completion was not delivered after recoverable control-plane error")
+			}
+			if calls := reporter.callCount(); calls != 2 {
+				t.Fatalf("completion report calls = %d, want 2", calls)
+			}
+		})
+	}
+}
+
 func TestGRPCCompletionReportStopsOnPermanentError(t *testing.T) {
 	t.Parallel()
-	for _, code := range []codes.Code{codes.PermissionDenied, codes.NotFound} {
+	for _, code := range []codes.Code{codes.InvalidArgument, codes.NotFound, codes.AlreadyExists} {
 		code := code
 		t.Run(code.String(), func(t *testing.T) {
 			t.Parallel()
@@ -700,6 +867,26 @@ func TestGRPCCompletionReportStopsOnPermanentError(t *testing.T) {
 				t.Fatalf("completion report calls = %d, want 1", calls)
 			}
 		})
+	}
+}
+
+func TestGRPCCompletionDeliveryRetainsRecordOnAuthenticationError(t *testing.T) {
+	t.Parallel()
+	store, err := NewFileCompletionStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := CompletionRecord{RunID: "auth-retry", Token: "token", Succeeded: true, CreatedAt: time.Now().UTC()}
+	if err = store.Save(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	reporter := &scriptedReporter{results: []error{status.Error(codes.Unauthenticated, "rotating internal token")}}
+	service := completionRetryTestServer(reporter)
+	service.completionStore = store
+	service.deliverPersistedCompletions(t.Context())
+	records, err := store.List(t.Context())
+	if err != nil || len(records) != 1 || records[0].RunID != record.RunID {
+		t.Fatalf("completion was discarded after authentication error: records=%+v err=%v", records, err)
 	}
 }
 

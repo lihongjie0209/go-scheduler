@@ -27,6 +27,7 @@ message DispatchRequest {
   KubernetesCluster kubernetes_cluster = 14;
   HttpExecution http = 15;
   DockerRegistryAuth docker_registry_auth = 16;
+  int64 execution_deadline_unix_milli = 17;
 }
 
 message DockerRegistryAuth {

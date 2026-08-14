@@ -248,6 +248,12 @@ func (s *FileCompletionStore) Delete(ctx context.Context, runID string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Remove the execution inbox first. If the process stops between these
+	// removals, replaying an already accepted completion is safe; resurrecting
+	// an execution after Core accepted its completion is not.
+	if err := s.removeExecutionLocked(runID); err != nil {
+		return err
+	}
 	removed := false
 	if err := os.Remove(s.path(runID)); err == nil {
 		removed = true
@@ -256,9 +262,6 @@ func (s *FileCompletionStore) Delete(ctx context.Context, runID string) error {
 	}
 	if removed && s.pending > 0 {
 		s.pending--
-	}
-	if err := s.removeExecutionLocked(runID); err != nil {
-		return err
 	}
 	directory, err := os.Open(s.directory) // #nosec G304 -- directory is trusted operator configuration.
 	if err != nil {
@@ -298,6 +301,14 @@ func (s *FileCompletionStore) SaveExecution(ctx context.Context, request *execut
 	if existing, readErr := os.ReadFile(target); readErr == nil {
 		if bytes.Equal(existing, raw) {
 			return nil
+		}
+		legacy := new(executorv1.DispatchRequest)
+		if unmarshalErr := proto.Unmarshal(existing, legacy); unmarshalErr == nil && legacy.GetExecutionDeadlineUnixMilli() == 0 {
+			upgraded := proto.Clone(request).(*executorv1.DispatchRequest)
+			upgraded.ExecutionDeadlineUnixMilli = 0
+			if proto.Equal(legacy, upgraded) {
+				return s.writeAtomicLocked(target, ".execution-*", raw)
+			}
 		}
 		return fmt.Errorf("execution record for run %q already exists with different content", request.GetRunId())
 	} else if !errors.Is(readErr, fs.ErrNotExist) {
