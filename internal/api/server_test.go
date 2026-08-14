@@ -92,3 +92,57 @@ func TestKubernetesClusterCapacityRoundTripsThroughAPIModel(t *testing.T) {
 		t.Fatalf("public cluster capacity = %#v", public["max_concurrent_jobs"])
 	}
 }
+
+func TestKubernetesCredentialsConfigured(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		credentials store.KubernetesCredentials
+		want        bool
+	}{
+		{name: "empty"},
+		{name: "whitespace only", credentials: store.KubernetesCredentials{Token: " \n"}},
+		{name: "kubeconfig", credentials: store.KubernetesCredentials{Kubeconfig: "apiVersion: v1"}, want: true},
+		{name: "token", credentials: store.KubernetesCredentials{Token: "secret"}, want: true},
+		{name: "CA", credentials: store.KubernetesCredentials{CAData: "certificate"}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := kubernetesCredentialsConfigured(test.credentials); got != test.want {
+				t.Fatalf("kubernetesCredentialsConfigured() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPreserveKubernetesCredentials(t *testing.T) {
+	t.Parallel()
+	current := store.KubernetesCluster{
+		AuthMode:    "service_account",
+		Credentials: store.KubernetesCredentials{Token: "secret", CAData: "certificate"},
+	}
+	tests := []struct {
+		name    string
+		update  store.KubernetesCluster
+		want    store.KubernetesCredentials
+		wantErr bool
+	}{
+		{name: "preserve omitted credentials", update: store.KubernetesCluster{AuthMode: "service_account"}, want: current.Credentials},
+		{name: "replace supplied credentials", update: store.KubernetesCluster{AuthMode: "service_account", Credentials: store.KubernetesCredentials{Token: "replacement"}}, want: store.KubernetesCredentials{Token: "replacement"}},
+		{name: "reject auth mode change without credentials", update: store.KubernetesCluster{AuthMode: "kubeconfig"}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			update := test.update
+			err := preserveKubernetesCredentials(current, &update)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("preserveKubernetesCredentials() error = %v, want error %v", err, test.wantErr)
+			}
+			if err == nil && update.Credentials != test.want {
+				t.Fatalf("credentials = %+v, want %+v", update.Credentials, test.want)
+			}
+		})
+	}
+}

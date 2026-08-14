@@ -6,10 +6,61 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
+
+func TestVersionCommandPrintsBuildVersion(t *testing.T) {
+	t.Parallel()
+	command := newRootCommand("0.1.6")
+	output := new(bytes.Buffer)
+	command.SetOut(output)
+	command.SetArgs([]string{"version"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(output.String()); got != "0.1.6" {
+		t.Fatalf("version output = %q, want %q", got, "0.1.6")
+	}
+}
+
+func TestGoReleaserInjectsVersionIntoEveryBinary(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Builds []struct {
+			ID      string   `yaml:"id"`
+			LDFlags []string `yaml:"ldflags"`
+		} `yaml:"builds"`
+	}
+	if err = yaml.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"scheduler": false, "schedulerctl": false}
+	for _, build := range config.Builds {
+		if _, tracked := want[build.ID]; !tracked {
+			continue
+		}
+		for _, flag := range build.LDFlags {
+			if flag == "-X main.version={{.Version}}" {
+				want[build.ID] = true
+			}
+		}
+	}
+	for binary, configured := range want {
+		if !configured {
+			t.Errorf("GoReleaser build %q does not inject main.version", binary)
+		}
+	}
+}
 
 func TestDashboardWithPasswordAuthentication(t *testing.T) {
 	mux := http.NewServeMux()
@@ -217,7 +268,7 @@ func TestJobsTriggerSendsExecutorAddressOverrides(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Join(body.Addresses, ",") != "http://worker-a:9999,http://worker-b:9999" {
+		if strings.Join(body.Addresses, ",") != "grpc://worker-a:9999,grpc://worker-b:9999" {
 			t.Errorf("addresses=%v", body.Addresses)
 		}
 		_, _ = w.Write([]byte(`{"id":"run-1","status":"pending"}`))
@@ -225,7 +276,7 @@ func TestJobsTriggerSendsExecutorAddressOverrides(t *testing.T) {
 	defer server.Close()
 	command := newRootCommand("test")
 	command.SetOut(new(bytes.Buffer))
-	command.SetArgs([]string{"--server", server.URL, "--token", "gsk_test", "jobs", "trigger", "job-1", "--address", "http://worker-a:9999", "--address", "http://worker-b:9999"})
+	command.SetArgs([]string{"--server", server.URL, "--token", "gsk_test", "jobs", "trigger", "job-1", "--address", "grpc://worker-a:9999", "--address", "grpc://worker-b:9999"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}

@@ -4202,3 +4202,59 @@ func TestFailureNotificationUseCaseThroughCLI(t *testing.T) {
 		t.Fatalf("schedulerctl notification history channels = %+v", channels)
 	}
 }
+
+func TestKubernetesClusterUpdatePreservesCredentials(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+	_, token, err := fixture.store.CreateAPIKey(t.Context(), fixture.tenantID, "kubernetes-update-e2e", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := auth.NewManager(string(bytes.Repeat([]byte("x"), 32)), "test", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	defer httpServer.Close()
+	request := func(method, path, body string) (*http.Response, []byte) {
+		req, requestErr := http.NewRequestWithContext(t.Context(), method, httpServer.URL+path, strings.NewReader(body))
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		response, requestErr := httpServer.Client().Do(req)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		defer response.Body.Close()
+		raw, readErr := io.ReadAll(response.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return response, raw
+	}
+	createdResponse, createdBody := request(http.MethodPost, "/api/v1/kubernetes-clusters", `{"name":"preserved","auth_mode":"service_account","api_server":"https://kubernetes.example","namespace":"jobs","token":"secret-token","ca_data":"secret-ca","max_concurrent_jobs":10}`)
+	if createdResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createdResponse.StatusCode, createdBody)
+	}
+	var created struct {
+		ID      string `json:"id"`
+		Version int64  `json:"version"`
+	}
+	if err = json.Unmarshal(createdBody, &created); err != nil || created.ID == "" || created.Version != 1 {
+		t.Fatalf("created cluster=%s err=%v", createdBody, err)
+	}
+	updatedResponse, updatedBody := request(http.MethodPut, "/api/v1/kubernetes-clusters/"+created.ID, `{"name":"preserved-updated","auth_mode":"service_account","api_server":"https://kubernetes.example","namespace":"jobs-updated","max_concurrent_jobs":25,"version":1}`)
+	if updatedResponse.StatusCode != http.StatusOK {
+		t.Fatalf("metadata update status=%d body=%s", updatedResponse.StatusCode, updatedBody)
+	}
+	stored, err := fixture.store.GetKubernetesCluster(t.Context(), fixture.tenantID, created.ID)
+	if err != nil || stored.Credentials.Token != "secret-token" || stored.Credentials.CAData != "secret-ca" || stored.MaxConcurrentJobs != 25 {
+		t.Fatalf("stored cluster=%+v err=%v", stored, err)
+	}
+	changedResponse, changedBody := request(http.MethodPut, "/api/v1/kubernetes-clusters/"+created.ID, `{"name":"changed-auth","auth_mode":"kubeconfig","namespace":"jobs","max_concurrent_jobs":25,"version":2}`)
+	if changedResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(changedBody, []byte("credentials are required")) {
+		t.Fatalf("auth-mode update status=%d body=%s", changedResponse.StatusCode, changedBody)
+	}
+}

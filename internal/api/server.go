@@ -165,6 +165,21 @@ func clusterFromRequest(tenant, id string, body kubernetesClusterRequest) store.
 	return store.KubernetesCluster{ID: id, TenantID: tenant, Name: body.Name, AuthMode: body.AuthMode, APIServer: body.APIServer, Namespace: body.Namespace, Credentials: store.KubernetesCredentials{Kubeconfig: body.Kubeconfig, Token: body.Token, CAData: body.CAData}, InsecureSkipTLSVerify: body.InsecureSkipTLSVerify, MaxConcurrentJobs: body.MaxConcurrentJobs, Version: body.Version}
 }
 
+func kubernetesCredentialsConfigured(credentials store.KubernetesCredentials) bool {
+	return strings.TrimSpace(credentials.Kubeconfig) != "" || strings.TrimSpace(credentials.Token) != "" || strings.TrimSpace(credentials.CAData) != ""
+}
+
+func preserveKubernetesCredentials(current store.KubernetesCluster, update *store.KubernetesCluster) error {
+	if kubernetesCredentialsConfigured(update.Credentials) {
+		return nil
+	}
+	if current.AuthMode != update.AuthMode {
+		return errors.New("credentials are required when changing auth_mode")
+	}
+	update.Credentials = current.Credentials
+	return nil
+}
+
 func (s *Server) listKubernetesClusters(w http.ResponseWriter, r *http.Request) {
 	if tenantID(r.Context()) == "" {
 		writeError(w, 400, "X-Tenant-ID is required")
@@ -215,7 +230,23 @@ func (s *Server) updateKubernetesCluster(w http.ResponseWriter, r *http.Request)
 	if !decode(w, r, &body) {
 		return
 	}
-	cluster, err := s.store.UpdateKubernetesCluster(r.Context(), clusterFromRequest(tenantID(r.Context()), chi.URLParam(r, "id"), body))
+	cluster := clusterFromRequest(tenantID(r.Context()), chi.URLParam(r, "id"), body)
+	if !kubernetesCredentialsConfigured(cluster.Credentials) {
+		current, loadErr := s.store.GetKubernetesCluster(r.Context(), cluster.TenantID, cluster.ID)
+		if errors.Is(loadErr, store.ErrNotFound) {
+			writeError(w, 404, "kubernetes cluster not found")
+			return
+		}
+		if loadErr != nil {
+			writeError(w, 500, "load kubernetes cluster failed")
+			return
+		}
+		if preserveErr := preserveKubernetesCredentials(current, &cluster); preserveErr != nil {
+			writeError(w, 400, preserveErr.Error())
+			return
+		}
+	}
+	cluster, err := s.store.UpdateKubernetesCluster(r.Context(), cluster)
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, 409, "kubernetes cluster version conflict")
 		return

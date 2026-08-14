@@ -362,7 +362,7 @@ func triggerJobCommand(c *cliConfig) *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&input, "input", "", "runtime input")
 	cmd.Flags().StringVar(&key, "idempotency-key", "", "idempotency key")
-	cmd.Flags().StringArrayVar(&addresses, "address", nil, "temporary executor base URL; repeat to override the group for this run")
+	cmd.Flags().StringArrayVar(&addresses, "address", nil, "temporary HTTP(S) or gRPC executor URL; repeat to override the group for this run")
 	return cmd
 }
 func runsCommand(c *cliConfig) *cobra.Command {
@@ -492,7 +492,7 @@ func executorsCommand(c *cliConfig) *cobra.Command {
 	create.Flags().StringVar(&name, "name", "", "executor group name")
 	create.Flags().StringVar(&strategy, "strategy", "round", "route strategy: first, last, round, random, hash, lfu, lru, failover, busyover")
 	create.Flags().StringVar(&mode, "mode", "automatic", "registration mode: automatic or manual")
-	create.Flags().StringArrayVar(&addresses, "address", nil, "manual executor base URL; repeat for multiple nodes")
+	create.Flags().StringArrayVar(&addresses, "address", nil, "manual HTTP(S) or gRPC executor URL; repeat for multiple nodes")
 	_ = create.MarkFlagRequired("name")
 	groups.AddCommand(create)
 	var updateName, updateStrategy, updateMode string
@@ -507,7 +507,7 @@ func executorsCommand(c *cliConfig) *cobra.Command {
 	update.Flags().StringVar(&updateName, "name", "", "executor group name")
 	update.Flags().StringVar(&updateStrategy, "strategy", "round", "route strategy")
 	update.Flags().StringVar(&updateMode, "mode", "automatic", "registration mode: automatic or manual")
-	update.Flags().StringArrayVar(&updateAddresses, "address", nil, "manual executor base URL; repeat for multiple nodes")
+	update.Flags().StringArrayVar(&updateAddresses, "address", nil, "manual HTTP(S) or gRPC executor URL; repeat for multiple nodes")
 	update.Flags().Int64Var(&updateVersion, "version", 0, "expected executor group version")
 	_ = update.MarkFlagRequired("name")
 	_ = update.MarkFlagRequired("version")
@@ -590,9 +590,9 @@ func kubernetesClustersCommand(c *cliConfig) *cobra.Command {
 		write.Flags().StringVar(&authMode, "auth-mode", "kubeconfig", "kubeconfig or service_account")
 		write.Flags().StringVar(&apiServer, "api-server", "", "Kubernetes API Server URL")
 		write.Flags().StringVar(&namespace, "namespace", "default", "default Job namespace")
-		write.Flags().StringVar(&kubeconfigFile, "kubeconfig", "", "path to kubeconfig")
-		write.Flags().StringVar(&token, "service-account-token", "", "ServiceAccount bearer token")
-		write.Flags().StringVar(&caFile, "ca-file", "", "path to API Server CA certificate")
+		write.Flags().StringVar(&kubeconfigFile, "kubeconfig", "", "path to kubeconfig (omit on update to preserve credentials)")
+		write.Flags().StringVar(&token, "service-account-token", "", "ServiceAccount bearer token (omit on update to preserve credentials)")
+		write.Flags().StringVar(&caFile, "ca-file", "", "path to API Server CA certificate (omit on update to preserve credentials)")
 		write.Flags().BoolVar(&insecure, "insecure-skip-tls-verify", false, "skip API Server TLS verification")
 		write.Flags().Int32Var(&maxConcurrentJobs, "max-concurrent-jobs", 100, "maximum active jobs across this Kubernetes cluster")
 		write.Flags().Int64Var(&version, "version", 0, "expected cluster version (update only)")

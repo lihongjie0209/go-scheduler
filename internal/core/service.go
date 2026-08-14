@@ -338,8 +338,8 @@ func normalizeTriggerOverrideAddresses(addresses []string) ([]string, error) {
 	for _, raw := range addresses {
 		address := strings.TrimRight(strings.TrimSpace(raw), "/")
 		parsed, err := url.ParseRequestURI(address)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-			return nil, fmt.Errorf("override addresses must be absolute HTTP or HTTPS URLs without userinfo")
+		if err != nil || parsed.Host == "" || !validExecutorAddressScheme(parsed.Scheme) || parsed.User != nil {
+			return nil, fmt.Errorf("override addresses must be absolute HTTP(S) or gRPC URLs without userinfo")
 		}
 		if _, exists := seen[address]; !exists {
 			seen[address] = struct{}{}
@@ -534,8 +534,8 @@ func normalizeExecutorGroup(group *schedulerv1.ExecutorGroup) (*schedulerv1.Exec
 	for _, raw := range group.ManualAddresses {
 		address := strings.TrimRight(strings.TrimSpace(raw), "/")
 		parsed, err := url.ParseRequestURI(address)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-			return nil, status.Error(codes.InvalidArgument, "manual addresses must be absolute HTTP or HTTPS URLs without userinfo")
+		if err != nil || parsed.Host == "" || !validExecutorAddressScheme(parsed.Scheme) || parsed.User != nil {
+			return nil, status.Error(codes.InvalidArgument, "manual addresses must be absolute HTTP(S) or gRPC URLs without userinfo")
 		}
 		if _, ok := seen[address]; !ok {
 			seen[address] = struct{}{}
@@ -565,6 +565,10 @@ func validExecutorRouteStrategy(strategy string) bool {
 	}
 }
 
+func validExecutorAddressScheme(scheme string) bool {
+	return scheme == "http" || scheme == "https" || scheme == "grpc"
+}
+
 func (s *Service) ListExecutorGroups(ctx context.Context, req *schedulerv1.ListExecutorGroupsRequest) (*schedulerv1.ListExecutorGroupsResponse, error) {
 	groups, err := s.store.ListExecutorGroups(ctx, req.GetTenantId())
 	if err != nil {
@@ -582,7 +586,7 @@ func (s *Service) RegisterExecutorNode(ctx context.Context, req *schedulerv1.Reg
 		return nil, status.Error(codes.InvalidArgument, "tenant_id, group_id and node_id are required")
 	}
 	parsed, err := url.ParseRequestURI(req.GetAddress())
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "grpc") || parsed.User != nil {
+	if err != nil || parsed.Host == "" || !validExecutorAddressScheme(parsed.Scheme) || parsed.User != nil {
 		return nil, status.Error(codes.InvalidArgument, "address must be an absolute HTTP(S) or gRPC URL without userinfo")
 	}
 	if req.GetTtlSeconds() < 5 || req.GetTtlSeconds() > 300 {

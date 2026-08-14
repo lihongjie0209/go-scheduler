@@ -137,7 +137,7 @@ func TestNormalizeExecutorGroup(t *testing.T) {
 		wantErr   bool
 	}{
 		{name: "automatic defaults", group: &schedulerv1.ExecutorGroup{TenantId: "tenant", Name: "workers", RouteStrategy: "round"}, wantMode: "automatic"},
-		{name: "manual addresses normalized", group: &schedulerv1.ExecutorGroup{TenantId: "tenant", Name: "workers", RouteStrategy: "first", RegistrationMode: "manual", ManualAddresses: []string{" https://worker-b:9999/ ", "http://worker-a:9999", "http://worker-a:9999/"}}, wantMode: "manual", wantAddrs: []string{"http://worker-a:9999", "https://worker-b:9999"}},
+		{name: "manual addresses normalized", group: &schedulerv1.ExecutorGroup{TenantId: "tenant", Name: "workers", RouteStrategy: "first", RegistrationMode: "manual", ManualAddresses: []string{" https://worker-b:9999/ ", "http://worker-a:9999", "http://worker-a:9999/", "grpc://worker-c:9999/"}}, wantMode: "manual", wantAddrs: []string{"grpc://worker-c:9999", "http://worker-a:9999", "https://worker-b:9999"}},
 		{name: "manual requires address", group: &schedulerv1.ExecutorGroup{TenantId: "tenant", Name: "workers", RouteStrategy: "round", RegistrationMode: "manual"}, wantErr: true},
 		{name: "automatic rejects addresses", group: &schedulerv1.ExecutorGroup{TenantId: "tenant", Name: "workers", RouteStrategy: "round", RegistrationMode: "automatic", ManualAddresses: []string{"http://worker:9999"}}, wantErr: true},
 		{name: "invalid mode", group: &schedulerv1.ExecutorGroup{TenantId: "tenant", Name: "workers", RouteStrategy: "round", RegistrationMode: "dns"}, wantErr: true},
@@ -327,11 +327,11 @@ func TestValidateTriggerRequest(t *testing.T) {
 
 func TestNormalizeTriggerOverrideAddresses(t *testing.T) {
 	t.Parallel()
-	got, err := normalizeTriggerOverrideAddresses([]string{" https://worker-b:9999/ ", "http://worker-a:9999", "http://worker-a:9999/"})
+	got, err := normalizeTriggerOverrideAddresses([]string{" https://worker-b:9999/ ", "http://worker-a:9999", "http://worker-a:9999/", "grpc://worker-c:9999/"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got, ",") != "http://worker-a:9999,https://worker-b:9999" {
+	if strings.Join(got, ",") != "grpc://worker-c:9999,http://worker-a:9999,https://worker-b:9999" {
 		t.Fatalf("addresses=%v", got)
 	}
 	for _, addresses := range [][]string{{"file:///tmp/worker"}, {"https://user:pass@worker:9999"}, {"worker:9999"}, make([]string, 101)} {
