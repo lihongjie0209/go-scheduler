@@ -72,6 +72,7 @@ type GRPCServer struct {
 	completionMaxBackoff     time.Duration
 	executionSlots           chan struct{}
 	completionStore          CompletionStore
+	executionStore           ExecutionStore
 	completionWake           chan struct{}
 	completionDeliveryWG     sync.WaitGroup
 	completionDeliveryOnce   sync.Once
@@ -92,7 +93,7 @@ func NewGRPCServer(server *Server, reporter Reporter, options ...GRPCServerOptio
 	if configuration.MaxConcurrentExecutions < 1 {
 		return nil, errors.New("maximum concurrent executions must be positive")
 	}
-	return &GRPCServer{
+	result := &GRPCServer{
 		server: server, reporter: reporter, runs: make(map[string]*execution),
 		historyLimit: defaultExecutionHistoryLimit, historyRetention: defaultExecutionHistoryRetention,
 		completionMaxAttempts: defaultCompletionMaxAttempts, completionAttemptTimeout: defaultCompletionAttemptTimeout,
@@ -101,10 +102,12 @@ func NewGRPCServer(server *Server, reporter Reporter, options ...GRPCServerOptio
 		executionSlots:       make(chan struct{}, configuration.MaxConcurrentExecutions),
 		completionStore:      configuration.CompletionStore,
 		completionWake:       make(chan struct{}, 1),
-	}, nil
+	}
+	result.executionStore, _ = configuration.CompletionStore.(ExecutionStore)
+	return result, nil
 }
 
-func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchRequest) (*executorv1.DispatchResponse, error) {
+func (s *GRPCServer) Dispatch(ctx context.Context, request *executorv1.DispatchRequest) (*executorv1.DispatchResponse, error) {
 	if request.GetRunId() == "" || request.GetJobId() == "" || request.GetHandler() == "" || request.GetCallbackToken() == "" || request.GetTimeoutSeconds() < 1 || request.GetTimeoutSeconds() > 86400 {
 		return nil, status.Error(codes.InvalidArgument, "invalid dispatch request")
 	}
@@ -134,6 +137,14 @@ func (s *GRPCServer) Dispatch(_ context.Context, request *executorv1.DispatchReq
 	default:
 		s.mu.Unlock()
 		return nil, status.Error(codes.ResourceExhausted, "executor concurrency limit reached")
+	}
+	if s.executionStore != nil {
+		if err := s.executionStore.SaveExecution(ctx, request); err != nil {
+			<-s.executionSlots
+			s.completionStoreFailed = true
+			s.mu.Unlock()
+			return nil, status.Errorf(codes.Unavailable, "persist accepted execution: %v", err)
+		}
 	}
 	executionID := request.GetExternalExecutionId()
 	if executionID == "" {
@@ -230,6 +241,14 @@ func (s *GRPCServer) finish(request *executorv1.DispatchRequest, handlerErr erro
 		}
 		persistErr = s.completionStore.Save(context.Background(), record)
 		persisted = persistErr == nil
+		if persisted && s.executionStore != nil {
+			if cleanupErr := s.executionStore.DeleteExecution(context.Background(), request.GetRunId()); cleanupErr != nil {
+				slog.Error("delete completed executor execution", "run_id", request.GetRunId(), "error", cleanupErr)
+				s.mu.Lock()
+				s.completionStoreFailed = true
+				s.mu.Unlock()
+			}
+		}
 		if persistErr != nil {
 			slog.Error("persist executor completion", "run_id", request.GetRunId(), "error", persistErr)
 		}
@@ -321,6 +340,63 @@ func (s *GRPCServer) RunCompletionDelivery(ctx context.Context) {
 }
 
 func (s *GRPCServer) WaitCompletionDelivery() { s.completionDeliveryWG.Wait() }
+
+// RecoverExecutions reconciles work accepted before a process restart. Work
+// managed by Docker or Kubernetes is safe to reattach to; process-local work
+// is failed explicitly so Core can apply its configured retry policy.
+func (s *GRPCServer) RecoverExecutions(ctx context.Context) error {
+	if s.executionStore == nil {
+		return nil
+	}
+	completions, err := s.completionStore.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list completions before execution recovery: %w", err)
+	}
+	completed := make(map[string]struct{}, len(completions))
+	for _, record := range completions {
+		completed[record.RunID] = struct{}{}
+	}
+	requests, err := s.executionStore.ListExecutions(ctx)
+	if err != nil {
+		return fmt.Errorf("list executions for recovery: %w", err)
+	}
+	for _, request := range requests {
+		if _, ok := completed[request.GetRunId()]; ok {
+			if err = s.executionStore.DeleteExecution(ctx, request.GetRunId()); err != nil {
+				return fmt.Errorf("remove completed execution %q: %w", request.GetRunId(), err)
+			}
+			continue
+		}
+		if isExternallyRecoverable(request) {
+			continue
+		}
+		record := CompletionRecord{RunID: request.GetRunId(), Token: request.GetCallbackToken(), Succeeded: false, Message: "executor restarted before process-local execution completed", CreatedAt: time.Now().UTC()}
+		if err = s.completionStore.Save(ctx, record); err != nil {
+			return fmt.Errorf("persist interrupted execution %q: %w", request.GetRunId(), err)
+		}
+		if err = s.executionStore.DeleteExecution(ctx, request.GetRunId()); err != nil {
+			return fmt.Errorf("remove interrupted execution %q: %w", request.GetRunId(), err)
+		}
+	}
+	for _, request := range requests {
+		if _, ok := completed[request.GetRunId()]; ok || !isExternallyRecoverable(request) {
+			continue
+		}
+		if _, err = s.Dispatch(ctx, request); err != nil {
+			return fmt.Errorf("resume external execution %q: %w", request.GetRunId(), err)
+		}
+	}
+	return nil
+}
+
+func isExternallyRecoverable(request *executorv1.DispatchRequest) bool {
+	switch request.GetScriptLanguage() {
+	case "docker", "kubernetes":
+		return true
+	default:
+		return false
+	}
+}
 
 func (s *GRPCServer) wakeCompletionDelivery() {
 	select {
@@ -422,6 +498,11 @@ func (s *GRPCServer) Cancel(ctx context.Context, request *executorv1.CancelReque
 	s.mu.Unlock()
 
 	if request.GetExternalExecutionId() == "" || request.GetJobId() == "" || request.GetScriptLanguage() == "" {
+		if cancelledInMemory {
+			if err := s.deletePersistedExecution(ctx, request.GetRunId()); err != nil {
+				return nil, status.Errorf(codes.Unavailable, "persist cancellation: %v", err)
+			}
+		}
 		return &executorv1.CancelResponse{Accepted: cancelledInMemory}, nil
 	}
 	s.server.mu.RLock()
@@ -434,6 +515,9 @@ func (s *GRPCServer) Cancel(ctx context.Context, request *executorv1.CancelReque
 		// Script and HTTP work cannot survive an executor process restart. If
 		// no in-memory execution exists, their desired cancelled state is
 		// already satisfied.
+		if err := s.deletePersistedExecution(ctx, request.GetRunId()); err != nil {
+			return nil, status.Errorf(codes.Unavailable, "persist cancellation: %v", err)
+		}
 		return &executorv1.CancelResponse{Accepted: true}, nil
 	}
 	var cluster *KubernetesClusterConfig
@@ -444,7 +528,23 @@ func (s *GRPCServer) Cancel(ctx context.Context, request *executorv1.CancelReque
 	if err := canceller(ctx, cancellation); err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cancel external execution: %v", err)
 	}
+	if err := s.deletePersistedExecution(ctx, request.GetRunId()); err != nil {
+		return nil, status.Errorf(codes.Unavailable, "persist external cancellation: %v", err)
+	}
 	return &executorv1.CancelResponse{Accepted: true}, nil
+}
+
+func (s *GRPCServer) deletePersistedExecution(ctx context.Context, runID string) error {
+	if s.executionStore == nil {
+		return nil
+	}
+	if err := s.executionStore.DeleteExecution(ctx, runID); err != nil {
+		s.mu.Lock()
+		s.completionStoreFailed = true
+		s.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (s *GRPCServer) Inspect(_ context.Context, request *executorv1.InspectRequest) (*executorv1.ExecutionState, error) {

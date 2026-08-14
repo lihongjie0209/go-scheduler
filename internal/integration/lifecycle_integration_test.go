@@ -1070,6 +1070,76 @@ func TestExecutorCompletionRecoversFromDurableOutboxAfterRestart(t *testing.T) {
 	}
 }
 
+func TestExecutorRestartReportsInterruptedProcessLocalExecution(t *testing.T) {
+	fixture := newLifecycleFixture(t)
+	defer fixture.close()
+	job := createPolicyJob(t, fixture, "execution-inbox-restart", "serial")
+	run, err := fixture.store.TriggerJob(t.Context(), fixture.tenantID, job.ID, "execution-inbox-restart", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := fixture.store.ClaimRuns(t.Context(), "execution-inbox-core", 1, time.Minute)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim run: count=%d err=%v", len(claims), err)
+	}
+	const callbackToken = "interrupted-execution-token"
+	tokenHash := sha256.Sum256([]byte(callbackToken))
+	if err = fixture.store.PrepareClaimedExecutorDispatch(t.Context(), claims[0].Run, "executor-restarted", "127.0.0.1:19999", tokenHash[:], time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	oldStore, err := executorsdk.NewFileCompletionStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &executorv1.DispatchRequest{RunId: run.ID, JobId: job.ID, Handler: "__script__", CallbackToken: callbackToken, TimeoutSeconds: 60, ScriptLanguage: "shell", ScriptSource: "echo must-not-rerun"}
+	if err = oldStore.SaveExecution(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	restartedStore, err := executorsdk.NewFileCompletionStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executorServer, err := executorsdk.NewServer(executorsdk.Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = executorServer.Handle("__script__", func(context.Context, executorsdk.Task) error {
+		t.Fatal("process-local execution was rerun after restart")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reporter, err := executorsdk.NewGRPCReporter(fixture.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := executorsdk.NewGRPCServer(executorServer, reporter, executorsdk.GRPCServerOptions{MaxConcurrentExecutions: 1, CompletionStore: restartedStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.RecoverExecutions(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	deliveryCtx, cancelDelivery := context.WithCancel(t.Context())
+	service.RunCompletionDelivery(deliveryCtx)
+	defer func() {
+		cancelDelivery()
+		service.WaitCompletionDelivery()
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		failed, loadErr := fixture.store.GetRun(t.Context(), fixture.tenantID, run.ID)
+		if loadErr == nil && failed.Status == "failed" && strings.Contains(failed.ErrorMessage, "executor restarted") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("interrupted execution was not failed: run=%+v error=%v", failed, loadErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestCrossModuleRetryLineageThroughGRPC(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()

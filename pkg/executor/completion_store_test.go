@@ -8,6 +8,9 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestFileCompletionStorePersistsAcrossInstances(t *testing.T) {
@@ -122,5 +125,46 @@ func TestFileCompletionStoreRemovesInterruptedWriteOnStartup(t *testing.T) {
 	}
 	if _, err := os.Stat(temporary); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("interrupted completion write remained: %v", err)
+	}
+}
+
+func TestFileCompletionStorePersistsExecutionsAcrossInstances(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	request := &executorv1.DispatchRequest{RunId: "run-execution", JobId: "job", Handler: "script", CallbackToken: "secret", TimeoutSeconds: 10, Input: "payload", Http: &executorv1.HttpExecution{Headers: map[string]string{"z-last": "value", "a-first": "value"}}}
+	first, err := NewFileCompletionStore(directory, FileCompletionStoreOptions{MaxExecutions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = first.SaveExecution(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.SaveExecution(t.Context(), request); err != nil {
+		t.Fatalf("identical execution save was not idempotent: %v", err)
+	}
+	different := proto.Clone(request).(*executorv1.DispatchRequest)
+	different.Input = "different"
+	if err = first.SaveExecution(t.Context(), different); err == nil {
+		t.Fatal("different execution content overwrote existing record")
+	}
+	if err = first.SaveExecution(t.Context(), &executorv1.DispatchRequest{RunId: "run-2", JobId: "job", Handler: "script", CallbackToken: "secret", TimeoutSeconds: 10}); err == nil {
+		t.Fatal("execution capacity was not enforced")
+	}
+	restarted, err := NewFileCompletionStore(directory, FileCompletionStoreOptions{MaxExecutions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests, err := restarted.ListExecutions(t.Context())
+	if err != nil || len(requests) != 1 || !proto.Equal(requests[0], request) {
+		t.Fatalf("reloaded executions = %+v, %v", requests, err)
+	}
+	if err = restarted.SaveExecution(t.Context(), requests[0]); err != nil {
+		t.Fatalf("decoded execution with map fields was not idempotent: %v", err)
+	}
+	if err = restarted.DeleteExecution(t.Context(), request.GetRunId()); err != nil {
+		t.Fatal(err)
+	}
+	if requests, err = restarted.ListExecutions(t.Context()); err != nil || len(requests) != 0 {
+		t.Fatalf("execution remained after delete: %+v, %v", requests, err)
 	}
 }

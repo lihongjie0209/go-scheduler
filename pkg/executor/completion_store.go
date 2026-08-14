@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	executorv1 "github.com/lihongjie0209/go-scheduler/gen/executor/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 var completionRunIDPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
@@ -21,6 +25,7 @@ const (
 	completionStoreDirectoryMode = 0o700
 	completionStoreFileMode      = 0o600
 	maxCompletionRecordBytes     = 16 << 10
+	maxExecutionRecordBytes      = 4 << 20
 )
 
 type CompletionRecord struct {
@@ -37,27 +42,42 @@ type CompletionStore interface {
 	Delete(context.Context, string) error
 }
 
+type ExecutionStore interface {
+	CompletionStore
+	SaveExecution(context.Context, *executorv1.DispatchRequest) error
+	ListExecutions(context.Context) ([]*executorv1.DispatchRequest, error)
+	DeleteExecution(context.Context, string) error
+}
+
 type FileCompletionStore struct {
-	directory string
-	mu        sync.Mutex
-	pending   int
-	max       int
+	directory     string
+	mu            sync.Mutex
+	pending       int
+	max           int
+	executions    int
+	maxExecutions int
 }
 
 type FileCompletionStoreOptions struct {
-	MaxRecords int
+	MaxRecords    int
+	MaxExecutions int
 }
 
 func NewFileCompletionStore(directory string, options ...FileCompletionStoreOptions) (*FileCompletionStore, error) {
-	configuration := FileCompletionStoreOptions{MaxRecords: 10_000}
+	configuration := FileCompletionStoreOptions{MaxRecords: 10_000, MaxExecutions: 1024}
 	if len(options) > 1 {
 		return nil, errors.New("at most one completion store options value is supported")
 	}
 	if len(options) == 1 {
-		configuration = options[0]
+		if options[0].MaxRecords != 0 {
+			configuration.MaxRecords = options[0].MaxRecords
+		}
+		if options[0].MaxExecutions != 0 {
+			configuration.MaxExecutions = options[0].MaxExecutions
+		}
 	}
-	if configuration.MaxRecords < 1 {
-		return nil, errors.New("maximum completion records must be positive")
+	if configuration.MaxRecords < 1 || configuration.MaxExecutions < 1 {
+		return nil, errors.New("maximum completion and execution records must be positive")
 	}
 	directory = filepath.Clean(strings.TrimSpace(directory))
 	if directory == "." || directory == "" {
@@ -73,9 +93,9 @@ func NewFileCompletionStore(directory string, options ...FileCompletionStoreOpti
 	if err != nil {
 		return nil, fmt.Errorf("inspect completion state directory: %w", err)
 	}
-	pending := 0
+	pending, executions := 0, 0
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasPrefix(entry.Name(), ".completion-") {
+		if !entry.IsDir() && (strings.HasPrefix(entry.Name(), ".completion-") || strings.HasPrefix(entry.Name(), ".execution-")) {
 			if err = os.Remove(filepath.Join(directory, entry.Name())); err != nil { // #nosec G304 -- names come from the configured directory listing.
 				return nil, fmt.Errorf("remove interrupted completion write %q: %w", entry.Name(), err)
 			}
@@ -84,8 +104,21 @@ func NewFileCompletionStore(directory string, options ...FileCompletionStoreOpti
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
 			pending++
 		}
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".execution.pb") {
+			executions++
+		}
 	}
-	return &FileCompletionStore{directory: directory, pending: pending, max: configuration.MaxRecords}, nil
+	if pending > configuration.MaxRecords || executions > configuration.MaxExecutions {
+		return nil, fmt.Errorf("executor state exceeds configured capacity: completions=%d/%d executions=%d/%d", pending, configuration.MaxRecords, executions, configuration.MaxExecutions)
+	}
+	store := &FileCompletionStore{directory: directory, pending: pending, max: configuration.MaxRecords, executions: executions, maxExecutions: configuration.MaxExecutions}
+	if _, err = store.List(context.Background()); err != nil {
+		return nil, err
+	}
+	if _, err = store.ListExecutions(context.Background()); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func (s *FileCompletionStore) Save(ctx context.Context, record CompletionRecord) error {
@@ -224,6 +257,9 @@ func (s *FileCompletionStore) Delete(ctx context.Context, runID string) error {
 	if removed && s.pending > 0 {
 		s.pending--
 	}
+	if err := s.removeExecutionLocked(runID); err != nil {
+		return err
+	}
 	directory, err := os.Open(s.directory) // #nosec G304 -- directory is trusted operator configuration.
 	if err != nil {
 		return fmt.Errorf("open completion state directory: %w", err)
@@ -235,11 +271,172 @@ func (s *FileCompletionStore) Delete(ctx context.Context, runID string) error {
 	return nil
 }
 
+func (s *FileCompletionStore) SaveExecution(ctx context.Context, request *executorv1.DispatchRequest) error {
+	if request == nil {
+		return errors.New("execution request is required")
+	}
+	if err := validateCompletionRunID(request.GetRunId()); err != nil {
+		return err
+	}
+	if request.GetJobId() == "" || request.GetHandler() == "" || request.GetCallbackToken() == "" || request.GetTimeoutSeconds() < 1 {
+		return errors.New("execution request is incomplete")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	raw, err := (proto.MarshalOptions{Deterministic: true}).Marshal(request)
+	if err != nil {
+		return fmt.Errorf("encode execution record: %w", err)
+	}
+	if len(raw) > maxExecutionRecordBytes {
+		return errors.New("execution record exceeds size limit")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	target := s.executionPath(request.GetRunId())
+	if existing, readErr := os.ReadFile(target); readErr == nil { // #nosec G304 -- path is derived from a validated run ID.
+		if bytes.Equal(existing, raw) {
+			return nil
+		}
+		return fmt.Errorf("execution record for run %q already exists with different content", request.GetRunId())
+	} else if !errors.Is(readErr, fs.ErrNotExist) {
+		return fmt.Errorf("inspect existing execution record: %w", readErr)
+	}
+	if s.executions >= s.maxExecutions {
+		return fmt.Errorf("execution state contains %d records; maximum is %d", s.executions, s.maxExecutions)
+	}
+	if err = s.writeAtomicLocked(target, ".execution-*", raw); err != nil {
+		return err
+	}
+	s.executions++
+	return nil
+}
+
+func (s *FileCompletionStore) ListExecutions(ctx context.Context) ([]*executorv1.DispatchRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.directory)
+	if err != nil {
+		return nil, fmt.Errorf("list execution records: %w", err)
+	}
+	requests := make([]*executorv1.DispatchRequest, 0, s.executions)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".execution.pb") {
+			continue
+		}
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("execution record %q is not a readable regular file", entry.Name())
+		}
+		raw, readErr := os.ReadFile(filepath.Join(s.directory, entry.Name())) // #nosec G304 -- names come from the configured directory listing.
+		if readErr != nil {
+			return nil, fmt.Errorf("read execution record %q: %w", entry.Name(), readErr)
+		}
+		if len(raw) > maxExecutionRecordBytes {
+			return nil, fmt.Errorf("execution record %q exceeds size limit", entry.Name())
+		}
+		request := new(executorv1.DispatchRequest)
+		if unmarshalErr := proto.Unmarshal(raw, request); unmarshalErr != nil {
+			return nil, fmt.Errorf("decode execution record %q: %w", entry.Name(), unmarshalErr)
+		}
+		if err = validateCompletionRunID(request.GetRunId()); err != nil || entry.Name() != executionFileName(request.GetRunId()) {
+			return nil, fmt.Errorf("execution record %q has invalid or mismatched run ID", entry.Name())
+		}
+		requests = append(requests, request)
+	}
+	sort.Slice(requests, func(i, j int) bool { return requests[i].GetRunId() < requests[j].GetRunId() })
+	return requests, nil
+}
+
+func (s *FileCompletionStore) DeleteExecution(ctx context.Context, runID string) error {
+	if err := validateCompletionRunID(runID); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.removeExecutionLocked(runID); err != nil {
+		return err
+	}
+	return s.syncDirectoryLocked()
+}
+
+func (s *FileCompletionStore) removeExecutionLocked(runID string) error {
+	removed := false
+	if err := os.Remove(s.executionPath(runID)); err == nil {
+		removed = true
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("delete execution record: %w", err)
+	}
+	if removed && s.executions > 0 {
+		s.executions--
+	}
+	return nil
+}
+
+func (s *FileCompletionStore) writeAtomicLocked(target, pattern string, raw []byte) error {
+	temporary, err := os.CreateTemp(s.directory, pattern)
+	if err != nil {
+		return fmt.Errorf("create temporary executor state: %w", err)
+	}
+	temporaryName := temporary.Name()
+	cleanup := func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryName)
+	}
+	if err = temporary.Chmod(completionStoreFileMode); err != nil {
+		cleanup()
+		return fmt.Errorf("secure temporary executor state: %w", err)
+	}
+	if _, err = temporary.Write(raw); err != nil {
+		cleanup()
+		return fmt.Errorf("write temporary executor state: %w", err)
+	}
+	if err = temporary.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync temporary executor state: %w", err)
+	}
+	if err = temporary.Close(); err != nil {
+		_ = os.Remove(temporaryName)
+		return fmt.Errorf("close temporary executor state: %w", err)
+	}
+	if err = os.Rename(temporaryName, target); err != nil {
+		_ = os.Remove(temporaryName)
+		return fmt.Errorf("publish executor state: %w", err)
+	}
+	return s.syncDirectoryLocked()
+}
+
+func (s *FileCompletionStore) syncDirectoryLocked() error {
+	directory, err := os.Open(s.directory) // #nosec G304 -- directory is trusted operator configuration.
+	if err != nil {
+		return fmt.Errorf("open executor state directory: %w", err)
+	}
+	defer func() { _ = directory.Close() }()
+	if err = directory.Sync(); err != nil {
+		return fmt.Errorf("sync executor state directory: %w", err)
+	}
+	return nil
+}
+
 func (s *FileCompletionStore) path(runID string) string {
 	return filepath.Join(s.directory, completionFileName(runID))
 }
 
+func (s *FileCompletionStore) executionPath(runID string) string {
+	return filepath.Join(s.directory, executionFileName(runID))
+}
+
 func completionFileName(runID string) string { return runID + ".json" }
+func executionFileName(runID string) string  { return runID + ".execution.pb" }
 
 func validateCompletionRecord(record CompletionRecord) error {
 	if err := validateCompletionRunID(record.RunID); err != nil {

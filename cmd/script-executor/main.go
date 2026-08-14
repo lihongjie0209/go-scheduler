@@ -76,7 +76,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	completionStore, err := executor.NewFileCompletionStore(envOr("EXECUTOR_STATE_DIR", "./executor-state"), executor.FileCompletionStoreOptions{MaxRecords: completionMaxPending})
+	completionStore, err := executor.NewFileCompletionStore(envOr("EXECUTOR_STATE_DIR", "./executor-state"), executor.FileCompletionStoreOptions{MaxRecords: completionMaxPending, MaxExecutions: maxConcurrency})
 	if err != nil {
 		return err
 	}
@@ -113,6 +113,9 @@ func Run() error {
 		cancelDelivery()
 		executorService.WaitCompletionDelivery()
 	}()
+	if err = executorService.RecoverExecutions(ctx); err != nil {
+		return err
+	}
 	executorService.RunCompletionDelivery(deliveryCtx)
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", listen)
 	if err != nil {

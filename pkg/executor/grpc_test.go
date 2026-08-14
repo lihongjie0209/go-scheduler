@@ -66,6 +66,16 @@ type selectiveCompletionReporter struct {
 
 type failingCompletionStore struct{}
 
+type failingExecutionStore struct{ failingCompletionStore }
+
+func (*failingExecutionStore) SaveExecution(context.Context, *executorv1.DispatchRequest) error {
+	return errors.New("disk full")
+}
+func (*failingExecutionStore) ListExecutions(context.Context) ([]*executorv1.DispatchRequest, error) {
+	return nil, nil
+}
+func (*failingExecutionStore) DeleteExecution(context.Context, string) error { return nil }
+
 func (*failingCompletionStore) Save(context.Context, CompletionRecord) error {
 	return errors.New("disk full")
 }
@@ -204,6 +214,90 @@ func TestGRPCDispatchCarriesDockerRegistryCredentials(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("handler did not receive dispatched task")
+	}
+}
+
+func TestGRPCDispatchRejectsBeforeHandlerWhenExecutionCannotPersist(t *testing.T) {
+	t.Parallel()
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := make(chan struct{}, 1)
+	if err = server.Handle("runner", func(context.Context, Task) error {
+		called <- struct{}{}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewGRPCServer(server, &recordingReporter{completed: make(chan bool, 1)}, GRPCServerOptions{MaxConcurrentExecutions: 1, CompletionStore: &failingExecutionStore{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &executorv1.DispatchRequest{RunId: "run", JobId: "job", Handler: "runner", CallbackToken: "token", TimeoutSeconds: 10}
+	if _, err = service.Dispatch(t.Context(), request); status.Code(err) != codes.Unavailable {
+		t.Fatalf("Dispatch() error = %v, want unavailable", err)
+	}
+	select {
+	case <-called:
+		t.Fatal("handler ran before execution was durably accepted")
+	default:
+	}
+}
+
+func TestGRPCRecoverExecutionsFailsProcessLocalAndResumesExternal(t *testing.T) {
+	t.Parallel()
+	store, err := NewFileCompletionStore(t.TempDir(), FileCompletionStoreOptions{MaxExecutions: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := &executorv1.DispatchRequest{RunId: "local-run", JobId: "job", Handler: "runner", CallbackToken: "local-token", TimeoutSeconds: 10, ScriptLanguage: "shell"}
+	external := &executorv1.DispatchRequest{RunId: "external-run", JobId: "job", Handler: "runner", CallbackToken: "external-token", TimeoutSeconds: 10, ScriptLanguage: "docker", ExternalExecutionId: "container-id"}
+	for _, request := range []*executorv1.DispatchRequest{local, external} {
+		if err = store.SaveExecution(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server, err := NewServer(Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks := make(chan Task, 1)
+	if err = server.Handle("runner", func(_ context.Context, task Task) error {
+		tasks <- task
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reporter := &recordingReporter{completed: make(chan bool, 1)}
+	service, err := NewGRPCServer(server, reporter, GRPCServerOptions{MaxConcurrentExecutions: 2, CompletionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.RecoverExecutions(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case task := <-tasks:
+		if task.RunID != external.GetRunId() || task.ExternalExecutionID != external.GetExternalExecutionId() {
+			t.Fatalf("resumed task = %+v", task)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("external execution was not resumed")
+	}
+	service.executionWG.Wait()
+	records, err := store.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundLocalFailure := false
+	for _, record := range records {
+		if record.RunID == local.GetRunId() && !record.Succeeded && record.Token == local.GetCallbackToken() {
+			foundLocalFailure = true
+		}
+	}
+	if !foundLocalFailure {
+		t.Fatalf("local interruption was not persisted: %+v", records)
 	}
 }
 
