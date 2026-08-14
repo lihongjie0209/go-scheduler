@@ -9,3 +9,5 @@
 /bootstrap
 /.env
 /coverage.out
+__pycache__/
+*.py[cod]
