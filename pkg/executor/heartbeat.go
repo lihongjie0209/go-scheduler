@@ -31,8 +31,8 @@ func NewRegistrar(options RegistrarOptions) (*Registrar, error) {
 		return nil, errors.New("API URL must be absolute HTTP(S)")
 	}
 	address, err := url.Parse(options.Address)
-	if err != nil || address.Scheme == "" || address.Host == "" || (address.Scheme != "http" && address.Scheme != "https") {
-		return nil, errors.New("executor address must be absolute HTTP(S)")
+	if err != nil || address.Scheme == "" || address.Host == "" || (address.Scheme != "http" && address.Scheme != "https" && address.Scheme != "grpc" && address.Scheme != "grpcs") || address.User != nil {
+		return nil, errors.New("executor address must be an absolute HTTP(S) or gRPC URL")
 	}
 	if strings.TrimSpace(options.Token) == "" || strings.TrimSpace(options.GroupID) == "" || strings.TrimSpace(options.NodeID) == "" {
 		return nil, errors.New("token, group ID, and node ID are required")

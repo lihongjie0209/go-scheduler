@@ -312,6 +312,16 @@ func observeRunClaim(startedAt time.Time, count int, err error) {
 	}
 }
 
+func (e *Engine) WakeDispatch() {
+	if e == nil || e.dispatchWake == nil {
+		return
+	}
+	select {
+	case e.dispatchWake <- struct{}{}:
+	default:
+	}
+}
+
 func (e *Engine) releaseWorker(sem chan struct{}) {
 	<-sem
 	if !shouldWakeDispatcher(len(sem), cap(sem)) {

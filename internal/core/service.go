@@ -26,6 +26,7 @@ type Service struct {
 	store            *store.Store
 	executorRegistry ExecutorRegistry
 	executorControl  *ExecutorController
+	onRunTerminal    func()
 }
 
 func NewService(s *store.Store, registries ...ExecutorRegistry) *Service {
@@ -40,6 +41,16 @@ func NewServiceWithExecutorController(s *store.Store, registry ExecutorRegistry,
 	service := NewService(s, registry)
 	service.executorControl = controller
 	return service
+}
+
+func (s *Service) SetOnRunTerminal(fn func()) {
+	s.onRunTerminal = fn
+}
+
+func (s *Service) notifyRunTerminal() {
+	if s.onRunTerminal != nil {
+		s.onRunTerminal()
+	}
 }
 
 func (s *Service) CreateJob(ctx context.Context, req *schedulerv1.CreateJobRequest) (*schedulerv1.Job, error) {
@@ -470,6 +481,7 @@ func (s *Service) CompleteCallback(ctx context.Context, req *schedulerv1.Complet
 	if err := s.store.CompleteCallback(ctx, req.RunId, hash[:], req.Succeeded, req.Message); err != nil {
 		return nil, toStatus(err)
 	}
+	s.notifyRunTerminal()
 	return &schedulerv1.CompleteCallbackResponse{}, nil
 }
 
@@ -630,7 +642,7 @@ func fromProto(j *schedulerv1.Job) store.Job {
 	return out
 }
 func toProto(j store.Job) *schedulerv1.Job {
-	out := &schedulerv1.Job{Id: j.ID, TenantId: j.TenantID, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetUrl: j.TargetURL, HttpMethod: j.HTTPMethod, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupId: j.ExecutorGroupID, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels, KubernetesClusterId: j.KubernetesClusterID}
+	out := &schedulerv1.Job{Id: j.ID, TenantId: j.TenantID, Name: j.Name, Description: j.Description, ScheduleType: j.ScheduleType, ScheduleExpression: j.ScheduleExpression, Timezone: j.Timezone, TargetUrl: j.TargetURL, HttpMethod: j.HTTPMethod, Headers: j.Headers, BodyTemplate: j.BodyTemplate, TimeoutSeconds: j.TimeoutSeconds, MaxRetries: j.MaxRetries, OverlapPolicy: j.OverlapPolicy, MisfirePolicy: j.MisfirePolicy, Enabled: j.Enabled, Version: j.Version, MaxConcurrentRuns: j.MaxConcurrentRuns, MaxCatchUp: j.MaxCatchUp, CallbackTimeoutSeconds: j.CallbackTimeoutSeconds, MaxQueueSize: j.MaxQueueSize, ExecutorGroupId: j.ExecutorGroupID, ExecutorHandler: j.ExecutorHandler, ScriptLanguage: j.ScriptLanguage, ScriptSource: j.ScriptSource, RequiredExecutorLabels: j.RequiredExecutorLabels, ExcludedExecutorLabels: j.ExcludedExecutorLabels, KubernetesClusterId: j.KubernetesClusterID}
 	if j.NextRunAt != nil {
 		out.NextRunAt = timestamppb.New(*j.NextRunAt)
 	}

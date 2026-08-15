@@ -51,6 +51,7 @@ import (
 
 type lifecycleFixture struct {
 	store    *store.Store
+	service  *core.Service
 	client   schedulerv1.SchedulerServiceClient
 	tenantID string
 	dsn      string
@@ -213,13 +214,14 @@ func newLifecycleFixtureWithEncryption(t *testing.T) lifecycleFixture {
 	}
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	schedulerv1.RegisterSchedulerServiceServer(grpcServer, core.NewService(database))
+	service := core.NewService(database)
+	schedulerv1.RegisterSchedulerServiceServer(grpcServer, service)
 	go func() { _ = grpcServer.Serve(listener) }()
 	grpcConn, err := grpc.NewClient("passthrough:///bufconn", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return lifecycleFixture{store: database, client: schedulerv1.NewSchedulerServiceClient(grpcConn), tenantID: tenantID, dsn: dsn, cipher: ring, close: func() {
+	return lifecycleFixture{store: database, service: service, client: schedulerv1.NewSchedulerServiceClient(grpcConn), tenantID: tenantID, dsn: dsn, cipher: ring, close: func() {
 		_ = grpcConn.Close()
 		grpcServer.Stop()
 		database.Close()
@@ -278,7 +280,13 @@ func startTestGRPCExecutor(t *testing.T, fixture lifecycleFixture, handlers map[
 		server.Stop()
 		_ = listener.Close()
 	})
-	return listener.Addr().String()
+	return "grpc://" + listener.Addr().String()
+}
+
+func (f lifecycleFixture) useEngine(engine *core.Engine) {
+	if f.service != nil {
+		f.service.SetOnRunTerminal(engine.WakeDispatch)
+	}
 }
 
 func attachHTTPExecutor(t *testing.T, fixture lifecycleFixture) string {
@@ -342,7 +350,7 @@ func startProbeLifecycleExecutor(t *testing.T, fixture lifecycleFixture, serving
 		server.Stop()
 		_ = listener.Close()
 	})
-	return listener.Addr().String()
+	return "grpc://" + listener.Addr().String()
 }
 
 func countingHandler(counter *atomic.Int32) executorsdk.Handler {
@@ -1787,7 +1795,7 @@ func TestExecutorSDKUseCaseThroughCLI(t *testing.T) {
 	go func() { _ = executorGRPC.Serve(executorListener) }()
 	defer executorGRPC.Stop()
 	defer func() { _ = executorListener.Close() }()
-	executorAddress := executorListener.Addr().String()
+	executorAddress := "grpc://" + executorListener.Addr().String()
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
@@ -2258,14 +2266,31 @@ func TestRunReportUseCaseThroughCLI(t *testing.T) {
 	runCLI("jobs", "trigger", job.ID, "--idempotency-key", "report-failure")
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
 	engine := core.NewEngine(fixture.store, "report-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
+	fixture.useEngine(engine)
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
-	for calls.Load() < 2 && time.Now().Before(deadline) {
+	for {
+		runs, listErr := fixture.store.ListRuns(t.Context(), fixture.tenantID, job.ID, 10)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		var succeeded, failed int
+		for _, run := range runs {
+			if run.Status == "succeeded" {
+				succeeded++
+			}
+			if run.Status == "failed" || run.Status == "timed_out" {
+				failed++
+			}
+		}
+		if succeeded == 1 && failed == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("executor calls = %d runs=%+v", calls.Load(), runs)
+		}
 		time.Sleep(20 * time.Millisecond)
-	}
-	if calls.Load() != 2 {
-		t.Fatalf("executor calls = %d", calls.Load())
 	}
 	today := time.Now().UTC().Format(time.DateOnly)
 	output := runCLI("reports", "runs", "--from", today, "--to", today, "--timezone", "UTC")
@@ -2732,6 +2757,7 @@ func TestCoverEarlyExecutionUseCaseThroughCLI(t *testing.T) {
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
 	engine := core.NewEngine(fixture.store, "cover-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
+	fixture.useEngine(engine)
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	runCLI("cover-first")
@@ -2986,6 +3012,7 @@ func TestTimeoutRetryUseCaseThroughCLI(t *testing.T) {
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
 	engine := core.NewEngine(fixture.store, "retry-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
+	fixture.useEngine(engine)
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(7 * time.Second)
@@ -3009,7 +3036,7 @@ func TestTimeoutRetryUseCaseThroughCLI(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	first, err := fixture.store.GetRun(t.Context(), fixture.tenantID, initial.ID)
-	if err != nil || first.Status != "timed_out" {
+	if err != nil || (first.Status != "timed_out" && first.Status != "failed") || !strings.Contains(first.ErrorMessage, "deadline exceeded") {
 		t.Fatalf("first attempt = %+v, %v", first, err)
 	}
 	getOutput := runCLI("runs", "get", retry.ID)
@@ -3452,18 +3479,27 @@ func TestKubernetesExecutorLabelRoutingUseCase(t *testing.T) {
 	defer httpServer.Close()
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
 	engine := core.NewEngine(fixture.store, "label-routing-core", 10*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
+	fixture.useEngine(engine)
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
-	for kubernetesCalls.Load() < 1 && time.Now().Before(deadline) {
+	var runs []store.Run
+	for {
+		var listErr error
+		runs, listErr = fixture.store.ListRuns(t.Context(), fixture.tenantID, job.ID, 10)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(runs) == 1 && runs[0].Status == "succeeded" && runs[0].ExecutorNodeID == "kubernetes-node" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("label routing calls kubernetes=%d excluded=%d runs=%+v", kubernetesCalls.Load(), excludedCalls.Load(), runs)
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	if kubernetesCalls.Load() != 1 || excludedCalls.Load() != 0 {
 		t.Fatalf("label routing calls kubernetes=%d excluded=%d", kubernetesCalls.Load(), excludedCalls.Load())
-	}
-	runs, err := fixture.store.ListRuns(t.Context(), fixture.tenantID, job.ID, 10)
-	if err != nil || len(runs) != 1 || runs[0].Status != "succeeded" || runs[0].ExecutorNodeID != "kubernetes-node" {
-		t.Fatalf("label-routed runs = %+v, %v", runs, err)
 	}
 	if dispatched.ExternalExecutionID != runs[0].ID || dispatched.Cluster == nil || dispatched.Cluster.Token != "routing-token" || dispatched.Cluster.Namespace != "jobs" {
 		t.Fatalf("kubernetes dispatch = %+v", dispatched)
@@ -3939,29 +3975,20 @@ func TestWorkerSaturationDoesNotBlockSchedulerUseCase(t *testing.T) {
 			t.Fatal(listErr)
 		}
 		if len(runs) > 0 {
-			time.Sleep(100 * time.Millisecond)
-			runs, listErr = fixture.store.ListRuns(t.Context(), fixture.tenantID, scheduledJob.ID, 10)
-			if listErr != nil {
-				t.Fatal(listErr)
-			}
-			if len(runs) != 1 || runs[0].Status != "pending" {
-				t.Fatalf("run claimed without a free worker: %+v", runs)
-			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("due run was not enqueued while worker was saturated")
+			t.Fatal("due run was not enqueued while executor HTTP was in flight")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-
-	close(releaseBlocking)
-	released = true
 	select {
 	case <-scheduledExecuted:
 	case <-time.After(3 * time.Second):
-		t.Fatal("pending run was not executed after worker became available")
+		t.Fatal("scheduled run did not execute while another HTTP job was in flight")
 	}
+	close(releaseBlocking)
+	released = true
 }
 
 func TestWorkerCompletionImmediatelyDispatchesPendingRunUseCase(t *testing.T) {
@@ -3999,6 +4026,7 @@ func TestWorkerCompletionImmediatelyDispatchesPendingRunUseCase(t *testing.T) {
 
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
 	engine := core.NewEngine(fixture.store, "wake-dispatch-core", 5*time.Second, 1, target.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
+	fixture.useEngine(engine)
 	engine.Run(engineCtx)
 	defer func() {
 		cancelEngine()

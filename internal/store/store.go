@@ -686,7 +686,7 @@ func applyBlockPolicy(ctx context.Context, tx pgx.Tx, jobID, policy string) (blo
 
 func applyBlockAction(ctx context.Context, tx pgx.Tx, jobID string, action blockAction) (blockAction, error) {
 	if action == blockCancelAndEnqueue {
-		rows, err := tx.Query(ctx, `UPDATE job_runs SET status='cancelled',finished_at=now(),error_message='block strategy: covered by newer trigger',lease_owner=NULL,lease_token=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE job_id=$1 AND status IN ('pending','running','waiting_callback') RETURNING id,tenant_id,job_id,COALESCE(broadcast_group_id::text,''),reschedule_on_terminal,finished_at`, jobID)
+		rows, err := tx.Query(ctx, `UPDATE job_runs SET status='cancelled',finished_at=now(),error_message='block strategy: covered by newer trigger',lease_owner=NULL,lease_token=NULL,lease_until=NULL,callback_token_hash=NULL,callback_deadline=NULL WHERE job_id=$1 AND status IN ('pending','running','waiting_callback') RETURNING id,tenant_id,job_id,COALESCE(broadcast_group_id::text,''),reschedule_on_terminal,finished_at,COALESCE(executor_address,''),external_execution_id`, jobID)
 		if err != nil {
 			return "", fmt.Errorf("cancel covered job runs: %w", err)
 		}
@@ -697,7 +697,7 @@ func applyBlockAction(ctx context.Context, tx pgx.Tx, jobID string, action block
 		var covered []coveredRun
 		for rows.Next() {
 			var item coveredRun
-			if err = rows.Scan(&item.run.ID, &item.run.TenantID, &item.run.JobID, &item.run.BroadcastGroupID, &item.run.RescheduleOnTerminal, &item.finishedAt); err != nil {
+			if err = rows.Scan(&item.run.ID, &item.run.TenantID, &item.run.JobID, &item.run.BroadcastGroupID, &item.run.RescheduleOnTerminal, &item.finishedAt, &item.run.ExecutorAddress, &item.run.ExternalExecutionID); err != nil {
 				rows.Close()
 				return "", err
 			}
@@ -710,6 +710,11 @@ func applyBlockAction(ctx context.Context, tx pgx.Tx, jobID string, action block
 		for _, item := range covered {
 			if err = emitRunLifecycleEventTx(ctx, tx, item.run.ID, "cancelled"); err != nil {
 				return "", err
+			}
+			if item.run.ExecutorAddress != "" {
+				if err = enqueueExecutorCancellationTx(ctx, tx, item.run, "block strategy: covered by newer trigger"); err != nil {
+					return "", err
+				}
 			}
 			if err = rearmFixedDelay(ctx, tx, item.run, item.finishedAt); err != nil {
 				return "", err
