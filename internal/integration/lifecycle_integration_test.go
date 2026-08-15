@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -41,6 +42,8 @@ import (
 	"google.golang.org/grpc/balancer/roundrobin"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -233,6 +236,122 @@ func createDisabledJob(t *testing.T, fixture lifecycleFixture) store.Job {
 	return job
 }
 
+func createHTTPExecutorGroup(t *testing.T, fixture lifecycleFixture) *schedulerv1.ExecutorGroup {
+	t.Helper()
+	group, err := fixture.client.CreateExecutorGroup(t.Context(), &schedulerv1.CreateExecutorGroupRequest{Group: &schedulerv1.ExecutorGroup{TenantId: fixture.tenantID, Name: "http-" + strings.ReplaceAll(t.Name(), "/", "-"), RouteStrategy: "round"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return group
+}
+
+func startTestGRPCExecutor(t *testing.T, fixture lifecycleFixture, handlers map[string]executorsdk.Handler) string {
+	t.Helper()
+	sdk, err := executorsdk.NewServer(executorsdk.Options{SchedulerURL: "http://scheduler.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, handler := range handlers {
+		if err = sdk.Handle(name, handler); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reporter, err := executorsdk.NewGRPCReporter(fixture.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := executorsdk.NewGRPCServer(sdk, reporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	executorv1.RegisterExecutorServiceServer(server, service)
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	healthpb.RegisterHealthServer(server, healthServer)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	return listener.Addr().String()
+}
+
+func attachHTTPExecutor(t *testing.T, fixture lifecycleFixture) string {
+	t.Helper()
+	group := createHTTPExecutorGroup(t, fixture)
+	address := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"__http__": executorsdk.HTTPHandler(nil)})
+	if _, err := fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.Id, "http-node", address, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	return group.Id
+}
+
+type routingProbeExecutor struct {
+	executorv1.UnimplementedExecutorServiceServer
+	reporter executorsdk.Reporter
+	calls    *atomic.Int32
+	busy     bool
+}
+
+func (p *routingProbeExecutor) Dispatch(_ context.Context, req *executorv1.DispatchRequest) (*executorv1.DispatchResponse, error) {
+	p.calls.Add(1)
+	go func() {
+		_ = p.reporter.Complete(context.Background(), req.GetRunId(), req.GetCallbackToken(), true, "")
+	}()
+	return &executorv1.DispatchResponse{Accepted: true, ExecutionId: req.GetRunId(), State: "running"}, nil
+}
+
+func (p *routingProbeExecutor) Inspect(context.Context, *executorv1.InspectRequest) (*executorv1.ExecutionState, error) {
+	state := "idle"
+	if p.busy {
+		state = "busy"
+	}
+	return &executorv1.ExecutionState{State: state}, nil
+}
+
+func (p *routingProbeExecutor) Cancel(context.Context, *executorv1.CancelRequest) (*executorv1.CancelResponse, error) {
+	return &executorv1.CancelResponse{Accepted: true}, nil
+}
+
+func startProbeLifecycleExecutor(t *testing.T, fixture lifecycleFixture, serving, busy bool, calls *atomic.Int32) string {
+	t.Helper()
+	reporter, err := executorsdk.NewGRPCReporter(fixture.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	executorv1.RegisterExecutorServiceServer(server, &routingProbeExecutor{reporter: reporter, calls: calls, busy: busy})
+	healthServer := health.NewServer()
+	status := healthpb.HealthCheckResponse_NOT_SERVING
+	if serving {
+		status = healthpb.HealthCheckResponse_SERVING
+	}
+	healthServer.SetServingStatus("", status)
+	healthpb.RegisterHealthServer(server, healthServer)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	return listener.Addr().String()
+}
+
+func countingHandler(counter *atomic.Int32) executorsdk.Handler {
+	return func(context.Context, executorsdk.Task) error {
+		counter.Add(1)
+		return nil
+	}
+}
+
 func createPolicyJob(t *testing.T, fixture lifecycleFixture, name, policy string) store.Job {
 	t.Helper()
 	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: name, ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: "https://example.com", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: policy, MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
@@ -371,10 +490,12 @@ func TestCrossModuleJobCRUDThroughGRPC(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
 
+	group := createHTTPExecutorGroup(t, fixture)
 	created, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{
 		TenantId: fixture.tenantID, Name: "grpc-crud", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC",
 		TargetUrl: "https://example.com/jobs", HttpMethod: "POST", TimeoutSeconds: 30, OverlapPolicy: "serial",
 		MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 3600, MaxQueueSize: 1000,
+		ExecutorGroupId: group.Id, ExecutorHandler: "__http__",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -412,10 +533,12 @@ func TestCrossModuleJobCRUDThroughGRPC(t *testing.T) {
 func TestCrossModuleCronSchedulingThroughGRPC(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
+	group := createHTTPExecutorGroup(t, fixture)
 	created, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{
 		TenantId: fixture.tenantID, Name: "grpc-cron", ScheduleType: "cron", ScheduleExpression: "0/1 * * * * ?", Timezone: "Asia/Shanghai",
 		TargetUrl: "https://example.com/cron", HttpMethod: "POST", TimeoutSeconds: 30, OverlapPolicy: "parallel",
 		MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 3600, MaxQueueSize: 10, Enabled: true,
+		ExecutorGroupId: group.Id, ExecutorHandler: "__http__",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -449,7 +572,8 @@ func TestCrossModuleCronSchedulingThroughGRPC(t *testing.T) {
 func TestCrossModuleQuartzCalendarSchedulingThroughGRPC(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
-	created, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "grpc-quartz-last-weekday", ScheduleType: "cron", ScheduleExpression: "0 0 9 LW * ?", Timezone: "UTC", TargetUrl: "https://example.com/quartz", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 30, MaxQueueSize: 10, Enabled: true}})
+	group := createHTTPExecutorGroup(t, fixture)
+	created, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "grpc-quartz-last-weekday", ScheduleType: "cron", ScheduleExpression: "0 0 9 LW * ?", Timezone: "UTC", TargetUrl: "https://example.com/quartz", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 30, MaxQueueSize: 10, Enabled: true, ExecutorGroupId: group.Id, ExecutorHandler: "__http__"}})
 	if err != nil || created.NextRunAt == nil {
 		t.Fatalf("created quartz = %+v, %v", created, err)
 	}
@@ -464,7 +588,7 @@ func TestCrossModuleQuartzCalendarSchedulingThroughGRPC(t *testing.T) {
 	if err != nil || loaded.ScheduleExpression != "0 0 9 LW * ?" || !loaded.NextRunAt.AsTime().Equal(created.NextRunAt.AsTime()) {
 		t.Fatalf("loaded quartz = %+v, %v", loaded, err)
 	}
-	_, err = fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "invalid-quartz", ScheduleType: "cron", ScheduleExpression: "0 0 9 ? * 2#6", Timezone: "UTC", TargetUrl: "https://example.com/quartz", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 30, MaxQueueSize: 10}})
+	_, err = fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "invalid-quartz", ScheduleType: "cron", ScheduleExpression: "0 0 9 ? * 2#6", Timezone: "UTC", TargetUrl: "https://example.com/quartz", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 30, MaxQueueSize: 10, ExecutorGroupId: group.Id, ExecutorHandler: "__http__"}})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("invalid Quartz code=%s err=%v", status.Code(err), err)
 	}
@@ -499,11 +623,13 @@ func TestCrossModuleMisfirePoliciesThroughGRPC(t *testing.T) {
 	defer direct.Close(t.Context())
 
 	jobs := make(map[string]*schedulerv1.Job, 3)
+	group := createHTTPExecutorGroup(t, fixture)
 	for _, policy := range []string{"skip", "fire_once", "catch_up"} {
 		created, createErr := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{
 			TenantId: fixture.tenantID, Name: "grpc-misfire-" + policy, ScheduleType: "fixed_rate", ScheduleExpression: "1", Timezone: "UTC",
 			TargetUrl: "https://example.com/misfire", HttpMethod: "POST", TimeoutSeconds: 30, OverlapPolicy: "parallel",
 			MisfirePolicy: policy, MaxConcurrentRuns: 1, MaxCatchUp: 3, CallbackTimeoutSeconds: 3600, MaxQueueSize: 10, Enabled: true,
+			ExecutorGroupId: group.Id, ExecutorHandler: "__http__",
 		}})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -582,9 +708,17 @@ func TestCrossModuleTriggerAddressOverrideThroughGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, node := range []struct{ id, address string }{{"worker-a", "http://worker-a:9999"}, {"worker-b", "http://worker-b:9999"}} {
+		if _, err = fixture.client.RegisterExecutorNode(t.Context(), &schedulerv1.RegisterExecutorNodeRequest{TenantId: fixture.tenantID, GroupId: group.Id, NodeId: node.id, Address: node.address, TtlSeconds: 30}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	job, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "override-cross-job", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 2, MaxCatchUp: 10, CallbackTimeoutSeconds: 30, MaxQueueSize: 10, ExecutorGroupId: group.Id, ExecutorHandler: "override.handler"}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err = fixture.client.TriggerJob(t.Context(), &schedulerv1.TriggerJobRequest{TenantId: fixture.tenantID, JobId: job.Id, IdempotencyKey: "override-rejected", OverrideAddresses: []string{"http://evil:9999"}}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unregistered override code = %s, want InvalidArgument: %v", status.Code(err), err)
 	}
 	addresses := []string{"http://worker-b:9999/", "http://worker-a:9999", "http://worker-a:9999/"}
 	run, err := fixture.client.TriggerJob(t.Context(), &schedulerv1.TriggerJobRequest{TenantId: fixture.tenantID, JobId: job.Id, IdempotencyKey: "override-cross", Input: "payload", OverrideAddresses: addresses})
@@ -657,7 +791,8 @@ func TestCrossModuleRunLogsThroughGRPC(t *testing.T) {
 func TestCrossModuleFixedDelayThroughGRPC(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
-	created, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "grpc-fixed-delay", ScheduleType: "fixed_delay", ScheduleExpression: "2", Timezone: "UTC", TargetUrl: "https://example.com", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 3600, MaxQueueSize: 10, Enabled: true}})
+	group := createHTTPExecutorGroup(t, fixture)
+	created, err := fixture.client.CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{TenantId: fixture.tenantID, Name: "grpc-fixed-delay", ScheduleType: "fixed_delay", ScheduleExpression: "2", Timezone: "UTC", TargetUrl: "https://example.com", HttpMethod: "POST", TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 3600, MaxQueueSize: 10, Enabled: true, ExecutorGroupId: group.Id, ExecutorHandler: "__http__"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1267,7 +1402,7 @@ func TestCrossModuleExecutorSDKHeartbeatThroughAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	registrar, err := executorsdk.NewRegistrar(executorsdk.RegistrarOptions{APIURL: httpServer.URL, Token: token, GroupID: group.Id, NodeID: "sdk-node", Address: "http://sdk-executor:9999", TTL: 6 * time.Second, HTTPClient: httpServer.Client()})
 	if err != nil {
@@ -1397,7 +1532,7 @@ func TestJobLifecycleUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 
 	root, err := filepath.Abs("../..")
@@ -1457,7 +1592,7 @@ func TestSchedulePreviewUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -1509,7 +1644,8 @@ func TestMultiCoreFailoverUseCaseThroughCLI(t *testing.T) {
 	var executions atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { executions.Add(1); w.WriteHeader(http.StatusNoContent) }))
 	defer target.Close()
-	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "ha-e2e", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 2, MaxQueueSize: 10, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "ha-e2e", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 2, MaxQueueSize: 10, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1521,7 +1657,7 @@ func TestMultiCoreFailoverUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -1539,8 +1675,8 @@ func TestMultiCoreFailoverUseCaseThroughCLI(t *testing.T) {
 	}
 	engineCtx1, cancelEngine1 := context.WithCancel(t.Context())
 	engineCtx2, cancelEngine2 := context.WithCancel(t.Context())
-	engine1 := core.NewEngine(first.store, "ha-core-1", 10*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(target.Client()))
-	engine2 := core.NewEngine(second.store, "ha-core-2", 10*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(target.Client()))
+	engine1 := core.NewEngine(first.store, "ha-core-1", 10*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
+	engine2 := core.NewEngine(second.store, "ha-core-2", 10*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine1.Run(engineCtx1)
 	engine2.Run(engineCtx2)
 	defer func() { cancelEngine1(); cancelEngine2(); engine1.Wait(); engine2.Wait() }()
@@ -1615,7 +1751,7 @@ func TestExecutorSDKUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	sdk, err := executorsdk.NewServer(executorsdk.Options{SchedulerURL: httpServer.URL, HTTPClient: httpServer.Client()})
 	if err != nil {
@@ -1634,8 +1770,24 @@ func TestExecutorSDKUseCaseThroughCLI(t *testing.T) {
 	if err = sdk.Handle("__script__", executorsdk.ScriptHandler(executorsdk.ScriptOptions{Languages: []string{"shell", "python", "nodejs", "php", "powershell"}})); err != nil {
 		t.Fatal(err)
 	}
-	executorHTTP := httptest.NewServer(sdk)
-	defer executorHTTP.Close()
+	reporter, err := executorsdk.NewGRPCReporter(fixture.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpcService, err := executorsdk.NewGRPCServer(sdk, reporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executorListener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executorGRPC := grpc.NewServer()
+	executorv1.RegisterExecutorServiceServer(executorGRPC, grpcService)
+	go func() { _ = executorGRPC.Serve(executorListener) }()
+	defer executorGRPC.Stop()
+	defer func() { _ = executorListener.Close() }()
+	executorAddress := executorListener.Addr().String()
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
@@ -1663,7 +1815,7 @@ func TestExecutorSDKUseCaseThroughCLI(t *testing.T) {
 	if err = json.Unmarshal(groupOutput, &group); err != nil || group.ID == "" {
 		t.Fatalf("group=%s %v", groupOutput, err)
 	}
-	registrar, err := executorsdk.NewRegistrar(executorsdk.RegistrarOptions{APIURL: httpServer.URL, Token: token, GroupID: group.ID, NodeID: "sdk-e2e-node", Address: executorHTTP.URL, TTL: 6 * time.Second, HTTPClient: httpServer.Client()})
+	registrar, err := executorsdk.NewRegistrar(executorsdk.RegistrarOptions{APIURL: httpServer.URL, Token: token, GroupID: group.ID, NodeID: "sdk-e2e-node", Address: executorAddress, TTL: 6 * time.Second, HTTPClient: httpServer.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1704,7 +1856,7 @@ func TestExecutorSDKUseCaseThroughCLI(t *testing.T) {
 		t.Fatalf("run=%s %v", triggerOutput, err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "sdk-e2e-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(executorHTTP.Client()))
+	engine := core.NewEngine(fixture.store, "sdk-e2e-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("sdk-e2e-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	select {
@@ -1858,7 +2010,7 @@ func TestPowerShellScriptExecutorImageUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	apiServer := &http.Server{Handler: apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes(), ReadHeaderTimeout: time.Second}
+	apiServer := &http.Server{Handler: apihttp.NewServer(fixture.client, manager, false).Routes(), ReadHeaderTimeout: time.Second}
 	go func() { _ = apiServer.Serve(listener) }()
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1969,28 +2121,8 @@ func TestManualExecutorGroupUseCaseThroughCLI(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
 	var firstCalls, secondCalls atomic.Int32
-	newExecutor := func(calls *atomic.Int32) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/run" {
-				http.NotFound(w, r)
-				return
-			}
-			var payload struct {
-				Handler string `json:"handler"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Handler != "manual.handler" {
-				t.Errorf("executor payload=%+v err=%v", payload, err)
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			calls.Add(1)
-			w.WriteHeader(http.StatusNoContent)
-		}))
-	}
-	firstExecutor := newExecutor(&firstCalls)
-	defer firstExecutor.Close()
-	secondExecutor := newExecutor(&secondCalls)
-	defer secondExecutor.Close()
+	firstExecutor := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"manual.handler": countingHandler(&firstCalls)})
+	secondExecutor := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"manual.handler": countingHandler(&secondCalls)})
 	_, token, err := fixture.store.CreateAPIKey(t.Context(), fixture.tenantID, "manual-executor-e2e", "developer")
 	if err != nil {
 		t.Fatal(err)
@@ -1999,7 +2131,7 @@ func TestManualExecutorGroupUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2023,7 +2155,7 @@ func TestManualExecutorGroupUseCaseThroughCLI(t *testing.T) {
 		}
 		return output
 	}
-	groupOutput := runCLI("", "executors", "groups", "create", "--name", "manual-e2e", "--strategy", "first", "--mode", "manual", "--address", firstExecutor.URL)
+	groupOutput := runCLI("", "executors", "groups", "create", "--name", "manual-e2e", "--strategy", "first", "--mode", "manual", "--address", firstExecutor)
 	var group struct {
 		ID      string `json:"id"`
 		Version string `json:"version"`
@@ -2041,7 +2173,7 @@ func TestManualExecutorGroupUseCaseThroughCLI(t *testing.T) {
 		t.Fatalf("job output=%s err=%v", jobOutput, err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "manual-e2e-core", 10*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "manual-e2e-core", 10*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	runCLI("", "jobs", "trigger", job.ID, "--idempotency-key", "manual-first")
@@ -2056,7 +2188,7 @@ func TestManualExecutorGroupUseCaseThroughCLI(t *testing.T) {
 		}
 	}
 	waitFor(&firstCalls, 1)
-	updatedOutput := runCLI("", "executors", "groups", "update", group.ID, "--name", "manual-e2e", "--strategy", "first", "--mode", "manual", "--address", secondExecutor.URL, "--version", group.Version)
+	updatedOutput := runCLI("", "executors", "groups", "update", group.ID, "--name", "manual-e2e", "--strategy", "first", "--mode", "manual", "--address", secondExecutor, "--version", group.Version)
 	var updatedGroup struct {
 		Version string `json:"version"`
 	}
@@ -2088,7 +2220,8 @@ func TestRunReportUseCaseThroughCLI(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer target.Close()
-	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "report-e2e", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, MaxRetries: 0, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 2, MaxQueueSize: 10, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "report-e2e", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, MaxRetries: 0, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 2, MaxQueueSize: 10, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2100,7 +2233,7 @@ func TestRunReportUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2124,7 +2257,7 @@ func TestRunReportUseCaseThroughCLI(t *testing.T) {
 	runCLI("jobs", "trigger", job.ID, "--idempotency-key", "report-success")
 	runCLI("jobs", "trigger", job.ID, "--idempotency-key", "report-failure")
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "report-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(target.Client()))
+	engine := core.NewEngine(fixture.store, "report-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -2181,7 +2314,7 @@ func TestJobCRUDUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2198,7 +2331,8 @@ func TestJobCRUDUseCaseThroughCLI(t *testing.T) {
 		command.Stdin = bytes.NewReader(input)
 		return command.CombinedOutput()
 	}
-	definition := []byte(`{"name":"crud-e2e","description":"created","schedule_type":"fixed_interval","schedule_expression":"60","timezone":"UTC","target_url":"https://example.com/jobs","http_method":"POST","headers":{"X-Source":"cli"},"timeout_seconds":30,"max_retries":1,"overlap_policy":"serial","misfire_policy":"fire_once","max_concurrent_runs":1,"max_catch_up":10,"callback_timeout_seconds":3600,"max_queue_size":1000,"enabled":false}`)
+	groupID := attachHTTPExecutor(t, fixture)
+	definition := []byte(fmt.Sprintf(`{"name":"crud-e2e","description":"created","schedule_type":"fixed_interval","schedule_expression":"60","timezone":"UTC","target_url":"https://example.com/jobs","http_method":"POST","headers":{"X-Source":"cli"},"timeout_seconds":30,"max_retries":1,"overlap_policy":"serial","misfire_policy":"fire_once","max_concurrent_runs":1,"max_catch_up":10,"callback_timeout_seconds":3600,"max_queue_size":1000,"executor_group_id":%q,"enabled":false}`, groupID))
 	createdOutput, err := runCLI(definition, "jobs", "create", "--file", "-")
 	if err != nil {
 		t.Fatalf("create job: %v\n%s", err, createdOutput)
@@ -2267,7 +2401,8 @@ func TestManualTriggerIdempotencyUseCaseThroughCLI(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer target.Close()
-	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "manual-idempotency-e2e", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, BodyTemplate: "{{input}}", TimeoutSeconds: 5, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "manual-idempotency-e2e", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, BodyTemplate: "{{input}}", TimeoutSeconds: 5, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2279,7 +2414,7 @@ func TestManualTriggerIdempotencyUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2313,7 +2448,7 @@ func TestManualTriggerIdempotencyUseCaseThroughCLI(t *testing.T) {
 		t.Fatalf("trigger outputs differ: %s\n%s", firstOutput, secondOutput)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "manual-trigger-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "manual-trigger-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	select {
@@ -2367,7 +2502,7 @@ func TestAsyncCallbackRetryUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2388,7 +2523,8 @@ func TestAsyncCallbackRetryUseCaseThroughCLI(t *testing.T) {
 		}
 		return output
 	}
-	definition, err := json.Marshal(map[string]any{"name": "callback-retry-e2e", "schedule_type": "fixed_rate", "schedule_expression": "60", "timezone": "UTC", "target_url": target.URL, "http_method": "POST", "timeout_seconds": 5, "max_retries": 1, "overlap_policy": "parallel", "misfire_policy": "fire_once", "max_concurrent_runs": 1, "max_catch_up": 10, "callback_timeout_seconds": 10, "max_queue_size": 10, "enabled": false})
+	groupID := attachHTTPExecutor(t, fixture)
+	definition, err := json.Marshal(map[string]any{"name": "callback-retry-e2e", "schedule_type": "fixed_rate", "schedule_expression": "60", "timezone": "UTC", "target_url": target.URL, "http_method": "POST", "timeout_seconds": 5, "max_retries": 1, "overlap_policy": "parallel", "misfire_policy": "fire_once", "max_concurrent_runs": 1, "max_catch_up": 10, "callback_timeout_seconds": 10, "max_queue_size": 10, "enabled": false, "executor_group_id": groupID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2401,7 +2537,7 @@ func TestAsyncCallbackRetryUseCaseThroughCLI(t *testing.T) {
 	}
 	runCLI(nil, "jobs", "trigger", created.ID, "--idempotency-key", "callback-e2e", "--input", "payload")
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "callback-e2e-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "callback-e2e-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	waitDispatch := func() callbackDispatch {
@@ -2495,7 +2631,7 @@ func TestBlockPolicyUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2562,7 +2698,8 @@ func TestCoverEarlyExecutionUseCaseThroughCLI(t *testing.T) {
 		_, _ = w.Write([]byte("replacement completed"))
 	}))
 	defer target.Close()
-	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-cover-execution", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: "cover_early", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-cover-execution", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: "cover_early", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2574,7 +2711,7 @@ func TestCoverEarlyExecutionUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2594,7 +2731,7 @@ func TestCoverEarlyExecutionUseCaseThroughCLI(t *testing.T) {
 		}
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "cover-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(target.Client()))
+	engine := core.NewEngine(fixture.store, "cover-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	runCLI("cover-first")
@@ -2641,7 +2778,8 @@ func TestCancelRunningUseCaseThroughCLI(t *testing.T) {
 		close(cancelled)
 	}))
 	defer target.Close()
-	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-cancel-running", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-cancel-running", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2653,7 +2791,7 @@ func TestCancelRunningUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2677,7 +2815,7 @@ func TestCancelRunningUseCaseThroughCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "cancel-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(target.Client()))
+	engine := core.NewEngine(fixture.store, "cancel-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	select {
@@ -2717,11 +2855,12 @@ func TestJobDependencyUseCaseThroughCLI(t *testing.T) {
 		_, _ = w.Write([]byte("done"))
 	}))
 	defer target.Close()
-	parent, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-parent", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	parent, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-parent", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-child", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
+	child, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-child", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 30, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2733,7 +2872,7 @@ func TestJobDependencyUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2768,7 +2907,7 @@ func TestJobDependencyUseCaseThroughCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "dependency-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(target.Client()))
+	engine := core.NewEngine(fixture.store, "dependency-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -2804,7 +2943,8 @@ func TestTimeoutRetryUseCaseThroughCLI(t *testing.T) {
 		_, _ = w.Write([]byte("retry succeeded"))
 	}))
 	defer target.Close()
-	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-timeout-retry", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 1, MaxRetries: 1, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "cli-timeout-retry", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 1, MaxRetries: 1, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2816,7 +2956,7 @@ func TestTimeoutRetryUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2845,7 +2985,7 @@ func TestTimeoutRetryUseCaseThroughCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "retry-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(target.Client()))
+	engine := core.NewEngine(fixture.store, "retry-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(7 * time.Second)
@@ -2883,31 +3023,21 @@ func TestExecutorRoutingStrategiesUseCaseThroughCLI(t *testing.T) {
 	defer fixture.close()
 	var nodeARequests atomic.Int32
 	var nodeBRequests atomic.Int32
-	newExecutor := func(counter *atomic.Int32) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/run" {
-				t.Errorf("executor request = %s %s", r.Method, r.URL.Path)
+	routingHandlers := func(counter *atomic.Int32) map[string]executorsdk.Handler {
+		handlers := map[string]executorsdk.Handler{}
+		for _, name := range []string{"billing.sync", "first", "last", "random", "hash", "lfu", "lru"} {
+			handlers[name] = func(_ context.Context, task executorsdk.Task) error {
+				if task.RunID == "" || task.HTTP == nil && task.Input == "" {
+					t.Errorf("executor task = %+v", task)
+				}
+				counter.Add(1)
+				return nil
 			}
-			var request struct {
-				RunID   string `json:"run_id"`
-				Handler string `json:"handler"`
-				Input   string `json:"input"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				t.Error(err)
-			}
-			if request.RunID == "" || request.Handler == "" || request.Input == "" {
-				t.Errorf("executor payload = %+v", request)
-			}
-			counter.Add(1)
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("done"))
-		}))
+		}
+		return handlers
 	}
-	nodeA := newExecutor(&nodeARequests)
-	defer nodeA.Close()
-	nodeB := newExecutor(&nodeBRequests)
-	defer nodeB.Close()
+	nodeA := startTestGRPCExecutor(t, fixture, routingHandlers(&nodeARequests))
+	nodeB := startTestGRPCExecutor(t, fixture, routingHandlers(&nodeBRequests))
 	_, token, err := fixture.store.CreateAPIKey(t.Context(), fixture.tenantID, "executor-e2e", "developer")
 	if err != nil {
 		t.Fatal(err)
@@ -2916,7 +3046,7 @@ func TestExecutorRoutingStrategiesUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -2944,8 +3074,8 @@ func TestExecutorRoutingStrategiesUseCaseThroughCLI(t *testing.T) {
 	if err = json.Unmarshal(groupOutput, &group); err != nil || group.ID == "" {
 		t.Fatalf("group output = %s, %v", groupOutput, err)
 	}
-	runCLI("executors", "register", group.ID, "node-a", "--address", nodeA.URL, "--ttl", "30")
-	runCLI("executors", "register", group.ID, "node-b", "--address", nodeB.URL, "--ttl", "30")
+	runCLI("executors", "register", group.ID, "node-a", "--address", nodeA, "--ttl", "30")
+	runCLI("executors", "register", group.ID, "node-b", "--address", nodeB, "--ttl", "30")
 	nodesOutput := runCLI("executors", "list", group.ID)
 	if !bytes.Contains(nodesOutput, []byte("node-a")) || !bytes.Contains(nodesOutput, []byte("node-b")) {
 		t.Fatalf("nodes output = %s", nodesOutput)
@@ -2957,7 +3087,7 @@ func TestExecutorRoutingStrategiesUseCaseThroughCLI(t *testing.T) {
 	runCLI("jobs", "trigger", job.ID, "--idempotency-key", "route-a", "--input", "first")
 	runCLI("jobs", "trigger", job.ID, "--idempotency-key", "route-b", "--input", "second")
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "routing-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "routing-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -2996,8 +3126,8 @@ func TestExecutorRoutingStrategiesUseCaseThroughCLI(t *testing.T) {
 		if unmarshalErr := json.Unmarshal(output, &strategyGroup); unmarshalErr != nil || strategyGroup.ID == "" {
 			t.Fatalf("%s group output = %s, %v", strategy, output, unmarshalErr)
 		}
-		runCLI("executors", "register", strategyGroup.ID, "node-a", "--address", nodeA.URL, "--ttl", "30")
-		runCLI("executors", "register", strategyGroup.ID, "node-b", "--address", nodeB.URL, "--ttl", "30")
+		runCLI("executors", "register", strategyGroup.ID, "node-a", "--address", nodeA, "--ttl", "30")
+		runCLI("executors", "register", strategyGroup.ID, "node-b", "--address", nodeB, "--ttl", "30")
 		strategyJob, createErr := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "executor-" + strategy, ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, ExecutorGroupID: strategyGroup.ID, ExecutorHandler: strategy, Enabled: false})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3100,7 +3230,7 @@ func TestExecutorRoutingDatabaseWaitHonorsRunTimeout(t *testing.T) {
 	}
 
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "routing-timeout-core", 20*time.Millisecond, 1, "http://api.invalid", 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "routing-timeout-core", 20*time.Millisecond, 1, "http://api.invalid", 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() {
 		cancelEngine()
@@ -3130,20 +3260,8 @@ func TestTriggerAddressOverrideUseCaseThroughCLI(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
 	var firstCalls, secondCalls atomic.Int32
-	newOverrideExecutor := func(calls *atomic.Int32) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/run" {
-				http.NotFound(w, r)
-				return
-			}
-			calls.Add(1)
-			w.WriteHeader(http.StatusNoContent)
-		}))
-	}
-	first := newOverrideExecutor(&firstCalls)
-	defer first.Close()
-	second := newOverrideExecutor(&secondCalls)
-	defer second.Close()
+	first := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"override.handler": countingHandler(&firstCalls)})
+	second := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"override.handler": countingHandler(&secondCalls)})
 	_, token, err := fixture.store.CreateAPIKey(t.Context(), fixture.tenantID, "override-e2e", "developer")
 	if err != nil {
 		t.Fatal(err)
@@ -3152,7 +3270,7 @@ func TestTriggerAddressOverrideUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -3182,15 +3300,17 @@ func TestTriggerAddressOverrideUseCaseThroughCLI(t *testing.T) {
 	}
 	runCLI("executors", "register", group.ID, "broken-a", "--address", "http://127.0.0.1:1", "--ttl", "30")
 	runCLI("executors", "register", group.ID, "broken-b", "--address", "http://127.0.0.1:2", "--ttl", "30")
+	runCLI("executors", "register", group.ID, "override-a", "--address", first, "--ttl", "30")
+	runCLI("executors", "register", group.ID, "override-b", "--address", second, "--ttl", "30")
 	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "override-e2e-job", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 2, MaxQueueSize: 10, ExecutorGroupID: group.ID, ExecutorHandler: "override.handler", Enabled: false})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, key := range []string{"override-a", "override-b"} {
-		runCLI("jobs", "trigger", job.ID, "--idempotency-key", key, "--address", first.URL+"/", "--address", second.URL)
+		runCLI("jobs", "trigger", job.ID, "--idempotency-key", key, "--address", first, "--address", second)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "override-e2e-core", 10*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "override-e2e-core", 10*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -3201,7 +3321,7 @@ func TestTriggerAddressOverrideUseCaseThroughCLI(t *testing.T) {
 		t.Fatalf("override ROUND calls first=%d second=%d", firstCalls.Load(), secondCalls.Load())
 	}
 	runsOutput := runCLI("runs", "--job", job.ID)
-	if !bytes.Contains(runsOutput, []byte(first.URL)) || !bytes.Contains(runsOutput, []byte(second.URL)) || !bytes.Contains(runsOutput, []byte("override_addresses")) || bytes.Contains(runsOutput, []byte("127.0.0.1:1")) {
+	if !bytes.Contains(runsOutput, []byte(first)) || !bytes.Contains(runsOutput, []byte(second)) || !bytes.Contains(runsOutput, []byte("override_addresses")) || bytes.Contains(runsOutput, []byte("127.0.0.1:1")) {
 		t.Fatalf("override runs=%s", runsOutput)
 	}
 }
@@ -3210,40 +3330,8 @@ func TestExecutorActiveRoutingUseCaseThroughCLI(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
 	var rejectedRuns, acceptedRuns atomic.Int32
-	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			w.WriteHeader(http.StatusServiceUnavailable)
-		case "/idle":
-			w.WriteHeader(http.StatusConflict)
-		case "/run":
-			rejectedRuns.Add(1)
-			w.WriteHeader(http.StatusOK)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer first.Close()
-	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			w.WriteHeader(http.StatusNoContent)
-		case "/idle":
-			var body struct {
-				JobID string `json:"job_id"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.JobID == "" {
-				t.Errorf("idle body = %+v, %v", body, err)
-			}
-			w.WriteHeader(http.StatusOK)
-		case "/run":
-			acceptedRuns.Add(1)
-			w.WriteHeader(http.StatusOK)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer second.Close()
+	first := startProbeLifecycleExecutor(t, fixture, false, true, &rejectedRuns)
+	second := startProbeLifecycleExecutor(t, fixture, true, false, &acceptedRuns)
 	_, token, err := fixture.store.CreateAPIKey(t.Context(), fixture.tenantID, "active-routing-e2e", "developer")
 	if err != nil {
 		t.Fatal(err)
@@ -3252,7 +3340,7 @@ func TestExecutorActiveRoutingUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -3282,8 +3370,8 @@ func TestExecutorActiveRoutingUseCaseThroughCLI(t *testing.T) {
 		if err = json.Unmarshal(output, &group); err != nil {
 			t.Fatal(err)
 		}
-		runCLI("executors", "register", group.ID, "node-a", "--address", first.URL, "--ttl", "30")
-		runCLI("executors", "register", group.ID, "node-b", "--address", second.URL, "--ttl", "30")
+		runCLI("executors", "register", group.ID, "node-a", "--address", first, "--ttl", "30")
+		runCLI("executors", "register", group.ID, "node-b", "--address", second, "--ttl", "30")
 		job, createErr := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "active-" + strategy, ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, ExecutorGroupID: group.ID, ExecutorHandler: strategy, Enabled: false})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3292,7 +3380,7 @@ func TestExecutorActiveRoutingUseCaseThroughCLI(t *testing.T) {
 		runCLI("jobs", "trigger", job.ID, "--idempotency-key", strategy, "--input", strategy)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "active-routing-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "active-routing-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -3325,36 +3413,24 @@ func TestKubernetesExecutorLabelRoutingUseCase(t *testing.T) {
 	defer fixture.close()
 	var kubernetesCalls, excludedCalls atomic.Int32
 	var dispatched struct {
-		ExternalExecutionID string                               `json:"external_execution_id"`
-		Cluster             *executorsdk.KubernetesClusterConfig `json:"kubernetes_cluster"`
+		ExternalExecutionID string
+		Cluster             *executorsdk.KubernetesClusterConfig
 	}
-	newExecutor := func(calls *atomic.Int32) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/run" {
-				http.NotFound(w, r)
-				return
-			}
-			calls.Add(1)
-			if calls == &kubernetesCalls {
-				if err := json.NewDecoder(r.Body).Decode(&dispatched); err != nil {
-					t.Errorf("decode kubernetes dispatch: %v", err)
-				}
-			}
-			w.WriteHeader(http.StatusNoContent)
-		}))
-	}
-	kubernetesNode := newExecutor(&kubernetesCalls)
-	defer kubernetesNode.Close()
-	excludedNode := newExecutor(&excludedCalls)
-	defer excludedNode.Close()
+	kubernetesNode := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"__kubernetes__": func(_ context.Context, task executorsdk.Task) error {
+		kubernetesCalls.Add(1)
+		dispatched.ExternalExecutionID = task.ExternalExecutionID
+		dispatched.Cluster = task.KubernetesCluster
+		return nil
+	}})
+	excludedNode := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"__kubernetes__": countingHandler(&excludedCalls)})
 	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{TenantID: fixture.tenantID, Name: "label-routing", RouteStrategy: "round"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "kubernetes-node", kubernetesNode.URL, 30*time.Second, []string{"kubernetes", "linux"}); err != nil {
+	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "kubernetes-node", kubernetesNode, 30*time.Second, []string{"kubernetes", "linux"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "excluded-node", excludedNode.URL, 30*time.Second, []string{"kubernetes", "linux", "spot"}); err != nil {
+	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "excluded-node", excludedNode, 30*time.Second, []string{"kubernetes", "linux", "spot"}); err != nil {
 		t.Fatal(err)
 	}
 	cluster, err := fixture.store.CreateKubernetesCluster(t.Context(), store.KubernetesCluster{TenantID: fixture.tenantID, Name: "routing-cluster", AuthMode: "service_account", APIServer: "https://k8s.example", Namespace: "jobs", Credentials: store.KubernetesCredentials{Token: "routing-token"}})
@@ -3372,10 +3448,10 @@ func TestKubernetesExecutorLabelRoutingUseCase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "label-routing-core", 10*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "label-routing-core", 10*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -3421,30 +3497,16 @@ func TestExecutorRetryUsesDistinctExternalExecutionIDUseCase(t *testing.T) {
 	fixture := newLifecycleFixture(t)
 	defer fixture.close()
 	executionIDs := make(chan string, 2)
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/run" {
-			http.NotFound(w, r)
-			return
-		}
-		var payload struct {
-			RunID               string `json:"run_id"`
-			ExternalExecutionID string `json:"external_execution_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Errorf("decode executor dispatch: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		executionIDs <- payload.ExternalExecutionID
-		http.Error(w, "force retry", http.StatusInternalServerError)
-	}))
-	defer node.Close()
+	node := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"retry": func(_ context.Context, task executorsdk.Task) error {
+		executionIDs <- task.ExternalExecutionID
+		return errors.New("force retry")
+	}})
 
 	group, err := fixture.store.CreateExecutorGroup(t.Context(), store.ExecutorGroup{TenantID: fixture.tenantID, Name: "retry-execution-id", RouteStrategy: "first"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "retry-node", node.URL, 30*time.Second, []string{}); err != nil {
+	if _, err = fixture.store.RegisterExecutorNode(t.Context(), fixture.tenantID, group.ID, "retry-node", node, 30*time.Second, []string{}); err != nil {
 		t.Fatal(err)
 	}
 	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "distinct-retry-execution", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, MaxRetries: 1, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, ExecutorGroupID: group.ID, ExecutorHandler: "retry", Enabled: false})
@@ -3455,7 +3517,7 @@ func TestExecutorRetryUsesDistinctExternalExecutionIDUseCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "retry-execution-core", 10*time.Millisecond, 1, "http://scheduler.test", 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "retry-execution-core", 10*time.Millisecond, 1, "http://scheduler.test", 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 
@@ -3481,52 +3543,26 @@ func TestShardingBroadcastUseCaseThroughCLI(t *testing.T) {
 	defer fixture.close()
 	var nodeACalls, nodeBCalls atomic.Int32
 	type dispatch struct {
-		GroupID string `json:"broadcast_group_id"`
-		Index   int32  `json:"broadcast_index"`
-		Total   int32  `json:"broadcast_total"`
-		LogURL  string `json:"log_url"`
-		Token   string `json:"callback_token"`
+		GroupID string
+		Index   int32
+		Total   int32
 	}
 	var nodeADispatch, nodeBDispatch dispatch
-	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/run" {
-			http.NotFound(w, r)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&nodeADispatch); err != nil {
-			t.Errorf("decode node-a dispatch: %v", err)
-		}
+	nodeA := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"broadcast": func(_ context.Context, task executorsdk.Task) error {
+		nodeADispatch = dispatch{GroupID: task.BroadcastGroupID, Index: task.BroadcastIndex, Total: task.BroadcastTotal}
 		if nodeACalls.Add(1) == 1 {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+			return errors.New("broadcast shard failed")
 		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer nodeA.Close()
-	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&nodeBDispatch); err != nil {
-			t.Errorf("decode node-b dispatch: %v", err)
-		}
-		payload, _ := json.Marshal(map[string]any{"token": nodeBDispatch.Token, "entries": []map[string]string{{"entry_id": "node-b-1", "stream": "stdout", "content": "node-b started"}}})
-		request, requestErr := http.NewRequestWithContext(r.Context(), http.MethodPost, nodeBDispatch.LogURL, bytes.NewReader(payload))
-		if requestErr != nil {
-			t.Errorf("create log request: %v", requestErr)
-		} else {
-			request.Header.Set("Content-Type", "application/json")
-			response, uploadErr := http.DefaultClient.Do(request)
-			if uploadErr != nil {
-				t.Errorf("upload run log: %v", uploadErr)
-			} else {
-				_ = response.Body.Close()
-				if response.StatusCode != http.StatusAccepted {
-					t.Errorf("upload run log status = %d", response.StatusCode)
-				}
-			}
+		return nil
+	}})
+	nodeB := startTestGRPCExecutor(t, fixture, map[string]executorsdk.Handler{"broadcast": func(_ context.Context, task executorsdk.Task) error {
+		nodeBDispatch = dispatch{GroupID: task.BroadcastGroupID, Index: task.BroadcastIndex, Total: task.BroadcastTotal}
+		if logErr := task.Logger.Info("node-b started"); logErr != nil {
+			return logErr
 		}
 		nodeBCalls.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer nodeB.Close()
+		return nil
+	}})
 	_, token, err := fixture.store.CreateAPIKey(t.Context(), fixture.tenantID, "broadcast-e2e", "developer")
 	if err != nil {
 		t.Fatal(err)
@@ -3535,7 +3571,7 @@ func TestShardingBroadcastUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -3562,8 +3598,8 @@ func TestShardingBroadcastUseCaseThroughCLI(t *testing.T) {
 	if err = json.Unmarshal(groupOutput, &group); err != nil {
 		t.Fatal(err)
 	}
-	runCLI("executors", "register", group.ID, "node-b", "--address", nodeB.URL, "--ttl", "30")
-	runCLI("executors", "register", group.ID, "node-a", "--address", nodeA.URL, "--ttl", "30")
+	runCLI("executors", "register", group.ID, "node-b", "--address", nodeB, "--ttl", "30")
+	runCLI("executors", "register", group.ID, "node-a", "--address", nodeA, "--ttl", "30")
 	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "broadcast-e2e", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 5, MaxRetries: 1, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, ExecutorGroupID: group.ID, ExecutorHandler: "broadcast", Enabled: false})
 	if err != nil {
 		t.Fatal(err)
@@ -3576,7 +3612,7 @@ func TestShardingBroadcastUseCaseThroughCLI(t *testing.T) {
 		t.Fatalf("trigger output = %s, %v", triggerOutput, err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "broadcast-core", 20*time.Millisecond, 3, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "broadcast-core", 20*time.Millisecond, 3, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(8 * time.Second)
@@ -3635,7 +3671,7 @@ func TestFixedDelayUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -3656,7 +3692,8 @@ func TestFixedDelayUseCaseThroughCLI(t *testing.T) {
 		}
 		return output
 	}
-	definition, err := json.Marshal(map[string]any{"name": "fixed-delay-e2e", "schedule_type": "fixed_delay", "schedule_expression": "1", "timezone": "UTC", "target_url": target.URL, "http_method": "POST", "timeout_seconds": 5, "overlap_policy": "parallel", "misfire_policy": "fire_once", "max_concurrent_runs": 1, "max_queue_size": 10, "enabled": true})
+	groupID := attachHTTPExecutor(t, fixture)
+	definition, err := json.Marshal(map[string]any{"name": "fixed-delay-e2e", "schedule_type": "fixed_delay", "schedule_expression": "1", "timezone": "UTC", "target_url": target.URL, "http_method": "POST", "timeout_seconds": 5, "overlap_policy": "parallel", "misfire_policy": "fire_once", "max_concurrent_runs": 1, "max_queue_size": 10, "enabled": true, "executor_group_id": groupID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3668,7 +3705,7 @@ func TestFixedDelayUseCaseThroughCLI(t *testing.T) {
 		t.Fatalf("created job = %s, %v", createdOutput, err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "fixed-delay-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "fixed-delay-core", 20*time.Millisecond, 2, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	var firstStart time.Time
@@ -3726,7 +3763,7 @@ func TestCronSchedulingUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -3747,7 +3784,8 @@ func TestCronSchedulingUseCaseThroughCLI(t *testing.T) {
 		}
 		return output
 	}
-	definition, err := json.Marshal(map[string]any{"name": "cron-e2e", "schedule_type": "cron", "schedule_expression": "0/1 * * * * ?", "timezone": "Asia/Shanghai", "target_url": target.URL, "http_method": "POST", "timeout_seconds": 5, "overlap_policy": "parallel", "misfire_policy": "fire_once", "max_concurrent_runs": 1, "max_catch_up": 10, "max_queue_size": 10, "enabled": true})
+	groupID := attachHTTPExecutor(t, fixture)
+	definition, err := json.Marshal(map[string]any{"name": "cron-e2e", "schedule_type": "cron", "schedule_expression": "0/1 * * * * ?", "timezone": "Asia/Shanghai", "target_url": target.URL, "http_method": "POST", "timeout_seconds": 5, "overlap_policy": "parallel", "misfire_policy": "fire_once", "max_concurrent_runs": 1, "max_catch_up": 10, "max_queue_size": 10, "enabled": true, "executor_group_id": groupID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3760,7 +3798,7 @@ func TestCronSchedulingUseCaseThroughCLI(t *testing.T) {
 	if err = json.Unmarshal(createdOutput, &created); err != nil || created.ID == "" || created.NextRunAt == "" || created.Timezone != "Asia/Shanghai" {
 		t.Fatalf("created cron = %s, %v", createdOutput, err)
 	}
-	quartzDefinition, err := json.Marshal(map[string]any{"name": "quartz-cron-e2e", "schedule_type": "cron", "schedule_expression": "0 0 9 L * ?", "timezone": "UTC", "target_url": target.URL + "/quartz", "http_method": "POST", "timeout_seconds": 5, "overlap_policy": "parallel", "misfire_policy": "fire_once", "max_concurrent_runs": 1, "max_catch_up": 10, "max_queue_size": 10, "enabled": true})
+	quartzDefinition, err := json.Marshal(map[string]any{"name": "quartz-cron-e2e", "schedule_type": "cron", "schedule_expression": "0 0 9 L * ?", "timezone": "UTC", "target_url": target.URL + "/quartz", "http_method": "POST", "timeout_seconds": 5, "overlap_policy": "parallel", "misfire_policy": "fire_once", "max_concurrent_runs": 1, "max_catch_up": 10, "max_queue_size": 10, "enabled": true, "executor_group_id": groupID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3781,7 +3819,7 @@ func TestCronSchedulingUseCaseThroughCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "cron-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "cron-core", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -3856,11 +3894,12 @@ func TestWorkerSaturationDoesNotBlockSchedulerUseCase(t *testing.T) {
 	}))
 	defer target.Close()
 
-	blockingJob, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "saturated-worker", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL + "/blocking", HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	blockingJob, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "saturated-worker", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL + "/blocking", HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduledJob, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "scheduled-while-saturated", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL + "/scheduled", HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, Enabled: true})
+	scheduledJob, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "scheduled-while-saturated", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL + "/scheduled", HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, MaxQueueSize: 10, Enabled: true, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3869,7 +3908,7 @@ func TestWorkerSaturationDoesNotBlockSchedulerUseCase(t *testing.T) {
 	}
 
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "saturation-core", 20*time.Millisecond, 1, target.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "saturation-core", 20*time.Millisecond, 1, target.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() {
 		cancelEngine()
@@ -3947,7 +3986,8 @@ func TestWorkerCompletionImmediatelyDispatchesPendingRunUseCase(t *testing.T) {
 	}))
 	defer target.Close()
 
-	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "wake-dispatcher", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "wake-dispatcher", ScheduleType: "fixed_rate", ScheduleExpression: "60", Timezone: "UTC", TargetURL: target.URL, HTTPMethod: http.MethodPost, Headers: map[string]string{}, TimeoutSeconds: 10, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3958,7 +3998,7 @@ func TestWorkerCompletionImmediatelyDispatchesPendingRunUseCase(t *testing.T) {
 	}
 
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "wake-dispatch-core", 5*time.Second, 1, target.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "wake-dispatch-core", 5*time.Second, 1, target.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() {
 		cancelEngine()
@@ -4004,7 +4044,7 @@ func TestMisfireRecoveryUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -4025,9 +4065,10 @@ func TestMisfireRecoveryUseCaseThroughCLI(t *testing.T) {
 		}
 		return output
 	}
+	groupID := attachHTTPExecutor(t, fixture)
 	jobIDs := make(map[string]string, 3)
 	for _, policy := range []string{"skip", "fire_once", "catch_up"} {
-		definition, marshalErr := json.Marshal(map[string]any{"name": "misfire-e2e-" + policy, "schedule_type": "fixed_rate", "schedule_expression": "1", "timezone": "UTC", "target_url": target.URL + "/" + policy, "http_method": "POST", "timeout_seconds": 5, "overlap_policy": "parallel", "misfire_policy": policy, "max_concurrent_runs": 4, "max_catch_up": 3, "max_queue_size": 10, "enabled": true})
+		definition, marshalErr := json.Marshal(map[string]any{"name": "misfire-e2e-" + policy, "schedule_type": "fixed_rate", "schedule_expression": "1", "timezone": "UTC", "target_url": target.URL + "/" + policy, "http_method": "POST", "timeout_seconds": 5, "overlap_policy": "parallel", "misfire_policy": policy, "max_concurrent_runs": 4, "max_catch_up": 3, "max_queue_size": 10, "enabled": true, "executor_group_id": groupID})
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
@@ -4042,7 +4083,7 @@ func TestMisfireRecoveryUseCaseThroughCLI(t *testing.T) {
 	}
 	time.Sleep(3500 * time.Millisecond)
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "misfire-core", 20*time.Millisecond, 4, httpServer.URL, 90*24*time.Hour, nil, core.WithHTTPClient(&http.Client{}))
+	engine := core.NewEngine(fixture.store, "misfire-core", 20*time.Millisecond, 4, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -4099,7 +4140,7 @@ func TestFailureNotificationUseCaseThroughCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	malformedRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/notification-channels", strings.NewReader(`{"kind":"webhook","name":"must-not-exist","config":{"url":"https://alerts.invalid"},"events":["exhausted"],"all_jobs":true,"max_attempts":1,"backoff_initial_seconds":1,"backoff_max_seconds":1}{"name":"trailing"}`))
 	if err != nil {
@@ -4142,13 +4183,14 @@ func TestFailureNotificationUseCaseThroughCLI(t *testing.T) {
 	if !bytes.Contains(listed, []byte("stable")) || !bytes.Contains(listed, []byte("flaky")) {
 		t.Fatalf("notification list = %s", listed)
 	}
-	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "notification-failure", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: "http://127.0.0.1:1/unavailable", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 1, MaxRetries: 1, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false})
+	groupID := attachHTTPExecutor(t, fixture)
+	job, err := fixture.store.CreateJob(t.Context(), store.Job{TenantID: fixture.tenantID, Name: "notification-failure", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC", TargetURL: "http://127.0.0.1:1/unavailable", HTTPMethod: "POST", Headers: map[string]string{}, TimeoutSeconds: 1, MaxRetries: 1, OverlapPolicy: "parallel", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxQueueSize: 10, Enabled: false, ExecutorGroupID: groupID, ExecutorHandler: "__http__"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	runCLI("jobs", "trigger", job.ID, "--idempotency-key", "notification-failure")
 	engineCtx, cancelEngine := context.WithCancel(t.Context())
-	engine := core.NewEngine(fixture.store, "notification-engine", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil)
+	engine := core.NewEngine(fixture.store, "notification-engine", 20*time.Millisecond, 1, httpServer.URL, 90*24*time.Hour, nil, core.WithExecutorGRPC("lifecycle-executor-token"))
 	engine.Run(engineCtx)
 	defer func() { cancelEngine(); engine.Wait() }()
 	notifierCtx, cancelNotifier := context.WithCancel(t.Context())
@@ -4214,7 +4256,7 @@ func TestKubernetesClusterUpdatePreservesCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, fixture.store, manager, false).Routes())
+	httpServer := httptest.NewServer(apihttp.NewServer(fixture.client, manager, false).Routes())
 	defer httpServer.Close()
 	request := func(method, path, body string) (*http.Response, []byte) {
 		req, requestErr := http.NewRequestWithContext(t.Context(), method, httpServer.URL+path, strings.NewReader(body))

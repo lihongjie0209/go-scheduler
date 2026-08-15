@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 type executorGRPCPool struct {
@@ -39,6 +40,14 @@ func newExecutorGRPCPoolWithTransport(token string, transport credentials.Transp
 }
 
 func (p *executorGRPCPool) acquire(address string) (executorv1.ExecutorServiceClient, func(), error) {
+	connection, release, err := p.acquireConn(address)
+	if err != nil {
+		return nil, nil, err
+	}
+	return executorv1.NewExecutorServiceClient(connection), release, nil
+}
+
+func (p *executorGRPCPool) acquireConn(address string) (*grpc.ClientConn, func(), error) {
 	target, err := executorGRPCTarget(address)
 	if err != nil {
 		return nil, nil, err
@@ -48,7 +57,7 @@ func (p *executorGRPCPool) acquire(address string) (executorv1.ExecutorServiceCl
 		entry.inUse++
 		entry.lastUsed = time.Now()
 		p.mu.Unlock()
-		return executorv1.NewExecutorServiceClient(entry.connection), p.releaseFunc(target, entry), nil
+		return entry.connection, p.releaseFunc(target, entry), nil
 	}
 	if len(p.conns) >= maxExecutorGRPCConnections && !p.evictIdleLocked() {
 		p.mu.Unlock()
@@ -62,7 +71,38 @@ func (p *executorGRPCPool) acquire(address string) (executorv1.ExecutorServiceCl
 	entry := &executorGRPCConnection{connection: connection, lastUsed: time.Now(), inUse: 1}
 	p.conns[target] = entry
 	p.mu.Unlock()
-	return executorv1.NewExecutorServiceClient(connection), p.releaseFunc(target, entry), nil
+	return connection, p.releaseFunc(target, entry), nil
+}
+
+func (p *executorGRPCPool) probe(ctx context.Context, strategy, jobID, address string) bool {
+	switch strategy {
+	case "failover":
+		return p.healthy(ctx, address)
+	case "busyover":
+		return p.idle(ctx, address, jobID)
+	default:
+		return false
+	}
+}
+
+func (p *executorGRPCPool) healthy(ctx context.Context, address string) bool {
+	connection, release, err := p.acquireConn(address)
+	if err != nil {
+		return false
+	}
+	defer release()
+	response, err := healthpb.NewHealthClient(connection).Check(ctx, &healthpb.HealthCheckRequest{})
+	return err == nil && response.GetStatus() == healthpb.HealthCheckResponse_SERVING
+}
+
+func (p *executorGRPCPool) idle(ctx context.Context, address, jobID string) bool {
+	client, release, err := p.acquire(address)
+	if err != nil {
+		return false
+	}
+	defer release()
+	response, err := client.Inspect(ctx, &executorv1.InspectRequest{JobId: jobID})
+	return err == nil && response.GetState() != "busy"
 }
 
 func (p *executorGRPCPool) releaseFunc(target string, expected *executorGRPCConnection) func() {

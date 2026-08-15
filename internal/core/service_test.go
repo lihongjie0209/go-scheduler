@@ -1,11 +1,13 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
+	"github.com/lihongjie0209/go-scheduler/internal/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -72,7 +74,7 @@ func TestValidatePurgeRunHistoryRequest(t *testing.T) {
 }
 
 func validJob() *schedulerv1.Job {
-	return &schedulerv1.Job{TenantId: "tenant", Name: "job", ScheduleType: "cron", ScheduleExpression: "0 * * * * *", Timezone: "UTC", TargetUrl: "https://example.com/hook", HttpMethod: "POST", TimeoutSeconds: 30, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 3600, MaxQueueSize: 1000}
+	return &schedulerv1.Job{TenantId: "tenant", Name: "job", ScheduleType: "cron", ScheduleExpression: "0 * * * * *", Timezone: "UTC", TargetUrl: "https://example.com/hook", HttpMethod: "POST", TimeoutSeconds: 30, OverlapPolicy: "serial", MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 3600, MaxQueueSize: 1000, ExecutorGroupId: "11111111-1111-1111-1111-111111111111", ExecutorHandler: "__http__"}
 }
 func TestValidateJob(t *testing.T) {
 	t.Parallel()
@@ -82,7 +84,7 @@ func TestValidateJob(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*schedulerv1.Job)
-	}{{"private URL syntax", func(j *schedulerv1.Job) { j.TargetUrl = "file:///etc/passwd" }}, {"userinfo", func(j *schedulerv1.Job) { j.TargetUrl = "https://user:pass@example.com" }}, {"method", func(j *schedulerv1.Job) { j.HttpMethod = "TRACE" }}, {"template", func(j *schedulerv1.Job) { j.BodyTemplate = "{{secret}}" }}, {"overlap", func(j *schedulerv1.Job) { j.OverlapPolicy = "overwrite" }}}
+	}{{"private URL syntax", func(j *schedulerv1.Job) { j.TargetUrl = "file:///etc/passwd" }}, {"userinfo", func(j *schedulerv1.Job) { j.TargetUrl = "https://user:pass@example.com" }}, {"method", func(j *schedulerv1.Job) { j.HttpMethod = "TRACE" }}, {"template", func(j *schedulerv1.Job) { j.BodyTemplate = "{{secret}}" }}, {"overlap", func(j *schedulerv1.Job) { j.OverlapPolicy = "overwrite" }}, {"missing group", func(j *schedulerv1.Job) { j.ExecutorGroupId = "" }}, {"missing handler", func(j *schedulerv1.Job) { j.ExecutorHandler = "" }}}
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
@@ -322,6 +324,17 @@ func TestValidateTriggerRequest(t *testing.T) {
 				t.Fatalf("validateTriggerRequest() error = %v, want error %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestToStatusOverrideAddressNotRegistered(t *testing.T) {
+	t.Parallel()
+	err := toStatus(fmt.Errorf("%w: http://evil:9999", store.ErrOverrideAddressNotRegistered))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument: %v", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), store.ErrOverrideAddressNotRegistered.Error()) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

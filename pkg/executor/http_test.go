@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,6 +43,18 @@ func TestHTTPHandlerSendsStableExecutionIdentity(t *testing.T) {
 		if actual := received.Get(header); actual != expected {
 			t.Errorf("%s = %q, want %q", header, actual, expected)
 		}
+	}
+}
+
+func TestHTTPHandlerAwaitsCallbackOnAccepted(t *testing.T) {
+	t.Parallel()
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(target.Close)
+	err := HTTPHandler(target.Client())(t.Context(), Task{RunID: "run-1", HTTP: &HTTPExecution{URL: target.URL, Method: http.MethodPost}})
+	if !errors.Is(err, ErrAwaitingCallback) {
+		t.Fatalf("error = %v, want ErrAwaitingCallback", err)
 	}
 }
 

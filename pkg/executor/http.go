@@ -9,6 +9,10 @@ import (
 	"net/http"
 )
 
+// ErrAwaitingCallback means the HTTP target accepted the work and will
+// complete it later through the scheduler callback API.
+var ErrAwaitingCallback = errors.New("awaiting callback")
+
 func HTTPHandler(client *http.Client) Handler {
 	if client == nil {
 		client = &http.Client{}
@@ -45,6 +49,9 @@ func HTTPHandler(client *http.Client) Handler {
 		}
 		if len(body) > 0 && task.Logger != nil {
 			_ = task.Logger.Info(string(body))
+		}
+		if response.StatusCode == http.StatusAccepted {
+			return ErrAwaitingCallback
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			return fmt.Errorf("HTTP target returned %d: %s", response.StatusCode, truncate(string(body), 4096))

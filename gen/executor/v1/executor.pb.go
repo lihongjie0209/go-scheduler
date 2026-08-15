@@ -604,6 +604,7 @@ func (x *CancelResponse) GetAccepted() bool {
 type InspectRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	JobId         string                 `protobuf:"bytes,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -641,6 +642,13 @@ func (*InspectRequest) Descriptor() ([]byte, []int) {
 func (x *InspectRequest) GetRunId() string {
 	if x != nil {
 		return x.RunId
+	}
+	return ""
+}
+
+func (x *InspectRequest) GetJobId() string {
+	if x != nil {
+		return x.JobId
 	}
 	return ""
 }
@@ -772,9 +780,10 @@ const file_executor_v1_executor_proto_rawDesc = "" +
 	"\x0fscript_language\x18\x05 \x01(\tR\x0escriptLanguage\x12M\n" +
 	"\x12kubernetes_cluster\x18\x06 \x01(\v2\x1e.executor.v1.KubernetesClusterR\x11kubernetesCluster\",\n" +
 	"\x0eCancelResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\"'\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\">\n" +
 	"\x0eInspectRequest\x12\x15\n" +
-	"\x06run_id\x18\x01 \x01(\tR\x05runId\"z\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x15\n" +
+	"\x06job_id\x18\x02 \x01(\tR\x05jobId\"z\n" +
 	"\x0eExecutionState\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12!\n" +
 	"\fexecution_id\x18\x02 \x01(\tR\vexecutionId\x12\x14\n" +

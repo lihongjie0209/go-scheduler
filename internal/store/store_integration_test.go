@@ -338,6 +338,14 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	overrideAddresses := []string{"http://override-a:9999", "http://override-b:9999"}
+	for _, node := range []struct{ id, address string }{{"override-a", overrideAddresses[0]}, {"override-b", overrideAddresses[1]}} {
+		if _, err = one.RegisterExecutorNode(ctx, tenantID, overrideGroup.ID, node.id, node.address, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = one.TriggerJobWithOptions(ctx, tenantID, overrideJob.ID, "override-rejected", "nope", TriggerOptions{OverrideAddresses: []string{"http://evil:9999"}}); !errors.Is(err, ErrOverrideAddressNotRegistered) {
+		t.Fatalf("unregistered override = %v, want ErrOverrideAddressNotRegistered", err)
+	}
 	firstOverrideRun, err := one.TriggerJobWithOptions(ctx, tenantID, overrideJob.ID, "override-1", "first", TriggerOptions{OverrideAddresses: overrideAddresses})
 	if err != nil || strings.Join(firstOverrideRun.OverrideAddresses, ",") != strings.Join(overrideAddresses, ",") {
 		t.Fatalf("first override run = %+v, %v", firstOverrideRun, err)
@@ -367,7 +375,7 @@ func TestPostgreSQLSchedulingStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = one.TriggerJobWithOptions(ctx, tenantID, directJob.ID, "", "", TriggerOptions{OverrideAddresses: overrideAddresses}); err != ErrOverrideRequiresExecutorGroup {
+	if _, err = one.TriggerJobWithOptions(ctx, tenantID, directJob.ID, "", "", TriggerOptions{OverrideAddresses: overrideAddresses}); !errors.Is(err, ErrOverrideRequiresExecutorGroup) {
 		t.Fatalf("direct override = %v, want ErrOverrideRequiresExecutorGroup", err)
 	}
 	var jobsBefore, runsBefore int

@@ -444,11 +444,19 @@ func TestGRPCDispatchEnforcesConcurrencyAndBusyState(t *testing.T) {
 	if idle.Code != http.StatusConflict {
 		t.Fatalf("busy probe status = %d, want %d", idle.Code, http.StatusConflict)
 	}
+	busy, err := service.Inspect(t.Context(), &executorv1.InspectRequest{JobId: "job-1"})
+	if err != nil || busy.GetState() != "busy" {
+		t.Fatalf("inspect busy = %+v, %v", busy, err)
+	}
 	release <- struct{}{}
 	select {
 	case <-reporter.completed:
 	case <-time.After(time.Second):
 		t.Fatal("first completion was not reported")
+	}
+	idleState, err := service.Inspect(t.Context(), &executorv1.InspectRequest{JobId: "job-1"})
+	if err != nil || idleState.GetState() != "idle" {
+		t.Fatalf("inspect idle = %+v, %v", idleState, err)
 	}
 	if _, err = service.Dispatch(t.Context(), second); err != nil {
 		t.Fatalf("dispatch after slot release: %v", err)

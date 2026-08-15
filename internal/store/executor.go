@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,24 @@ type ExecutorNode struct {
 }
 
 type ExecutorSelector func(ExecutorRoutingSnapshot) (ExecutorNode, error)
+
+func normalizeExecutorAddress(address string) string {
+	return strings.TrimRight(strings.TrimSpace(address), "/")
+}
+
+func unregisteredOverrideAddresses(nodes []ExecutorNode, addresses []string) []string {
+	registered := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		registered[normalizeExecutorAddress(node.Address)] = struct{}{}
+	}
+	var missing []string
+	for _, address := range addresses {
+		if _, ok := registered[normalizeExecutorAddress(address)]; !ok {
+			missing = append(missing, address)
+		}
+	}
+	return missing
+}
 
 func (s *Store) ReserveExecutorRoute(ctx context.Context, tenantID, groupID, jobID string, selector ExecutorSelector) (ExecutorNode, error) {
 	tx, err := s.pool.Begin(ctx)

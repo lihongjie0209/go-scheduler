@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/fx"
 	"google.golang.org/grpc"
@@ -19,35 +18,15 @@ import (
 	apihttp "github.com/lihongjie0209/go-scheduler/internal/api"
 	"github.com/lihongjie0209/go-scheduler/internal/auth"
 	"github.com/lihongjie0209/go-scheduler/internal/config"
-	"github.com/lihongjie0209/go-scheduler/internal/cryptox"
 	"github.com/lihongjie0209/go-scheduler/internal/discovery"
-	"github.com/lihongjie0209/go-scheduler/internal/observability"
 	"github.com/lihongjie0209/go-scheduler/internal/rpc"
-	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
 
 func Run() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	fx.New(fx.Provide(loadConfig, newStore, newEtcd, newCoreClient, newRegistrar, newAuthManager, newHTTPServer), fx.Invoke(registerDatabasePoolMetrics, run)).Run()
+	fx.New(fx.Provide(loadConfig, newEtcd, newCoreClient, newRegistrar, newAuthManager, newHTTPServer), fx.Invoke(run)).Run()
 }
 func loadConfig() (config.Config, error) { return config.Load("api-server") }
-func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	ring, err := cryptox.NewKeyring(c.MasterKeyVersion, c.MasterKey)
-	if err != nil {
-		return nil, err
-	}
-	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring), store.WithPoolSize(c.APIDatabaseMaxConns, c.APIDatabaseMinConns))
-	if err != nil {
-		return nil, err
-	}
-	lc.Append(fx.Hook{OnStop: func(context.Context) error { s.Close(); return nil }})
-	return s, nil
-}
-func registerDatabasePoolMetrics(s *store.Store) error {
-	return prometheus.Register(observability.NewDatabasePoolCollector("api", s.PoolStats))
-}
 func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
 	if c.DiscoveryMode == "kubernetes" {
 		return nil, nil
@@ -88,8 +67,8 @@ func newRegistrar(c config.Config, client *clientv3.Client) (discovery.ServiceRe
 func newAuthManager(c config.Config) (*auth.Manager, error) {
 	return auth.NewManager(c.JWTSecret, "go-scheduler", 15*time.Minute)
 }
-func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s *store.Store, manager *auth.Manager, etcd *clientv3.Client) *http.Server {
-	handler := apihttp.NewServer(client, s, manager, c.CookieSecure)
+func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, manager *auth.Manager, etcd *clientv3.Client) *http.Server {
+	handler := apihttp.NewServer(client, manager, c.CookieSecure)
 	handler.SetContextPath(c.APIContextPath)
 	handler.SetDiscovery(etcd, c.EtcdPrefix)
 	return &http.Server{Addr: c.HTTPAddress, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}

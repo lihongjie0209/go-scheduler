@@ -85,6 +85,48 @@ func TestScriptHandlerRejectsLanguageAndPropagatesExit(t *testing.T) {
 	}
 }
 
+func TestScriptProcessEnvOmitsControlPlaneSecrets(t *testing.T) {
+	t.Parallel()
+	env := scriptProcessEnv(Task{Input: "hello", RunID: "run-1", JobID: "job-1", BroadcastIndex: 2, BroadcastTotal: 4}, []string{
+		"PATH=/usr/bin",
+		"HOME=/home/executor",
+		"LANG=C.UTF-8",
+		"SCHEDULER_TOKEN=control-plane-secret",
+		"SERVICE_TOKEN=also-secret",
+		"MASTER_KEY=should-not-leak",
+	})
+	joined := strings.Join(env, "\n")
+	for _, leaked := range []string{"SCHEDULER_TOKEN=", "SERVICE_TOKEN=", "MASTER_KEY=", "control-plane-secret", "also-secret", "should-not-leak"} {
+		if strings.Contains(joined, leaked) {
+			t.Fatalf("child env leaked %q: %v", leaked, env)
+		}
+	}
+	want := []string{"PATH=/usr/bin", "HOME=/home/executor", "LANG=C.UTF-8", "SCHEDULER_INPUT=hello", "SCHEDULER_RUN_ID=run-1", "SCHEDULER_JOB_ID=job-1", "SCHEDULER_SHARD_INDEX=2", "SCHEDULER_SHARD_TOTAL=4"}
+	if strings.Join(env, ",") != strings.Join(want, ",") {
+		t.Fatalf("env=%v want=%v", env, want)
+	}
+}
+
+func TestScriptHandlerDoesNotInheritSchedulerToken(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh unavailable")
+	}
+	t.Setenv("SCHEDULER_TOKEN", "control-plane-secret")
+	logger := &recordingLogger{}
+	err := ScriptHandler(ScriptOptions{Languages: []string{"shell"}})(t.Context(), Task{
+		Input:          "payload",
+		ScriptLanguage: "shell",
+		ScriptSource:   `if [ -n "$SCHEDULER_TOKEN" ]; then printf 'leaked:%s' "$SCHEDULER_TOKEN"; else printf 'ok:%s' "$SCHEDULER_INPUT"; fi`,
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(logger.stdout, ""); got != "ok:payload" {
+		t.Fatalf("stdout=%q", got)
+	}
+}
+
 func TestScriptHandlerHonorsCancellation(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh unavailable")

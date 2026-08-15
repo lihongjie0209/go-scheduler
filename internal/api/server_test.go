@@ -13,14 +13,14 @@ import (
 func TestRoutesDoNotServeWebUI(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
-	NewServer(nil, nil, nil).Routes().ServeHTTP(response, request)
+	NewServer(nil, nil).Routes().ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
 	}
 }
 
 func TestRoutesUseConfiguredContextPath(t *testing.T) {
-	server := NewServer(nil, nil, nil)
+	server := NewServer(nil, nil)
 	server.SetContextPath("/scheduler")
 	handler := server.Routes()
 
@@ -78,6 +78,20 @@ func TestDecodeStandardJSONRejectsTrailingDocument(t *testing.T) {
 	}
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestApplyDefaultsSetsHTTPHandler(t *testing.T) {
+	t.Parallel()
+	job := &schedulerv1.Job{TargetUrl: "https://example.com/hook"}
+	applyDefaults(job)
+	if job.ExecutorHandler != "__http__" {
+		t.Fatalf("handler = %q, want __http__", job.ExecutorHandler)
+	}
+	script := &schedulerv1.Job{TargetUrl: "https://example.com/hook", ScriptLanguage: "shell"}
+	applyDefaults(script)
+	if script.ExecutorHandler != "" {
+		t.Fatalf("script job handler = %q, want empty", script.ExecutorHandler)
 	}
 }
 

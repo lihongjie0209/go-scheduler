@@ -40,6 +40,32 @@ service SchedulerService {
   rpc ListNotificationHistory(ListNotificationHistoryRequest) returns (ListNotificationHistoryResponse);
   rpc GetRunReport(GetRunReportRequest) returns (RunReport);
   rpc PurgeRunHistory(PurgeRunHistoryRequest) returns (PurgeRunHistoryResponse);
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc AuthenticateAPIKey(AuthenticateAPIKeyRequest) returns (AuthenticateAPIKeyResponse);
+  rpc GetUser(GetUserRequest) returns (User);
+  rpc GetUserByEmail(GetUserByEmailRequest) returns (User);
+  rpc GetMembershipRole(GetMembershipRoleRequest) returns (GetMembershipRoleResponse);
+  rpc ListUserTenants(ListUserTenantsRequest) returns (ListUserTenantsResponse);
+  rpc CreateRefreshSession(CreateRefreshSessionRequest) returns (CreateRefreshSessionResponse);
+  rpc RotateRefreshSession(RotateRefreshSessionRequest) returns (RotateRefreshSessionResponse);
+  rpc RevokeRefreshSession(RevokeRefreshSessionRequest) returns (RevokeRefreshSessionResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc CreateUser(CreateUserRequest) returns (User);
+  rpc SetUserDisabled(SetUserDisabledRequest) returns (SetUserDisabledResponse);
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
+  rpc CreateTenant(CreateTenantRequest) returns (Tenant);
+  rpc ListTenantMembers(ListTenantMembersRequest) returns (ListTenantMembersResponse);
+  rpc AddMembership(AddMembershipRequest) returns (AddMembershipResponse);
+  rpc DeleteMembership(DeleteMembershipRequest) returns (DeleteMembershipResponse);
+  rpc ListAPIKeys(ListAPIKeysRequest) returns (ListAPIKeysResponse);
+  rpc CreateAPIKey(CreateAPIKeyRequest) returns (CreateAPIKeyResponse);
+  rpc RevokeAPIKey(RevokeAPIKeyRequest) returns (RevokeAPIKeyResponse);
+  rpc GetDashboard(GetDashboardRequest) returns (Dashboard);
+  rpc ListKubernetesClusters(ListKubernetesClustersRequest) returns (ListKubernetesClustersResponse);
+  rpc GetKubernetesCluster(GetKubernetesClusterRequest) returns (KubernetesCluster);
+  rpc CreateKubernetesCluster(CreateKubernetesClusterRequest) returns (KubernetesCluster);
+  rpc UpdateKubernetesCluster(UpdateKubernetesClusterRequest) returns (KubernetesCluster);
+  rpc DeleteKubernetesCluster(DeleteKubernetesClusterRequest) returns (DeleteKubernetesClusterResponse);
 }
 
 message Job {
@@ -315,3 +341,173 @@ message PurgeRunHistoryRequest {
   int32 limit = 4;
 }
 message PurgeRunHistoryResponse { int64 deleted = 1; }
+
+message PingRequest {}
+message PingResponse {}
+
+message User {
+  string id = 1;
+  string email = 2;
+  string password_hash = 3;
+  bool platform_admin = 4;
+  bool disabled = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+message AuthenticateAPIKeyRequest { string token = 1; }
+message AuthenticateAPIKeyResponse {
+  string tenant_id = 1;
+  string role = 2;
+}
+message GetUserRequest { string id = 1; }
+message GetUserByEmailRequest { string email = 1; }
+message GetMembershipRoleRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+}
+message GetMembershipRoleResponse { string role = 1; }
+message TenantAccess {
+  string id = 1;
+  string name = 2;
+  string role = 3;
+  int32 max_concurrent_runs = 4;
+}
+message ListUserTenantsRequest {
+  string user_id = 1;
+  bool platform_admin = 2;
+}
+message ListUserTenantsResponse { repeated TenantAccess tenants = 1; }
+message CreateRefreshSessionRequest {
+  string user_id = 1;
+  int64 ttl_seconds = 2;
+}
+message CreateRefreshSessionResponse {
+  string token = 1;
+  string user_id = 2;
+}
+message RotateRefreshSessionRequest {
+  string token = 1;
+  int64 ttl_seconds = 2;
+}
+message RotateRefreshSessionResponse {
+  string token = 1;
+  string user_id = 2;
+}
+message RevokeRefreshSessionRequest { string token = 1; }
+message RevokeRefreshSessionResponse {}
+message ListUsersRequest {}
+message ListUsersResponse { repeated User users = 1; }
+message CreateUserRequest {
+  string email = 1;
+  string password_hash = 2;
+  bool platform_admin = 3;
+}
+message SetUserDisabledRequest {
+  string id = 1;
+  bool disabled = 2;
+}
+message SetUserDisabledResponse {}
+message Tenant {
+  string id = 1;
+  string name = 2;
+  int32 max_concurrent_runs = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+message ListTenantsRequest {}
+message ListTenantsResponse { repeated Tenant tenants = 1; }
+message CreateTenantRequest { string name = 1; }
+message TenantMember {
+  string user_id = 1;
+  string email = 2;
+  string role = 3;
+  bool disabled = 4;
+}
+message ListTenantMembersRequest { string tenant_id = 1; }
+message ListTenantMembersResponse { repeated TenantMember members = 1; }
+message AddMembershipRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string role = 3;
+}
+message AddMembershipResponse {}
+message DeleteMembershipRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+}
+message DeleteMembershipResponse {}
+message APIKey {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string role = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp revoked_at = 6;
+}
+message ListAPIKeysRequest { string tenant_id = 1; }
+message ListAPIKeysResponse { repeated APIKey api_keys = 1; }
+message CreateAPIKeyRequest {
+  string tenant_id = 1;
+  string name = 2;
+  string role = 3;
+}
+message CreateAPIKeyResponse {
+  APIKey api_key = 1;
+  string token = 2;
+}
+message RevokeAPIKeyRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+message RevokeAPIKeyResponse {}
+message DashboardRun {
+  string id = 1;
+  string job_id = 2;
+  string status = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+  string error_message = 5;
+}
+message DashboardJob {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Timestamp next_run_at = 3;
+}
+message Dashboard {
+  int64 jobs = 1;
+  int64 enabled_jobs = 2;
+  int64 pending_runs = 3;
+  int64 running_runs = 4;
+  int64 succeeded_24h = 5;
+  int64 failed_24h = 6;
+  repeated DashboardRun recent_failures = 7;
+  repeated DashboardJob upcoming = 8;
+}
+message GetDashboardRequest { string tenant_id = 1; }
+message KubernetesCluster {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string auth_mode = 4;
+  string api_server = 5;
+  string namespace = 6;
+  string kubeconfig = 7;
+  string token = 8;
+  string ca_data = 9;
+  bool insecure_skip_tls_verify = 10;
+  int32 max_concurrent_jobs = 11;
+  int64 version = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+message ListKubernetesClustersRequest { string tenant_id = 1; }
+message ListKubernetesClustersResponse { repeated KubernetesCluster clusters = 1; }
+message GetKubernetesClusterRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+message CreateKubernetesClusterRequest { KubernetesCluster cluster = 1; }
+message UpdateKubernetesClusterRequest { KubernetesCluster cluster = 1; }
+message DeleteKubernetesClusterRequest {
+  string tenant_id = 1;
+  string id = 2;
+  int64 version = 3;
+}
+message DeleteKubernetesClusterResponse {}

@@ -33,7 +33,6 @@ func Run() {
 		fx.Provide(
 			loadConfig,
 			newStoreCipher,
-			newAPIStore,
 			newCoreStore,
 			newExecutorController,
 			newCoreService,
@@ -51,7 +50,6 @@ func Run() {
 
 func loadConfig() (config.Config, error) { return config.Load("scheduler-server") }
 
-type apiStore struct{ *store.Store }
 type coreStore struct{ *store.Store }
 
 func newStoreCipher(c config.Config) (store.HeaderCipher, error) {
@@ -70,14 +68,6 @@ func openStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher, maxC
 		return nil
 	}})
 	return s, nil
-}
-
-func newAPIStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher) (*apiStore, error) {
-	s, err := openStore(lc, c, cipher, c.APIDatabaseMaxConns, c.APIDatabaseMinConns)
-	if err != nil {
-		return nil, err
-	}
-	return &apiStore{Store: s}, nil
 }
 
 func newCoreStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher) (*coreStore, error) {
@@ -117,10 +107,7 @@ func newGRPCServer(c config.Config, service *core.Service) (*grpc.Server, error)
 	return server, nil
 }
 
-func registerDatabasePoolMetrics(api *apiStore, core *coreStore) error {
-	if err := prometheus.Register(observability.NewDatabasePoolCollector("api", api.PoolStats)); err != nil {
-		return err
-	}
+func registerDatabasePoolMetrics(core *coreStore) error {
 	if err := prometheus.Register(observability.NewDatabasePoolCollector("core", core.PoolStats)); err != nil {
 		return err
 	}
@@ -153,8 +140,8 @@ func newAuthManager(c config.Config) (*auth.Manager, error) {
 	return auth.NewManager(c.JWTSecret, "go-scheduler", 15*time.Minute)
 }
 
-func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, s *apiStore, manager *auth.Manager) *http.Server {
-	handler := apihttp.NewServer(client, s.Store, manager, c.CookieSecure)
+func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, manager *auth.Manager) *http.Server {
+	handler := apihttp.NewServer(client, manager, c.CookieSecure)
 	handler.SetContextPath(c.APIContextPath)
 	handler.SetStandaloneInstance(c.InstanceID, time.Now())
 	return &http.Server{

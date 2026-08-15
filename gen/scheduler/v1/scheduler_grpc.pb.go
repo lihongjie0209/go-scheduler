@@ -52,6 +52,32 @@ const (
 	SchedulerService_ListNotificationHistory_FullMethodName       = "/scheduler.v1.SchedulerService/ListNotificationHistory"
 	SchedulerService_GetRunReport_FullMethodName                  = "/scheduler.v1.SchedulerService/GetRunReport"
 	SchedulerService_PurgeRunHistory_FullMethodName               = "/scheduler.v1.SchedulerService/PurgeRunHistory"
+	SchedulerService_Ping_FullMethodName                          = "/scheduler.v1.SchedulerService/Ping"
+	SchedulerService_AuthenticateAPIKey_FullMethodName            = "/scheduler.v1.SchedulerService/AuthenticateAPIKey"
+	SchedulerService_GetUser_FullMethodName                       = "/scheduler.v1.SchedulerService/GetUser"
+	SchedulerService_GetUserByEmail_FullMethodName                = "/scheduler.v1.SchedulerService/GetUserByEmail"
+	SchedulerService_GetMembershipRole_FullMethodName             = "/scheduler.v1.SchedulerService/GetMembershipRole"
+	SchedulerService_ListUserTenants_FullMethodName               = "/scheduler.v1.SchedulerService/ListUserTenants"
+	SchedulerService_CreateRefreshSession_FullMethodName          = "/scheduler.v1.SchedulerService/CreateRefreshSession"
+	SchedulerService_RotateRefreshSession_FullMethodName          = "/scheduler.v1.SchedulerService/RotateRefreshSession"
+	SchedulerService_RevokeRefreshSession_FullMethodName          = "/scheduler.v1.SchedulerService/RevokeRefreshSession"
+	SchedulerService_ListUsers_FullMethodName                     = "/scheduler.v1.SchedulerService/ListUsers"
+	SchedulerService_CreateUser_FullMethodName                    = "/scheduler.v1.SchedulerService/CreateUser"
+	SchedulerService_SetUserDisabled_FullMethodName               = "/scheduler.v1.SchedulerService/SetUserDisabled"
+	SchedulerService_ListTenants_FullMethodName                   = "/scheduler.v1.SchedulerService/ListTenants"
+	SchedulerService_CreateTenant_FullMethodName                  = "/scheduler.v1.SchedulerService/CreateTenant"
+	SchedulerService_ListTenantMembers_FullMethodName             = "/scheduler.v1.SchedulerService/ListTenantMembers"
+	SchedulerService_AddMembership_FullMethodName                 = "/scheduler.v1.SchedulerService/AddMembership"
+	SchedulerService_DeleteMembership_FullMethodName              = "/scheduler.v1.SchedulerService/DeleteMembership"
+	SchedulerService_ListAPIKeys_FullMethodName                   = "/scheduler.v1.SchedulerService/ListAPIKeys"
+	SchedulerService_CreateAPIKey_FullMethodName                  = "/scheduler.v1.SchedulerService/CreateAPIKey"
+	SchedulerService_RevokeAPIKey_FullMethodName                  = "/scheduler.v1.SchedulerService/RevokeAPIKey"
+	SchedulerService_GetDashboard_FullMethodName                  = "/scheduler.v1.SchedulerService/GetDashboard"
+	SchedulerService_ListKubernetesClusters_FullMethodName        = "/scheduler.v1.SchedulerService/ListKubernetesClusters"
+	SchedulerService_GetKubernetesCluster_FullMethodName          = "/scheduler.v1.SchedulerService/GetKubernetesCluster"
+	SchedulerService_CreateKubernetesCluster_FullMethodName       = "/scheduler.v1.SchedulerService/CreateKubernetesCluster"
+	SchedulerService_UpdateKubernetesCluster_FullMethodName       = "/scheduler.v1.SchedulerService/UpdateKubernetesCluster"
+	SchedulerService_DeleteKubernetesCluster_FullMethodName       = "/scheduler.v1.SchedulerService/DeleteKubernetesCluster"
 )
 
 // SchedulerServiceClient is the client API for SchedulerService service.
@@ -91,6 +117,32 @@ type SchedulerServiceClient interface {
 	ListNotificationHistory(ctx context.Context, in *ListNotificationHistoryRequest, opts ...grpc.CallOption) (*ListNotificationHistoryResponse, error)
 	GetRunReport(ctx context.Context, in *GetRunReportRequest, opts ...grpc.CallOption) (*RunReport, error)
 	PurgeRunHistory(ctx context.Context, in *PurgeRunHistoryRequest, opts ...grpc.CallOption) (*PurgeRunHistoryResponse, error)
+	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+	AuthenticateAPIKey(ctx context.Context, in *AuthenticateAPIKeyRequest, opts ...grpc.CallOption) (*AuthenticateAPIKeyResponse, error)
+	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*User, error)
+	GetUserByEmail(ctx context.Context, in *GetUserByEmailRequest, opts ...grpc.CallOption) (*User, error)
+	GetMembershipRole(ctx context.Context, in *GetMembershipRoleRequest, opts ...grpc.CallOption) (*GetMembershipRoleResponse, error)
+	ListUserTenants(ctx context.Context, in *ListUserTenantsRequest, opts ...grpc.CallOption) (*ListUserTenantsResponse, error)
+	CreateRefreshSession(ctx context.Context, in *CreateRefreshSessionRequest, opts ...grpc.CallOption) (*CreateRefreshSessionResponse, error)
+	RotateRefreshSession(ctx context.Context, in *RotateRefreshSessionRequest, opts ...grpc.CallOption) (*RotateRefreshSessionResponse, error)
+	RevokeRefreshSession(ctx context.Context, in *RevokeRefreshSessionRequest, opts ...grpc.CallOption) (*RevokeRefreshSessionResponse, error)
+	ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error)
+	CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*User, error)
+	SetUserDisabled(ctx context.Context, in *SetUserDisabledRequest, opts ...grpc.CallOption) (*SetUserDisabledResponse, error)
+	ListTenants(ctx context.Context, in *ListTenantsRequest, opts ...grpc.CallOption) (*ListTenantsResponse, error)
+	CreateTenant(ctx context.Context, in *CreateTenantRequest, opts ...grpc.CallOption) (*Tenant, error)
+	ListTenantMembers(ctx context.Context, in *ListTenantMembersRequest, opts ...grpc.CallOption) (*ListTenantMembersResponse, error)
+	AddMembership(ctx context.Context, in *AddMembershipRequest, opts ...grpc.CallOption) (*AddMembershipResponse, error)
+	DeleteMembership(ctx context.Context, in *DeleteMembershipRequest, opts ...grpc.CallOption) (*DeleteMembershipResponse, error)
+	ListAPIKeys(ctx context.Context, in *ListAPIKeysRequest, opts ...grpc.CallOption) (*ListAPIKeysResponse, error)
+	CreateAPIKey(ctx context.Context, in *CreateAPIKeyRequest, opts ...grpc.CallOption) (*CreateAPIKeyResponse, error)
+	RevokeAPIKey(ctx context.Context, in *RevokeAPIKeyRequest, opts ...grpc.CallOption) (*RevokeAPIKeyResponse, error)
+	GetDashboard(ctx context.Context, in *GetDashboardRequest, opts ...grpc.CallOption) (*Dashboard, error)
+	ListKubernetesClusters(ctx context.Context, in *ListKubernetesClustersRequest, opts ...grpc.CallOption) (*ListKubernetesClustersResponse, error)
+	GetKubernetesCluster(ctx context.Context, in *GetKubernetesClusterRequest, opts ...grpc.CallOption) (*KubernetesCluster, error)
+	CreateKubernetesCluster(ctx context.Context, in *CreateKubernetesClusterRequest, opts ...grpc.CallOption) (*KubernetesCluster, error)
+	UpdateKubernetesCluster(ctx context.Context, in *UpdateKubernetesClusterRequest, opts ...grpc.CallOption) (*KubernetesCluster, error)
+	DeleteKubernetesCluster(ctx context.Context, in *DeleteKubernetesClusterRequest, opts ...grpc.CallOption) (*DeleteKubernetesClusterResponse, error)
 }
 
 type schedulerServiceClient struct {
@@ -431,6 +483,266 @@ func (c *schedulerServiceClient) PurgeRunHistory(ctx context.Context, in *PurgeR
 	return out, nil
 }
 
+func (c *schedulerServiceClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PingResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_Ping_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) AuthenticateAPIKey(ctx context.Context, in *AuthenticateAPIKeyRequest, opts ...grpc.CallOption) (*AuthenticateAPIKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuthenticateAPIKeyResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_AuthenticateAPIKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*User, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(User)
+	err := c.cc.Invoke(ctx, SchedulerService_GetUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) GetUserByEmail(ctx context.Context, in *GetUserByEmailRequest, opts ...grpc.CallOption) (*User, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(User)
+	err := c.cc.Invoke(ctx, SchedulerService_GetUserByEmail_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) GetMembershipRole(ctx context.Context, in *GetMembershipRoleRequest, opts ...grpc.CallOption) (*GetMembershipRoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMembershipRoleResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_GetMembershipRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) ListUserTenants(ctx context.Context, in *ListUserTenantsRequest, opts ...grpc.CallOption) (*ListUserTenantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListUserTenantsResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_ListUserTenants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) CreateRefreshSession(ctx context.Context, in *CreateRefreshSessionRequest, opts ...grpc.CallOption) (*CreateRefreshSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateRefreshSessionResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_CreateRefreshSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) RotateRefreshSession(ctx context.Context, in *RotateRefreshSessionRequest, opts ...grpc.CallOption) (*RotateRefreshSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RotateRefreshSessionResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_RotateRefreshSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) RevokeRefreshSession(ctx context.Context, in *RevokeRefreshSessionRequest, opts ...grpc.CallOption) (*RevokeRefreshSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeRefreshSessionResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_RevokeRefreshSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListUsersResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_ListUsers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*User, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(User)
+	err := c.cc.Invoke(ctx, SchedulerService_CreateUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) SetUserDisabled(ctx context.Context, in *SetUserDisabledRequest, opts ...grpc.CallOption) (*SetUserDisabledResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetUserDisabledResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_SetUserDisabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) ListTenants(ctx context.Context, in *ListTenantsRequest, opts ...grpc.CallOption) (*ListTenantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantsResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_ListTenants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) CreateTenant(ctx context.Context, in *CreateTenantRequest, opts ...grpc.CallOption) (*Tenant, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Tenant)
+	err := c.cc.Invoke(ctx, SchedulerService_CreateTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) ListTenantMembers(ctx context.Context, in *ListTenantMembersRequest, opts ...grpc.CallOption) (*ListTenantMembersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantMembersResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_ListTenantMembers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) AddMembership(ctx context.Context, in *AddMembershipRequest, opts ...grpc.CallOption) (*AddMembershipResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddMembershipResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_AddMembership_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) DeleteMembership(ctx context.Context, in *DeleteMembershipRequest, opts ...grpc.CallOption) (*DeleteMembershipResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteMembershipResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_DeleteMembership_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) ListAPIKeys(ctx context.Context, in *ListAPIKeysRequest, opts ...grpc.CallOption) (*ListAPIKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAPIKeysResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_ListAPIKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) CreateAPIKey(ctx context.Context, in *CreateAPIKeyRequest, opts ...grpc.CallOption) (*CreateAPIKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateAPIKeyResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_CreateAPIKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) RevokeAPIKey(ctx context.Context, in *RevokeAPIKeyRequest, opts ...grpc.CallOption) (*RevokeAPIKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeAPIKeyResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_RevokeAPIKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) GetDashboard(ctx context.Context, in *GetDashboardRequest, opts ...grpc.CallOption) (*Dashboard, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Dashboard)
+	err := c.cc.Invoke(ctx, SchedulerService_GetDashboard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) ListKubernetesClusters(ctx context.Context, in *ListKubernetesClustersRequest, opts ...grpc.CallOption) (*ListKubernetesClustersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListKubernetesClustersResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_ListKubernetesClusters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) GetKubernetesCluster(ctx context.Context, in *GetKubernetesClusterRequest, opts ...grpc.CallOption) (*KubernetesCluster, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KubernetesCluster)
+	err := c.cc.Invoke(ctx, SchedulerService_GetKubernetesCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) CreateKubernetesCluster(ctx context.Context, in *CreateKubernetesClusterRequest, opts ...grpc.CallOption) (*KubernetesCluster, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KubernetesCluster)
+	err := c.cc.Invoke(ctx, SchedulerService_CreateKubernetesCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) UpdateKubernetesCluster(ctx context.Context, in *UpdateKubernetesClusterRequest, opts ...grpc.CallOption) (*KubernetesCluster, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(KubernetesCluster)
+	err := c.cc.Invoke(ctx, SchedulerService_UpdateKubernetesCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerServiceClient) DeleteKubernetesCluster(ctx context.Context, in *DeleteKubernetesClusterRequest, opts ...grpc.CallOption) (*DeleteKubernetesClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteKubernetesClusterResponse)
+	err := c.cc.Invoke(ctx, SchedulerService_DeleteKubernetesCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SchedulerServiceServer is the server API for SchedulerService service.
 // All implementations must embed UnimplementedSchedulerServiceServer
 // for forward compatibility.
@@ -468,6 +780,32 @@ type SchedulerServiceServer interface {
 	ListNotificationHistory(context.Context, *ListNotificationHistoryRequest) (*ListNotificationHistoryResponse, error)
 	GetRunReport(context.Context, *GetRunReportRequest) (*RunReport, error)
 	PurgeRunHistory(context.Context, *PurgeRunHistoryRequest) (*PurgeRunHistoryResponse, error)
+	Ping(context.Context, *PingRequest) (*PingResponse, error)
+	AuthenticateAPIKey(context.Context, *AuthenticateAPIKeyRequest) (*AuthenticateAPIKeyResponse, error)
+	GetUser(context.Context, *GetUserRequest) (*User, error)
+	GetUserByEmail(context.Context, *GetUserByEmailRequest) (*User, error)
+	GetMembershipRole(context.Context, *GetMembershipRoleRequest) (*GetMembershipRoleResponse, error)
+	ListUserTenants(context.Context, *ListUserTenantsRequest) (*ListUserTenantsResponse, error)
+	CreateRefreshSession(context.Context, *CreateRefreshSessionRequest) (*CreateRefreshSessionResponse, error)
+	RotateRefreshSession(context.Context, *RotateRefreshSessionRequest) (*RotateRefreshSessionResponse, error)
+	RevokeRefreshSession(context.Context, *RevokeRefreshSessionRequest) (*RevokeRefreshSessionResponse, error)
+	ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error)
+	CreateUser(context.Context, *CreateUserRequest) (*User, error)
+	SetUserDisabled(context.Context, *SetUserDisabledRequest) (*SetUserDisabledResponse, error)
+	ListTenants(context.Context, *ListTenantsRequest) (*ListTenantsResponse, error)
+	CreateTenant(context.Context, *CreateTenantRequest) (*Tenant, error)
+	ListTenantMembers(context.Context, *ListTenantMembersRequest) (*ListTenantMembersResponse, error)
+	AddMembership(context.Context, *AddMembershipRequest) (*AddMembershipResponse, error)
+	DeleteMembership(context.Context, *DeleteMembershipRequest) (*DeleteMembershipResponse, error)
+	ListAPIKeys(context.Context, *ListAPIKeysRequest) (*ListAPIKeysResponse, error)
+	CreateAPIKey(context.Context, *CreateAPIKeyRequest) (*CreateAPIKeyResponse, error)
+	RevokeAPIKey(context.Context, *RevokeAPIKeyRequest) (*RevokeAPIKeyResponse, error)
+	GetDashboard(context.Context, *GetDashboardRequest) (*Dashboard, error)
+	ListKubernetesClusters(context.Context, *ListKubernetesClustersRequest) (*ListKubernetesClustersResponse, error)
+	GetKubernetesCluster(context.Context, *GetKubernetesClusterRequest) (*KubernetesCluster, error)
+	CreateKubernetesCluster(context.Context, *CreateKubernetesClusterRequest) (*KubernetesCluster, error)
+	UpdateKubernetesCluster(context.Context, *UpdateKubernetesClusterRequest) (*KubernetesCluster, error)
+	DeleteKubernetesCluster(context.Context, *DeleteKubernetesClusterRequest) (*DeleteKubernetesClusterResponse, error)
 	mustEmbedUnimplementedSchedulerServiceServer()
 }
 
@@ -576,6 +914,84 @@ func (UnimplementedSchedulerServiceServer) GetRunReport(context.Context, *GetRun
 }
 func (UnimplementedSchedulerServiceServer) PurgeRunHistory(context.Context, *PurgeRunHistoryRequest) (*PurgeRunHistoryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PurgeRunHistory not implemented")
+}
+func (UnimplementedSchedulerServiceServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedSchedulerServiceServer) AuthenticateAPIKey(context.Context, *AuthenticateAPIKeyRequest) (*AuthenticateAPIKeyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AuthenticateAPIKey not implemented")
+}
+func (UnimplementedSchedulerServiceServer) GetUser(context.Context, *GetUserRequest) (*User, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetUser not implemented")
+}
+func (UnimplementedSchedulerServiceServer) GetUserByEmail(context.Context, *GetUserByEmailRequest) (*User, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetUserByEmail not implemented")
+}
+func (UnimplementedSchedulerServiceServer) GetMembershipRole(context.Context, *GetMembershipRoleRequest) (*GetMembershipRoleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMembershipRole not implemented")
+}
+func (UnimplementedSchedulerServiceServer) ListUserTenants(context.Context, *ListUserTenantsRequest) (*ListUserTenantsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListUserTenants not implemented")
+}
+func (UnimplementedSchedulerServiceServer) CreateRefreshSession(context.Context, *CreateRefreshSessionRequest) (*CreateRefreshSessionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateRefreshSession not implemented")
+}
+func (UnimplementedSchedulerServiceServer) RotateRefreshSession(context.Context, *RotateRefreshSessionRequest) (*RotateRefreshSessionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RotateRefreshSession not implemented")
+}
+func (UnimplementedSchedulerServiceServer) RevokeRefreshSession(context.Context, *RevokeRefreshSessionRequest) (*RevokeRefreshSessionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeRefreshSession not implemented")
+}
+func (UnimplementedSchedulerServiceServer) ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListUsers not implemented")
+}
+func (UnimplementedSchedulerServiceServer) CreateUser(context.Context, *CreateUserRequest) (*User, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateUser not implemented")
+}
+func (UnimplementedSchedulerServiceServer) SetUserDisabled(context.Context, *SetUserDisabledRequest) (*SetUserDisabledResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetUserDisabled not implemented")
+}
+func (UnimplementedSchedulerServiceServer) ListTenants(context.Context, *ListTenantsRequest) (*ListTenantsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTenants not implemented")
+}
+func (UnimplementedSchedulerServiceServer) CreateTenant(context.Context, *CreateTenantRequest) (*Tenant, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateTenant not implemented")
+}
+func (UnimplementedSchedulerServiceServer) ListTenantMembers(context.Context, *ListTenantMembersRequest) (*ListTenantMembersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTenantMembers not implemented")
+}
+func (UnimplementedSchedulerServiceServer) AddMembership(context.Context, *AddMembershipRequest) (*AddMembershipResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddMembership not implemented")
+}
+func (UnimplementedSchedulerServiceServer) DeleteMembership(context.Context, *DeleteMembershipRequest) (*DeleteMembershipResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteMembership not implemented")
+}
+func (UnimplementedSchedulerServiceServer) ListAPIKeys(context.Context, *ListAPIKeysRequest) (*ListAPIKeysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListAPIKeys not implemented")
+}
+func (UnimplementedSchedulerServiceServer) CreateAPIKey(context.Context, *CreateAPIKeyRequest) (*CreateAPIKeyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateAPIKey not implemented")
+}
+func (UnimplementedSchedulerServiceServer) RevokeAPIKey(context.Context, *RevokeAPIKeyRequest) (*RevokeAPIKeyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeAPIKey not implemented")
+}
+func (UnimplementedSchedulerServiceServer) GetDashboard(context.Context, *GetDashboardRequest) (*Dashboard, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetDashboard not implemented")
+}
+func (UnimplementedSchedulerServiceServer) ListKubernetesClusters(context.Context, *ListKubernetesClustersRequest) (*ListKubernetesClustersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListKubernetesClusters not implemented")
+}
+func (UnimplementedSchedulerServiceServer) GetKubernetesCluster(context.Context, *GetKubernetesClusterRequest) (*KubernetesCluster, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetKubernetesCluster not implemented")
+}
+func (UnimplementedSchedulerServiceServer) CreateKubernetesCluster(context.Context, *CreateKubernetesClusterRequest) (*KubernetesCluster, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateKubernetesCluster not implemented")
+}
+func (UnimplementedSchedulerServiceServer) UpdateKubernetesCluster(context.Context, *UpdateKubernetesClusterRequest) (*KubernetesCluster, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateKubernetesCluster not implemented")
+}
+func (UnimplementedSchedulerServiceServer) DeleteKubernetesCluster(context.Context, *DeleteKubernetesClusterRequest) (*DeleteKubernetesClusterResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteKubernetesCluster not implemented")
 }
 func (UnimplementedSchedulerServiceServer) mustEmbedUnimplementedSchedulerServiceServer() {}
 func (UnimplementedSchedulerServiceServer) testEmbeddedByValue()                          {}
@@ -1192,6 +1608,474 @@ func _SchedulerService_PurgeRunHistory_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SchedulerService_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).Ping(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_Ping_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).Ping(ctx, req.(*PingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_AuthenticateAPIKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthenticateAPIKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).AuthenticateAPIKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_AuthenticateAPIKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).AuthenticateAPIKey(ctx, req.(*AuthenticateAPIKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_GetUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).GetUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_GetUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).GetUser(ctx, req.(*GetUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_GetUserByEmail_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUserByEmailRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).GetUserByEmail(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_GetUserByEmail_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).GetUserByEmail(ctx, req.(*GetUserByEmailRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_GetMembershipRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMembershipRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).GetMembershipRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_GetMembershipRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).GetMembershipRole(ctx, req.(*GetMembershipRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_ListUserTenants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListUserTenantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).ListUserTenants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_ListUserTenants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).ListUserTenants(ctx, req.(*ListUserTenantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_CreateRefreshSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateRefreshSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).CreateRefreshSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_CreateRefreshSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).CreateRefreshSession(ctx, req.(*CreateRefreshSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_RotateRefreshSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateRefreshSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).RotateRefreshSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_RotateRefreshSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).RotateRefreshSession(ctx, req.(*RotateRefreshSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_RevokeRefreshSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeRefreshSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).RevokeRefreshSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_RevokeRefreshSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).RevokeRefreshSession(ctx, req.(*RevokeRefreshSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_ListUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListUsersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).ListUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_ListUsers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).ListUsers(ctx, req.(*ListUsersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_CreateUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).CreateUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_CreateUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).CreateUser(ctx, req.(*CreateUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_SetUserDisabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetUserDisabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).SetUserDisabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_SetUserDisabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).SetUserDisabled(ctx, req.(*SetUserDisabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_ListTenants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).ListTenants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_ListTenants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).ListTenants(ctx, req.(*ListTenantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_CreateTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).CreateTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_CreateTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).CreateTenant(ctx, req.(*CreateTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_ListTenantMembers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantMembersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).ListTenantMembers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_ListTenantMembers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).ListTenantMembers(ctx, req.(*ListTenantMembersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_AddMembership_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddMembershipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).AddMembership(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_AddMembership_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).AddMembership(ctx, req.(*AddMembershipRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_DeleteMembership_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteMembershipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).DeleteMembership(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_DeleteMembership_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).DeleteMembership(ctx, req.(*DeleteMembershipRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_ListAPIKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAPIKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).ListAPIKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_ListAPIKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).ListAPIKeys(ctx, req.(*ListAPIKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_CreateAPIKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateAPIKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).CreateAPIKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_CreateAPIKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).CreateAPIKey(ctx, req.(*CreateAPIKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_RevokeAPIKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeAPIKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).RevokeAPIKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_RevokeAPIKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).RevokeAPIKey(ctx, req.(*RevokeAPIKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_GetDashboard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDashboardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).GetDashboard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_GetDashboard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).GetDashboard(ctx, req.(*GetDashboardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_ListKubernetesClusters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListKubernetesClustersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).ListKubernetesClusters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_ListKubernetesClusters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).ListKubernetesClusters(ctx, req.(*ListKubernetesClustersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_GetKubernetesCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetKubernetesClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).GetKubernetesCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_GetKubernetesCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).GetKubernetesCluster(ctx, req.(*GetKubernetesClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_CreateKubernetesCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateKubernetesClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).CreateKubernetesCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_CreateKubernetesCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).CreateKubernetesCluster(ctx, req.(*CreateKubernetesClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_UpdateKubernetesCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateKubernetesClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).UpdateKubernetesCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_UpdateKubernetesCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).UpdateKubernetesCluster(ctx, req.(*UpdateKubernetesClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerService_DeleteKubernetesCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteKubernetesClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServiceServer).DeleteKubernetesCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerService_DeleteKubernetesCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServiceServer).DeleteKubernetesCluster(ctx, req.(*DeleteKubernetesClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SchedulerService_ServiceDesc is the grpc.ServiceDesc for SchedulerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1330,6 +2214,110 @@ var SchedulerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PurgeRunHistory",
 			Handler:    _SchedulerService_PurgeRunHistory_Handler,
+		},
+		{
+			MethodName: "Ping",
+			Handler:    _SchedulerService_Ping_Handler,
+		},
+		{
+			MethodName: "AuthenticateAPIKey",
+			Handler:    _SchedulerService_AuthenticateAPIKey_Handler,
+		},
+		{
+			MethodName: "GetUser",
+			Handler:    _SchedulerService_GetUser_Handler,
+		},
+		{
+			MethodName: "GetUserByEmail",
+			Handler:    _SchedulerService_GetUserByEmail_Handler,
+		},
+		{
+			MethodName: "GetMembershipRole",
+			Handler:    _SchedulerService_GetMembershipRole_Handler,
+		},
+		{
+			MethodName: "ListUserTenants",
+			Handler:    _SchedulerService_ListUserTenants_Handler,
+		},
+		{
+			MethodName: "CreateRefreshSession",
+			Handler:    _SchedulerService_CreateRefreshSession_Handler,
+		},
+		{
+			MethodName: "RotateRefreshSession",
+			Handler:    _SchedulerService_RotateRefreshSession_Handler,
+		},
+		{
+			MethodName: "RevokeRefreshSession",
+			Handler:    _SchedulerService_RevokeRefreshSession_Handler,
+		},
+		{
+			MethodName: "ListUsers",
+			Handler:    _SchedulerService_ListUsers_Handler,
+		},
+		{
+			MethodName: "CreateUser",
+			Handler:    _SchedulerService_CreateUser_Handler,
+		},
+		{
+			MethodName: "SetUserDisabled",
+			Handler:    _SchedulerService_SetUserDisabled_Handler,
+		},
+		{
+			MethodName: "ListTenants",
+			Handler:    _SchedulerService_ListTenants_Handler,
+		},
+		{
+			MethodName: "CreateTenant",
+			Handler:    _SchedulerService_CreateTenant_Handler,
+		},
+		{
+			MethodName: "ListTenantMembers",
+			Handler:    _SchedulerService_ListTenantMembers_Handler,
+		},
+		{
+			MethodName: "AddMembership",
+			Handler:    _SchedulerService_AddMembership_Handler,
+		},
+		{
+			MethodName: "DeleteMembership",
+			Handler:    _SchedulerService_DeleteMembership_Handler,
+		},
+		{
+			MethodName: "ListAPIKeys",
+			Handler:    _SchedulerService_ListAPIKeys_Handler,
+		},
+		{
+			MethodName: "CreateAPIKey",
+			Handler:    _SchedulerService_CreateAPIKey_Handler,
+		},
+		{
+			MethodName: "RevokeAPIKey",
+			Handler:    _SchedulerService_RevokeAPIKey_Handler,
+		},
+		{
+			MethodName: "GetDashboard",
+			Handler:    _SchedulerService_GetDashboard_Handler,
+		},
+		{
+			MethodName: "ListKubernetesClusters",
+			Handler:    _SchedulerService_ListKubernetesClusters_Handler,
+		},
+		{
+			MethodName: "GetKubernetesCluster",
+			Handler:    _SchedulerService_GetKubernetesCluster_Handler,
+		},
+		{
+			MethodName: "CreateKubernetesCluster",
+			Handler:    _SchedulerService_CreateKubernetesCluster_Handler,
+		},
+		{
+			MethodName: "UpdateKubernetesCluster",
+			Handler:    _SchedulerService_UpdateKubernetesCluster_Handler,
+		},
+		{
+			MethodName: "DeleteKubernetesCluster",
+			Handler:    _SchedulerService_DeleteKubernetesCluster_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

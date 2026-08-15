@@ -38,7 +38,6 @@ type principal struct {
 }
 type Server struct {
 	client       schedulerv1.SchedulerServiceClient
-	store        *store.Store
 	auth         *auth.Manager
 	cookieSecure bool
 	contextPath  string
@@ -62,12 +61,12 @@ func (s *Server) SetDiscovery(client *clientv3.Client, prefix string) {
 
 func (s *Server) SetContextPath(contextPath string) { s.contextPath = contextPath }
 
-func NewServer(client schedulerv1.SchedulerServiceClient, s *store.Store, manager *auth.Manager, cookieSecure ...bool) *Server {
+func NewServer(client schedulerv1.SchedulerServiceClient, manager *auth.Manager, cookieSecure ...bool) *Server {
 	secure := true
 	if len(cookieSecure) > 0 {
 		secure = cookieSecure[0]
 	}
-	return &Server{client: client, store: s, auth: manager, cookieSecure: secure, logins: newLoginLimiter()}
+	return &Server{client: client, auth: manager, cookieSecure: secure, logins: newLoginLimiter()}
 }
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
@@ -165,6 +164,34 @@ func clusterFromRequest(tenant, id string, body kubernetesClusterRequest) store.
 	return store.KubernetesCluster{ID: id, TenantID: tenant, Name: body.Name, AuthMode: body.AuthMode, APIServer: body.APIServer, Namespace: body.Namespace, Credentials: store.KubernetesCredentials{Kubeconfig: body.Kubeconfig, Token: body.Token, CAData: body.CAData}, InsecureSkipTLSVerify: body.InsecureSkipTLSVerify, MaxConcurrentJobs: body.MaxConcurrentJobs, Version: body.Version}
 }
 
+func clusterToProto(cluster store.KubernetesCluster) *schedulerv1.KubernetesCluster {
+	return &schedulerv1.KubernetesCluster{
+		Id: cluster.ID, TenantId: cluster.TenantID, Name: cluster.Name, AuthMode: cluster.AuthMode,
+		ApiServer: cluster.APIServer, Namespace: cluster.Namespace,
+		Kubeconfig: strings.TrimSpace(cluster.Credentials.Kubeconfig), Token: strings.TrimSpace(cluster.Credentials.Token), CaData: strings.TrimSpace(cluster.Credentials.CAData),
+		InsecureSkipTlsVerify: cluster.InsecureSkipTLSVerify, MaxConcurrentJobs: cluster.MaxConcurrentJobs, Version: cluster.Version,
+	}
+}
+
+func clusterFromProto(cluster *schedulerv1.KubernetesCluster) store.KubernetesCluster {
+	if cluster == nil {
+		return store.KubernetesCluster{}
+	}
+	out := store.KubernetesCluster{
+		ID: cluster.GetId(), TenantID: cluster.GetTenantId(), Name: cluster.GetName(), AuthMode: cluster.GetAuthMode(),
+		APIServer: cluster.GetApiServer(), Namespace: cluster.GetNamespace(),
+		Credentials:           store.KubernetesCredentials{Kubeconfig: cluster.GetKubeconfig(), Token: cluster.GetToken(), CAData: cluster.GetCaData()},
+		InsecureSkipTLSVerify: cluster.GetInsecureSkipTlsVerify(), MaxConcurrentJobs: cluster.GetMaxConcurrentJobs(), Version: cluster.GetVersion(),
+	}
+	if cluster.CreatedAt != nil {
+		out.CreatedAt = cluster.CreatedAt.AsTime()
+	}
+	if cluster.UpdatedAt != nil {
+		out.UpdatedAt = cluster.UpdatedAt.AsTime()
+	}
+	return out
+}
+
 func kubernetesCredentialsConfigured(credentials store.KubernetesCredentials) bool {
 	return strings.TrimSpace(credentials.Kubeconfig) != "" || strings.TrimSpace(credentials.Token) != "" || strings.TrimSpace(credentials.CAData) != ""
 }
@@ -185,25 +212,29 @@ func (s *Server) listKubernetesClusters(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "X-Tenant-ID is required")
 		return
 	}
-	clusters, err := s.store.ListKubernetesClusters(r.Context(), tenantID(r.Context()))
+	resp, err := s.client.ListKubernetesClusters(r.Context(), &schedulerv1.ListKubernetesClustersRequest{TenantId: tenantID(r.Context())})
 	if err != nil {
-		writeError(w, 500, "list kubernetes clusters failed")
+		respond(w, nil, err, http.StatusOK)
 		return
 	}
-	out := make([]map[string]any, 0, len(clusters))
-	for _, cluster := range clusters {
-		out = append(out, publicKubernetesCluster(cluster))
+	out := make([]map[string]any, 0, len(resp.GetClusters()))
+	for _, cluster := range resp.GetClusters() {
+		out = append(out, publicKubernetesCluster(clusterFromProto(cluster)))
 	}
 	writeJSON(w, 200, map[string]any{"clusters": out})
 }
 
 func (s *Server) getKubernetesCluster(w http.ResponseWriter, r *http.Request) {
-	cluster, err := s.store.GetKubernetesCluster(r.Context(), tenantID(r.Context()), chi.URLParam(r, "id"))
+	cluster, err := s.client.GetKubernetesCluster(r.Context(), &schedulerv1.GetKubernetesClusterRequest{TenantId: tenantID(r.Context()), Id: chi.URLParam(r, "id")})
 	if err != nil {
-		writeError(w, 404, "kubernetes cluster not found")
+		if status.Code(err) == codes.NotFound {
+			writeError(w, 404, "kubernetes cluster not found")
+			return
+		}
+		respond(w, nil, err, http.StatusOK)
 		return
 	}
-	writeJSON(w, 200, publicKubernetesCluster(cluster))
+	writeJSON(w, 200, publicKubernetesCluster(clusterFromProto(cluster)))
 }
 
 func (s *Server) createKubernetesCluster(w http.ResponseWriter, r *http.Request) {
@@ -214,12 +245,16 @@ func (s *Server) createKubernetesCluster(w http.ResponseWriter, r *http.Request)
 	if !decode(w, r, &body) {
 		return
 	}
-	cluster, err := s.store.CreateKubernetesCluster(r.Context(), clusterFromRequest(tenantID(r.Context()), "", body))
+	cluster, err := s.client.CreateKubernetesCluster(r.Context(), &schedulerv1.CreateKubernetesClusterRequest{Cluster: clusterToProto(clusterFromRequest(tenantID(r.Context()), "", body))})
 	if err != nil {
-		writeError(w, 400, err.Error())
+		if status.Code(err) == codes.InvalidArgument {
+			writeError(w, 400, status.Convert(err).Message())
+			return
+		}
+		respond(w, nil, err, http.StatusCreated)
 		return
 	}
-	writeJSON(w, 201, publicKubernetesCluster(cluster))
+	writeJSON(w, 201, publicKubernetesCluster(clusterFromProto(cluster)))
 }
 
 func (s *Server) updateKubernetesCluster(w http.ResponseWriter, r *http.Request) {
@@ -230,32 +265,21 @@ func (s *Server) updateKubernetesCluster(w http.ResponseWriter, r *http.Request)
 	if !decode(w, r, &body) {
 		return
 	}
-	cluster := clusterFromRequest(tenantID(r.Context()), chi.URLParam(r, "id"), body)
-	if !kubernetesCredentialsConfigured(cluster.Credentials) {
-		current, loadErr := s.store.GetKubernetesCluster(r.Context(), cluster.TenantID, cluster.ID)
-		if errors.Is(loadErr, store.ErrNotFound) {
-			writeError(w, 404, "kubernetes cluster not found")
-			return
-		}
-		if loadErr != nil {
-			writeError(w, 500, "load kubernetes cluster failed")
-			return
-		}
-		if preserveErr := preserveKubernetesCredentials(current, &cluster); preserveErr != nil {
-			writeError(w, 400, preserveErr.Error())
-			return
-		}
-	}
-	cluster, err := s.store.UpdateKubernetesCluster(r.Context(), cluster)
-	if errors.Is(err, store.ErrConflict) {
-		writeError(w, 409, "kubernetes cluster version conflict")
-		return
-	}
+	cluster, err := s.client.UpdateKubernetesCluster(r.Context(), &schedulerv1.UpdateKubernetesClusterRequest{Cluster: clusterToProto(clusterFromRequest(tenantID(r.Context()), chi.URLParam(r, "id"), body))})
 	if err != nil {
-		writeError(w, 400, err.Error())
+		switch status.Code(err) {
+		case codes.NotFound:
+			writeError(w, 404, "kubernetes cluster not found")
+		case codes.Aborted:
+			writeError(w, 409, "kubernetes cluster version conflict")
+		case codes.InvalidArgument:
+			writeError(w, 400, status.Convert(err).Message())
+		default:
+			respond(w, nil, err, http.StatusOK)
+		}
 		return
 	}
-	writeJSON(w, 200, publicKubernetesCluster(cluster))
+	writeJSON(w, 200, publicKubernetesCluster(clusterFromProto(cluster)))
 }
 
 func (s *Server) deleteKubernetesCluster(w http.ResponseWriter, r *http.Request) {
@@ -267,13 +291,16 @@ func (s *Server) deleteKubernetesCluster(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "version is required")
 		return
 	}
-	err = s.store.DeleteKubernetesCluster(r.Context(), tenantID(r.Context()), chi.URLParam(r, "id"), version)
-	if errors.Is(err, store.ErrKubernetesClusterInUse) {
-		writeError(w, 409, "kubernetes cluster is referenced by a job")
-		return
-	}
+	_, err = s.client.DeleteKubernetesCluster(r.Context(), &schedulerv1.DeleteKubernetesClusterRequest{TenantId: tenantID(r.Context()), Id: chi.URLParam(r, "id"), Version: version})
 	if err != nil {
-		writeError(w, 409, "kubernetes cluster version conflict")
+		switch status.Code(err) {
+		case codes.FailedPrecondition:
+			writeError(w, 409, "kubernetes cluster is referenced by a job")
+		case codes.Aborted, codes.NotFound:
+			writeError(w, 409, "kubernetes cluster version conflict")
+		default:
+			respond(w, nil, err, http.StatusNoContent)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -294,10 +321,22 @@ func (s *Server) listAPIKeys(w http.ResponseWriter, r *http.Request) {
 	if !requireTenantAdmin(w, r) {
 		return
 	}
-	keys, err := s.store.ListAPIKeys(r.Context(), tenantID(r.Context()))
+	resp, err := s.client.ListAPIKeys(r.Context(), &schedulerv1.ListAPIKeysRequest{TenantId: tenantID(r.Context())})
 	if err != nil {
-		writeError(w, 500, "list API keys failed")
+		respond(w, nil, err, http.StatusOK)
 		return
+	}
+	keys := make([]store.APIKey, 0, len(resp.GetApiKeys()))
+	for _, key := range resp.GetApiKeys() {
+		item := store.APIKey{ID: key.GetId(), TenantID: key.GetTenantId(), Name: key.GetName(), Role: key.GetRole()}
+		if key.CreatedAt != nil {
+			item.CreatedAt = key.CreatedAt.AsTime()
+		}
+		if key.RevokedAt != nil {
+			revoked := key.RevokedAt.AsTime()
+			item.RevokedAt = &revoked
+		}
+		keys = append(keys, item)
 	}
 	writeJSON(w, 200, map[string]any{"api_keys": keys})
 }
@@ -320,19 +359,28 @@ func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "cannot grant a role equal to or above your own")
 		return
 	}
-	key, token, err := s.store.CreateAPIKey(r.Context(), tenantID(r.Context()), body.Name, body.Role)
+	resp, err := s.client.CreateAPIKey(r.Context(), &schedulerv1.CreateAPIKeyRequest{TenantId: tenantID(r.Context()), Name: body.Name, Role: body.Role})
 	if err != nil {
-		writeError(w, 500, "create API key failed")
+		respond(w, nil, err, http.StatusCreated)
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": key.ID, "name": key.Name, "role": key.Role, "token": token, "created_at": key.CreatedAt})
+	key := resp.GetApiKey()
+	createdAt := time.Time{}
+	if key.GetCreatedAt() != nil {
+		createdAt = key.GetCreatedAt().AsTime()
+	}
+	writeJSON(w, 201, map[string]any{"id": key.GetId(), "name": key.GetName(), "role": key.GetRole(), "token": resp.GetToken(), "created_at": createdAt})
 }
 func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	if !requireTenantAdmin(w, r) {
 		return
 	}
-	if err := s.store.RevokeAPIKey(r.Context(), tenantID(r.Context()), chi.URLParam(r, "id")); err != nil {
-		writeError(w, 404, "API key not found")
+	if _, err := s.client.RevokeAPIKey(r.Context(), &schedulerv1.RevokeAPIKeyRequest{TenantId: tenantID(r.Context()), Id: chi.URLParam(r, "id")}); err != nil {
+		if status.Code(err) == codes.NotFound {
+			writeError(w, 404, "API key not found")
+			return
+		}
+		respond(w, nil, err, http.StatusNoContent)
 		return
 	}
 	w.WriteHeader(204)
@@ -462,32 +510,32 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		}
 		var p principal
 		if strings.HasPrefix(token, "gsk_") {
-			tenant, role, err := s.store.AuthenticateAPIKey(r.Context(), token)
+			out, err := s.client.AuthenticateAPIKey(r.Context(), &schedulerv1.AuthenticateAPIKeyRequest{Token: token})
 			if err != nil {
 				writeError(w, 401, "invalid API key")
 				return
 			}
-			p = principal{TenantID: tenant, Role: role}
+			p = principal{TenantID: out.GetTenantId(), Role: out.GetRole()}
 		} else {
 			claims, err := s.auth.Parse(token)
 			if err != nil {
 				writeError(w, 401, "invalid access token")
 				return
 			}
-			user, userErr := s.store.GetUser(r.Context(), claims.Subject)
-			if userErr != nil || user.Disabled {
+			user, userErr := s.client.GetUser(r.Context(), &schedulerv1.GetUserRequest{Id: claims.Subject})
+			if userErr != nil || user.GetDisabled() {
 				writeError(w, 401, "account unavailable")
 				return
 			}
 			p = principal{UserID: claims.Subject, PlatformAdmin: claims.PlatformAdmin}
 			if tenant := r.Header.Get("X-Tenant-ID"); tenant != "" {
-				role, roleErr := s.store.GetMembershipRole(r.Context(), tenant, p.UserID)
+				role, roleErr := s.client.GetMembershipRole(r.Context(), &schedulerv1.GetMembershipRoleRequest{TenantId: tenant, UserId: p.UserID})
 				if roleErr != nil {
 					writeError(w, 403, "tenant access denied")
 					return
 				}
 				p.TenantID = tenant
-				p.Role = role
+				p.Role = role.GetRole()
 			}
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
@@ -513,7 +561,7 @@ func requireTenantWrite(w http.ResponseWriter, r *http.Request) bool {
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
-	if err := s.store.Ping(ctx); err != nil {
+	if _, err := s.client.Ping(ctx, &schedulerv1.PingRequest{}); err != nil {
 		writeError(w, 503, "database unavailable")
 		return
 	}
@@ -531,28 +579,28 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "too many login attempts")
 		return
 	}
-	user, err := s.store.GetUserByEmail(r.Context(), body.Email)
-	passwordHash := user.PasswordHash
+	user, err := s.client.GetUserByEmail(r.Context(), &schedulerv1.GetUserByEmailRequest{Email: body.Email})
+	passwordHash := user.GetPasswordHash()
 	if err != nil {
 		passwordHash = dummyPasswordHash
 	}
 	passwordValid := auth.VerifyPassword(passwordHash, body.Password)
-	if err != nil || user.Disabled || !passwordValid {
+	if err != nil || user.GetDisabled() || !passwordValid {
 		writeError(w, 401, "invalid credentials")
 		return
 	}
 	s.logins.reset(r.RemoteAddr, body.Email)
-	token, err := s.auth.Issue(user.ID, user.PlatformAdmin)
+	token, err := s.auth.Issue(user.GetId(), user.GetPlatformAdmin())
 	if err != nil {
 		writeError(w, 500, "internal error")
 		return
 	}
-	refresh, _, err := s.store.CreateRefreshSession(r.Context(), user.ID, 7*24*time.Hour)
+	refresh, err := s.client.CreateRefreshSession(r.Context(), &schedulerv1.CreateRefreshSessionRequest{UserId: user.GetId(), TtlSeconds: int64((7 * 24 * time.Hour) / time.Second)})
 	if err != nil {
 		writeError(w, 500, "internal error")
 		return
 	}
-	s.setRefreshCookie(w, refresh, 7*24*time.Hour)
+	s.setRefreshCookie(w, refresh.GetToken(), 7*24*time.Hour)
 	writeJSON(w, 200, map[string]any{"access_token": token, "token_type": "Bearer", "expires_in": 900})
 }
 
@@ -568,66 +616,83 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "refresh session required")
 		return
 	}
-	raw, session, err := s.store.RotateRefreshSession(r.Context(), cookie.Value, 7*24*time.Hour)
+	rotated, err := s.client.RotateRefreshSession(r.Context(), &schedulerv1.RotateRefreshSessionRequest{Token: cookie.Value, TtlSeconds: int64((7 * 24 * time.Hour) / time.Second)})
 	if err != nil {
 		s.clearRefreshCookie(w)
 		writeError(w, 401, "refresh session expired")
 		return
 	}
-	user, err := s.store.GetUser(r.Context(), session.UserID)
-	if err != nil || user.Disabled {
+	user, err := s.client.GetUser(r.Context(), &schedulerv1.GetUserRequest{Id: rotated.GetUserId()})
+	if err != nil || user.GetDisabled() {
 		s.clearRefreshCookie(w)
 		writeError(w, 401, "account unavailable")
 		return
 	}
-	token, err := s.auth.Issue(user.ID, user.PlatformAdmin)
+	token, err := s.auth.Issue(user.GetId(), user.GetPlatformAdmin())
 	if err != nil {
 		writeError(w, 500, "internal error")
 		return
 	}
-	s.setRefreshCookie(w, raw, 7*24*time.Hour)
+	s.setRefreshCookie(w, rotated.GetToken(), 7*24*time.Hour)
 	writeJSON(w, 200, map[string]any{"access_token": token, "token_type": "Bearer", "expires_in": 900})
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("scheduler_refresh"); err == nil {
-		_ = s.store.RevokeRefreshSession(r.Context(), c.Value)
+		_, _ = s.client.RevokeRefreshSession(r.Context(), &schedulerv1.RevokeRefreshSessionRequest{Token: c.Value})
 	}
 	s.clearRefreshCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	p := getPrincipal(r.Context())
-	u, err := s.store.GetUser(r.Context(), p.UserID)
+	u, err := s.client.GetUser(r.Context(), &schedulerv1.GetUserRequest{Id: p.UserID})
 	if err != nil {
-		writeError(w, 404, "user not found")
+		if status.Code(err) == codes.NotFound {
+			writeError(w, 404, "user not found")
+			return
+		}
+		respond(w, nil, err, http.StatusOK)
 		return
 	}
-	tenants, err := s.store.UserTenants(r.Context(), u.ID, u.PlatformAdmin)
+	resp, err := s.client.ListUserTenants(r.Context(), &schedulerv1.ListUserTenantsRequest{UserId: u.GetId(), PlatformAdmin: u.GetPlatformAdmin()})
 	if err != nil {
-		writeError(w, 500, "list tenants failed")
+		respond(w, nil, err, http.StatusOK)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": u.ID, "email": u.Email, "platform_admin": u.PlatformAdmin, "tenants": tenants})
+	tenants := make([]store.TenantAccess, 0, len(resp.GetTenants()))
+	for _, tenant := range resp.GetTenants() {
+		tenants = append(tenants, store.TenantAccess{ID: tenant.GetId(), Name: tenant.GetName(), Role: tenant.GetRole(), MaxConcurrentRuns: int(tenant.GetMaxConcurrentRuns())})
+	}
+	writeJSON(w, 200, map[string]any{"id": u.GetId(), "email": u.GetEmail(), "platform_admin": u.GetPlatformAdmin(), "tenants": tenants})
 }
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if tenantID(r.Context()) == "" {
 		writeError(w, 400, "X-Tenant-ID is required")
 		return
 	}
-	d, err := s.store.Dashboard(r.Context(), tenantID(r.Context()))
+	d, err := s.client.GetDashboard(r.Context(), &schedulerv1.GetDashboardRequest{TenantId: tenantID(r.Context())})
 	if err != nil {
-		writeError(w, 500, "load dashboard failed")
+		respond(w, nil, err, http.StatusOK)
 		return
 	}
-	failures := make([]map[string]any, 0, len(d.RecentFailures))
-	for _, run := range d.RecentFailures {
-		failures = append(failures, map[string]any{"id": run.ID, "job_id": run.JobID, "status": run.Status, "scheduled_at": run.ScheduledAt, "error_message": run.ErrorMessage})
+	failures := make([]map[string]any, 0, len(d.GetRecentFailures()))
+	for _, run := range d.GetRecentFailures() {
+		var scheduledAt time.Time
+		if run.GetScheduledAt() != nil {
+			scheduledAt = run.GetScheduledAt().AsTime()
+		}
+		failures = append(failures, map[string]any{"id": run.GetId(), "job_id": run.GetJobId(), "status": run.GetStatus(), "scheduled_at": scheduledAt, "error_message": run.GetErrorMessage()})
 	}
-	upcoming := make([]map[string]any, 0, len(d.Upcoming))
-	for _, job := range d.Upcoming {
-		upcoming = append(upcoming, map[string]any{"id": job.ID, "name": job.Name, "next_run_at": job.NextRunAt})
+	upcoming := make([]map[string]any, 0, len(d.GetUpcoming()))
+	for _, job := range d.GetUpcoming() {
+		var nextRunAt *time.Time
+		if job.GetNextRunAt() != nil {
+			value := job.GetNextRunAt().AsTime()
+			nextRunAt = &value
+		}
+		upcoming = append(upcoming, map[string]any{"id": job.GetId(), "name": job.GetName(), "next_run_at": nextRunAt})
 	}
-	writeJSON(w, 200, map[string]any{"Jobs": d.Jobs, "EnabledJobs": d.EnabledJobs, "PendingRuns": d.PendingRuns, "RunningRuns": d.RunningRuns, "Succeeded24H": d.Succeeded24H, "Failed24H": d.Failed24H, "RecentFailures": failures, "Upcoming": upcoming})
+	writeJSON(w, 200, map[string]any{"Jobs": d.GetJobs(), "EnabledJobs": d.GetEnabledJobs(), "PendingRuns": d.GetPendingRuns(), "RunningRuns": d.GetRunningRuns(), "Succeeded24H": d.GetSucceeded_24H(), "Failed24H": d.GetFailed_24H(), "RecentFailures": failures, "Upcoming": upcoming})
 }
 func (s *Server) runReport(w http.ResponseWriter, r *http.Request) {
 	tenant := tenantID(r.Context())
@@ -669,12 +734,20 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	if !requirePlatformAdmin(w, r) {
 		return
 	}
-	x, err := s.store.ListUsers(r.Context())
+	resp, err := s.client.ListUsers(r.Context(), &schedulerv1.ListUsersRequest{})
 	if err != nil {
-		writeError(w, 500, "list users failed")
+		respond(w, nil, err, http.StatusOK)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"users": x})
+	users := make([]store.UserSummary, 0, len(resp.GetUsers()))
+	for _, user := range resp.GetUsers() {
+		item := store.UserSummary{ID: user.GetId(), Email: user.GetEmail(), PlatformAdmin: user.GetPlatformAdmin(), Disabled: user.GetDisabled()}
+		if user.CreatedAt != nil {
+			item.CreatedAt = user.CreatedAt.AsTime()
+		}
+		users = append(users, item)
+	}
+	writeJSON(w, 200, map[string]any{"users": users})
 }
 func (s *Server) patchUser(w http.ResponseWriter, r *http.Request) {
 	if !requirePlatformAdmin(w, r) {
@@ -686,8 +759,8 @@ func (s *Server) patchUser(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if err := s.store.SetUserDisabled(r.Context(), chi.URLParam(r, "id"), body.Disabled); err != nil {
-		writeError(w, 500, "update user failed")
+	if _, err := s.client.SetUserDisabled(r.Context(), &schedulerv1.SetUserDisabledRequest{Id: chi.URLParam(r, "id"), Disabled: body.Disabled}); err != nil {
+		respond(w, nil, err, http.StatusNoContent)
 		return
 	}
 	w.WriteHeader(204)
@@ -696,12 +769,20 @@ func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
 	if !requirePlatformAdmin(w, r) {
 		return
 	}
-	x, err := s.store.ListTenants(r.Context())
+	resp, err := s.client.ListTenants(r.Context(), &schedulerv1.ListTenantsRequest{})
 	if err != nil {
-		writeError(w, 500, "list tenants failed")
+		respond(w, nil, err, http.StatusOK)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"tenants": x})
+	tenants := make([]store.TenantSummary, 0, len(resp.GetTenants()))
+	for _, tenant := range resp.GetTenants() {
+		item := store.TenantSummary{ID: tenant.GetId(), Name: tenant.GetName(), MaxConcurrentRuns: int(tenant.GetMaxConcurrentRuns())}
+		if tenant.CreatedAt != nil {
+			item.CreatedAt = tenant.CreatedAt.AsTime()
+		}
+		tenants = append(tenants, item)
+	}
+	writeJSON(w, 200, map[string]any{"tenants": tenants})
 }
 func (s *Server) listInstances(w http.ResponseWriter, r *http.Request) {
 	if !requirePlatformAdmin(w, r) {
@@ -732,24 +813,28 @@ func (s *Server) listMembers(w http.ResponseWriter, r *http.Request) {
 	if !requirePlatformAdmin(w, r) {
 		return
 	}
-	x, err := s.store.TenantMembers(r.Context(), chi.URLParam(r, "tenantID"))
+	resp, err := s.client.ListTenantMembers(r.Context(), &schedulerv1.ListTenantMembersRequest{TenantId: chi.URLParam(r, "tenantID")})
 	if err != nil {
-		writeError(w, 500, "list members failed")
+		respond(w, nil, err, http.StatusOK)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"members": x})
+	members := make([]store.MemberSummary, 0, len(resp.GetMembers()))
+	for _, member := range resp.GetMembers() {
+		members = append(members, store.MemberSummary{UserID: member.GetUserId(), Email: member.GetEmail(), Role: member.GetRole(), Disabled: member.GetDisabled()})
+	}
+	writeJSON(w, 200, map[string]any{"members": members})
 }
 func (s *Server) deleteMembership(w http.ResponseWriter, r *http.Request) {
 	if !requirePlatformAdmin(w, r) {
 		return
 	}
-	err := s.store.DeleteMembership(r.Context(), chi.URLParam(r, "tenantID"), chi.URLParam(r, "userID"))
-	if errors.Is(err, store.ErrConflict) {
-		writeError(w, 409, "cannot remove the last owner")
-		return
-	}
+	_, err := s.client.DeleteMembership(r.Context(), &schedulerv1.DeleteMembershipRequest{TenantId: chi.URLParam(r, "tenantID"), UserId: chi.URLParam(r, "userID")})
 	if err != nil {
-		writeError(w, 500, "remove member failed")
+		if status.Code(err) == codes.Aborted {
+			writeError(w, 409, "cannot remove the last owner")
+			return
+		}
+		respond(w, nil, err, http.StatusNoContent)
 		return
 	}
 	w.WriteHeader(204)
@@ -772,12 +857,12 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	user, err := s.store.CreateUser(r.Context(), body.Email, hash, body.PlatformAdmin)
+	user, err := s.client.CreateUser(r.Context(), &schedulerv1.CreateUserRequest{Email: body.Email, PasswordHash: hash, PlatformAdmin: body.PlatformAdmin})
 	if err != nil {
 		writeError(w, 409, "user already exists")
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": user.ID, "email": user.Email, "platform_admin": user.PlatformAdmin})
+	writeJSON(w, 201, map[string]any{"id": user.GetId(), "email": user.GetEmail(), "platform_admin": user.GetPlatformAdmin()})
 }
 func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 	if !getPrincipal(r.Context()).PlatformAdmin {
@@ -791,18 +876,18 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	id, err := s.store.CreateTenant(r.Context(), body.Name)
+	tenant, err := s.client.CreateTenant(r.Context(), &schedulerv1.CreateTenantRequest{Name: body.Name})
 	if err != nil {
-		writeError(w, 500, "create tenant failed")
+		respond(w, nil, err, http.StatusCreated)
 		return
 	}
 	if body.OwnerUserID != "" {
-		if err = s.store.AddMembership(r.Context(), id, body.OwnerUserID, "owner"); err != nil {
-			writeError(w, 500, "add owner failed")
+		if _, err = s.client.AddMembership(r.Context(), &schedulerv1.AddMembershipRequest{TenantId: tenant.GetId(), UserId: body.OwnerUserID, Role: "owner"}); err != nil {
+			respond(w, nil, err, http.StatusCreated)
 			return
 		}
 	}
-	writeJSON(w, 201, map[string]string{"id": id, "name": body.Name})
+	writeJSON(w, 201, map[string]string{"id": tenant.GetId(), "name": body.Name})
 }
 func (s *Server) putMembership(w http.ResponseWriter, r *http.Request) {
 	if !getPrincipal(r.Context()).PlatformAdmin {
@@ -819,8 +904,8 @@ func (s *Server) putMembership(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid role")
 		return
 	}
-	if err := s.store.AddMembership(r.Context(), chi.URLParam(r, "tenantID"), chi.URLParam(r, "userID"), body.Role); err != nil {
-		writeError(w, 500, "membership update failed")
+	if _, err := s.client.AddMembership(r.Context(), &schedulerv1.AddMembershipRequest{TenantId: chi.URLParam(r, "tenantID"), UserId: chi.URLParam(r, "userID"), Role: body.Role}); err != nil {
+		respond(w, nil, err, http.StatusNoContent)
 		return
 	}
 	w.WriteHeader(204)
@@ -857,12 +942,12 @@ func (s *Server) updateJob(w http.ResponseWriter, r *http.Request) {
 	job.Id = chi.URLParam(r, "id")
 	job.TenantId = tenantID(r.Context())
 	if job.Headers == nil {
-		existing, getErr := s.store.GetJob(r.Context(), job.TenantId, job.Id)
+		existing, getErr := s.client.GetJob(r.Context(), &schedulerv1.GetJobRequest{TenantId: job.TenantId, Id: job.Id})
 		if getErr != nil {
-			writeError(w, 404, "resource not found")
+			respond(w, nil, getErr, http.StatusOK)
 			return
 		}
-		job.Headers = existing.Headers
+		job.Headers = existing.GetHeaders()
 	}
 	applyDefaults(&job)
 	out, err := s.client.UpdateJob(r.Context(), &schedulerv1.UpdateJobRequest{Job: &job})
@@ -1146,6 +1231,9 @@ func applyDefaults(j *schedulerv1.Job) {
 	}
 	if j.MaxQueueSize == 0 {
 		j.MaxQueueSize = 1000
+	}
+	if j.ExecutorHandler == "" && j.TargetUrl != "" && j.ScriptLanguage == "" {
+		j.ExecutorHandler = "__http__"
 	}
 }
 func decode(w http.ResponseWriter, r *http.Request, dst any) bool {

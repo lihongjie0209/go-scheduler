@@ -10,9 +10,31 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 )
+
+func scriptProcessEnv(task Task, environ []string) []string {
+	env := make([]string, 0, 8)
+	for _, item := range environ {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "PATH", "HOME", "LANG":
+			env = append(env, item)
+		}
+	}
+	return append(env,
+		"SCHEDULER_INPUT="+task.Input,
+		"SCHEDULER_RUN_ID="+task.RunID,
+		"SCHEDULER_JOB_ID="+task.JobID,
+		fmt.Sprintf("SCHEDULER_SHARD_INDEX=%d", task.BroadcastIndex),
+		fmt.Sprintf("SCHEDULER_SHARD_TOTAL=%d", task.BroadcastTotal),
+	)
+}
 
 const maxScriptOutputBytes = 1 << 20
 
@@ -52,7 +74,7 @@ func ScriptHandler(options ScriptOptions) Handler {
 			return closeErr
 		}
 		command := exec.CommandContext(ctx, path, scriptName) // #nosec G204 -- executable is selected from a fixed language map; source is passed as a file, never shell-concatenated.
-		command.Env = append(os.Environ(), "SCHEDULER_INPUT="+task.Input, "SCHEDULER_RUN_ID="+task.RunID, "SCHEDULER_JOB_ID="+task.JobID, fmt.Sprintf("SCHEDULER_SHARD_INDEX=%d", task.BroadcastIndex), fmt.Sprintf("SCHEDULER_SHARD_TOTAL=%d", task.BroadcastTotal))
+		command.Env = scriptProcessEnv(task, os.Environ())
 		configureScriptProcess(command)
 		stdout, stderr := &limitedBuffer{limit: maxScriptOutputBytes}, &limitedBuffer{limit: maxScriptOutputBytes}
 		command.Stdout, command.Stderr = stdout, stderr

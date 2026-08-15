@@ -286,6 +286,20 @@ func (s *GRPCServer) Drain(ctx context.Context) error {
 }
 
 func (s *GRPCServer) finish(request *executorv1.DispatchRequest, handlerErr error) {
+	if errors.Is(handlerErr, ErrAwaitingCallback) {
+		s.mu.Lock()
+		if current, exists := s.runs[request.GetRunId()]; exists && current.state == "running" {
+			current.state = "waiting_callback"
+			current.cancel()
+		}
+		s.mu.Unlock()
+		if s.executionStore != nil {
+			if cleanupErr := s.executionStore.DeleteExecution(context.Background(), request.GetRunId()); cleanupErr != nil {
+				slog.Error("delete awaiting-callback executor execution", "run_id", request.GetRunId(), "error", cleanupErr)
+			}
+		}
+		return
+	}
 	state, message := "succeeded", ""
 	if handlerErr != nil {
 		state, message = "failed", truncate(handlerErr.Error(), 4096)
@@ -641,6 +655,13 @@ func (s *GRPCServer) deletePersistedExecution(ctx context.Context, runID string)
 }
 
 func (s *GRPCServer) Inspect(_ context.Context, request *executorv1.InspectRequest) (*executorv1.ExecutionState, error) {
+	if jobID := request.GetJobId(); jobID != "" && request.GetRunId() == "" {
+		state := "idle"
+		if s.server.jobBusy(jobID) {
+			state = "busy"
+		}
+		return &executorv1.ExecutionState{State: state}, nil
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	current, exists := s.runs[request.GetRunId()]

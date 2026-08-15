@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 )
 
-func selectActiveExecutor(ctx context.Context, client *http.Client, strategy, jobID string, nodes []executorCandidate, probeTimeout time.Duration) (executorCandidate, error) {
+func selectActiveExecutor(ctx context.Context, client *http.Client, grpcPool *executorGRPCPool, strategy, jobID string, nodes []executorCandidate, probeTimeout time.Duration) (executorCandidate, error) {
 	if len(nodes) == 0 {
 		return executorCandidate{}, fmt.Errorf("no live executor nodes")
 	}
@@ -23,7 +24,7 @@ func selectActiveExecutor(ctx context.Context, client *http.Client, strategy, jo
 			return executorCandidate{}, ctx.Err()
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		healthy := probeExecutor(probeCtx, client, strategy, jobID, node.Address)
+		healthy := probeExecutor(probeCtx, client, grpcPool, strategy, jobID, node.Address)
 		cancel()
 		if healthy {
 			return node, nil
@@ -32,7 +33,36 @@ func selectActiveExecutor(ctx context.Context, client *http.Client, strategy, jo
 	return executorCandidate{}, fmt.Errorf("no %s executor available", strategy)
 }
 
-func probeExecutor(ctx context.Context, client *http.Client, strategy, jobID, address string) bool {
+func executorAddressUsesGRPC(address string) bool {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return false
+	}
+	if !strings.Contains(address, "://") {
+		return true
+	}
+	parsed, err := url.Parse(address)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "grpc", "grpcs":
+		return true
+	case "http", "https":
+		return false
+	default:
+		return true
+	}
+}
+
+func probeExecutor(ctx context.Context, client *http.Client, grpcPool *executorGRPCPool, strategy, jobID, address string) bool {
+	if grpcPool != nil && executorAddressUsesGRPC(address) {
+		return grpcPool.probe(ctx, strategy, jobID, address)
+	}
+	return probeHTTPExecutor(ctx, client, strategy, jobID, address)
+}
+
+func probeHTTPExecutor(ctx context.Context, client *http.Client, strategy, jobID, address string) bool {
 	method := http.MethodGet
 	path := "/health"
 	var body io.Reader

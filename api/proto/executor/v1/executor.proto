@@ -69,7 +69,10 @@ message CancelRequest {
 }
 message CancelResponse { bool accepted = 1; }
 
-message InspectRequest { string run_id = 1; }
+message InspectRequest {
+  string run_id = 1;
+  string job_id = 2;
+}
 message ExecutionState {
   string run_id = 1;
   string execution_id = 2;

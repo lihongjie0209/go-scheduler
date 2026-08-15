@@ -75,10 +75,6 @@ func (s *Service) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest
 	}
 	out := &schedulerv1.ListJobsResponse{Jobs: make([]*schedulerv1.Job, 0, len(jobs))}
 	for _, j := range jobs {
-		j.RequiredExecutorLabels, j.ExcludedExecutorLabels, err = s.store.JobExecutorLabels(ctx, j.ID)
-		if err != nil {
-			return nil, toStatus(err)
-		}
 		out.Jobs = append(out.Jobs, toProto(j))
 	}
 	return out, nil
@@ -156,7 +152,13 @@ func validateJob(j *schedulerv1.Job) error {
 	if j.TenantId == "" {
 		return fmt.Errorf("tenant_id is required")
 	}
-	if j.ExecutorGroupId == "" {
+	if strings.TrimSpace(j.ExecutorGroupId) == "" {
+		return fmt.Errorf("executor_group_id is required")
+	}
+	if strings.TrimSpace(j.ExecutorHandler) == "" {
+		return fmt.Errorf("executor_handler is required")
+	}
+	if j.TargetUrl != "" {
 		parsed, err := url.ParseRequestURI(j.TargetUrl)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return fmt.Errorf("target_url must be an absolute HTTP or HTTPS URL")
@@ -164,8 +166,6 @@ func validateJob(j *schedulerv1.Job) error {
 		if parsed.User != nil {
 			return fmt.Errorf("target_url userinfo is not allowed")
 		}
-	} else if strings.TrimSpace(j.ExecutorHandler) == "" {
-		return fmt.Errorf("executor_handler is required with executor_group_id")
 	}
 	if j.ScriptLanguage != "" || j.ScriptSource != "" {
 		expectedHandler := "__script__"
@@ -223,9 +223,6 @@ func validateJob(j *schedulerv1.Job) error {
 		if _, exists := excludedSet[label]; exists {
 			return fmt.Errorf("executor label %q cannot be both required and excluded", label)
 		}
-	}
-	if j.ExecutorGroupId == "" && (len(required) > 0 || len(excluded) > 0) {
-		return fmt.Errorf("executor labels require executor_group_id")
 	}
 	j.RequiredExecutorLabels, j.ExcludedExecutorLabels = required, excluded
 	switch j.HttpMethod {
@@ -704,8 +701,12 @@ func toStatus(err error) error {
 		return status.Error(codes.FailedPrecondition, "executor group is still referenced by a job")
 	case errors.Is(err, store.ErrOverrideRequiresExecutorGroup):
 		return status.Error(codes.FailedPrecondition, "executor address override requires an executor group job")
+	case errors.Is(err, store.ErrOverrideAddressNotRegistered):
+		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, store.ErrInvalidNotificationScope):
 		return status.Error(codes.InvalidArgument, "notification channel must target all jobs or one or more specific jobs")
+	case errors.Is(err, store.ErrKubernetesClusterInUse):
+		return status.Error(codes.FailedPrecondition, "kubernetes cluster is referenced by a job")
 	default:
 		return status.Error(codes.Internal, fmt.Sprintf("operation failed: %v", err))
 	}

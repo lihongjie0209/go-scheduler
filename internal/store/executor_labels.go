@@ -27,6 +27,59 @@ func (s *Store) JobExecutorLabels(ctx context.Context, jobID string) ([]string, 
 	return jobExecutorLabels(ctx, s.pool, jobID)
 }
 
+func (s *Store) attachJobExecutorLabels(ctx context.Context, jobs []Job) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	ids := make([]string, len(jobs))
+	for i, job := range jobs {
+		ids[i] = job.ID
+	}
+	required, excluded, err := jobExecutorLabelsByIDs(ctx, s.pool, ids)
+	if err != nil {
+		return err
+	}
+	applyJobExecutorLabels(jobs, required, excluded)
+	return nil
+}
+
+func applyJobExecutorLabels(jobs []Job, required, excluded map[string][]string) {
+	for i := range jobs {
+		jobs[i].RequiredExecutorLabels = required[jobs[i].ID]
+		jobs[i].ExcludedExecutorLabels = excluded[jobs[i].ID]
+	}
+}
+
+func jobExecutorLabelsByIDsQuery() string {
+	return `SELECT job_id::text,label,excluded FROM job_executor_labels WHERE job_id=ANY($1::uuid[]) ORDER BY job_id,excluded,label`
+}
+
+func jobExecutorLabelsByIDs(ctx context.Context, query labelQuerier, jobIDs []string) (map[string][]string, map[string][]string, error) {
+	required := make(map[string][]string, len(jobIDs))
+	excluded := make(map[string][]string, len(jobIDs))
+	if len(jobIDs) == 0 {
+		return required, excluded, nil
+	}
+	rows, err := query.Query(ctx, jobExecutorLabelsByIDsQuery(), jobIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var jobID, label string
+		var isExcluded bool
+		if err = rows.Scan(&jobID, &label, &isExcluded); err != nil {
+			return nil, nil, err
+		}
+		if isExcluded {
+			excluded[jobID] = append(excluded[jobID], label)
+		} else {
+			required[jobID] = append(required[jobID], label)
+		}
+	}
+	return required, excluded, rows.Err()
+}
+
 type labelQuerier interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }

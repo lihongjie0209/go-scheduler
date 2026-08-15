@@ -150,11 +150,15 @@ func (s *Server) register(name string, handler Handler, async bool) error {
 	return nil
 }
 
+func (s *Server) jobBusy(jobID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.active[jobID] > 0
+}
+
 func (s *Server) idle(w http.ResponseWriter, r *http.Request) {
 	jobID := r.URL.Query().Get("job_id")
-	s.mu.RLock()
-	busy := s.active[jobID] > 0
-	s.mu.RUnlock()
+	busy := s.jobBusy(jobID)
 	if busy {
 		http.Error(w, "busy", http.StatusConflict)
 		return

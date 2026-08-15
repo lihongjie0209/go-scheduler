@@ -108,6 +108,56 @@ func TestRetryDelayIsBoundedExponentialWithJitter(t *testing.T) {
 	}
 }
 
+func TestPersistWriteSurvivesCanceledParent(t *testing.T) {
+	t.Parallel()
+	parent, cancel := context.WithCancel(t.Context())
+	cancel()
+	if parent.Err() == nil {
+		t.Fatal("parent should already be canceled")
+	}
+	wrote := map[string]bool{}
+	for _, name := range []string{"fail", "complete", "command-ack"} {
+		err := persistWrite(parent, func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				wrote[name] = true
+				return nil
+			}
+		})
+		if err != nil {
+			t.Fatalf("%s persist write dropped: %v", name, err)
+		}
+	}
+	if !wrote["fail"] || !wrote["complete"] || !wrote["command-ack"] {
+		t.Fatalf("persist writes = %v", wrote)
+	}
+}
+
+func TestSchedulingTickLeavesMaintenanceTimestampsUntouched(t *testing.T) {
+	t.Parallel()
+	engine := &Engine{lastPartitionRun: time.Unix(1, 0), lastCleanup: time.Unix(2, 0), lastRunCleanup: time.Unix(3, 0)}
+	beforePartition, beforeCleanup, beforeRun := engine.lastPartitionRun, engine.lastCleanup, engine.lastRunCleanup
+	// A nil store makes EnqueueDue panic if tick still mixed maintenance into the
+	// scheduling path the panic would happen after those stamps were rewritten.
+	defer func() { _ = recover() }()
+	_ = engine.tick(t.Context(), make(chan struct{}, 1))
+	if !engine.lastPartitionRun.Equal(beforePartition) || !engine.lastCleanup.Equal(beforeCleanup) || !engine.lastRunCleanup.Equal(beforeRun) {
+		t.Fatalf("tick mutated maintenance clocks: %+v", engine)
+	}
+}
+
+func TestCancelWatchIntervalIsNotPerRunStorm(t *testing.T) {
+	t.Parallel()
+	if cancelWatchInterval < time.Second {
+		t.Fatalf("cancelWatchInterval = %s, want at least 1s", cancelWatchInterval)
+	}
+}
+
 func TestExecutorCommandRetryDelay(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

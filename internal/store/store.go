@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,7 @@ var ErrDependencyCycle = errors.New("job dependency would create a cycle")
 var ErrRegistrationMode = errors.New("executor group does not accept dynamic registration")
 var ErrExecutorGroupInUse = errors.New("executor group is referenced by a job")
 var ErrOverrideRequiresExecutorGroup = errors.New("executor address override requires an executor group job")
+var ErrOverrideAddressNotRegistered = errors.New("override addresses must belong to the job executor group")
 var ErrNotificationLeaseLost = errors.New("notification delivery lease lost")
 var ErrNotificationConfigUnreadable = errors.New("notification channel configuration is unreadable")
 var ErrInvalidNotificationScope = errors.New("notification channel must target all jobs or one or more specific jobs")
@@ -319,6 +321,9 @@ func (s *Store) CreateJob(ctx context.Context, j Job) (Job, error) {
 
 const jobColumns = `id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,encrypted_docker_registry_auth,docker_registry_auth_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,version,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,COALESCE(executor_group_id::text,''),executor_handler,script_language,script_source,COALESCE(kubernetes_cluster_id::text,'')`
 
+// jobEnqueueColumns matches scanJob but does not load script_source.
+const jobEnqueueColumns = `id,tenant_id,name,description,schedule_type,schedule_expression,timezone,target_url,http_method,headers,encrypted_headers,encryption_key_version,encrypted_docker_registry_auth,docker_registry_auth_key_version,body_template,timeout_seconds,max_retries,overlap_policy,misfire_policy,enabled,next_run_at,version,max_concurrent_runs,max_catch_up,callback_timeout_seconds,max_queue_size,COALESCE(executor_group_id::text,''),executor_handler,script_language,''::text,COALESCE(kubernetes_cluster_id::text,'')`
+
 func (s *Store) scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	var headers, encrypted, dockerAuth []byte
@@ -408,7 +413,13 @@ func (s *Store) ListJobs(ctx context.Context, tenantID string, limit int) ([]Job
 		}
 		jobs = append(jobs, j)
 	}
-	return jobs, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if err = s.attachJobExecutorLabels(ctx, jobs); err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 func (s *Store) UpdateJob(ctx context.Context, j Job) (Job, error) {
@@ -586,6 +597,15 @@ func (s *Store) TriggerJobWithOptions(ctx context.Context, tenantID, jobID, key,
 			return Run{}, fmt.Errorf("reserve idempotency key: %w", err)
 		}
 	}
+	if len(options.OverrideAddresses) > 0 {
+		nodes, nodesErr := liveExecutorNodesTx(ctx, tx, executorGroupID)
+		if nodesErr != nil {
+			return Run{}, nodesErr
+		}
+		if missing := unregisteredOverrideAddresses(nodes, options.OverrideAddresses); len(missing) > 0 {
+			return Run{}, fmt.Errorf("%w: %s", ErrOverrideAddressNotRegistered, strings.Join(missing, ", "))
+		}
+	}
 	action, err := applyBlockPolicy(ctx, tx, jobID, blockPolicy)
 	if err != nil {
 		return Run{}, err
@@ -753,7 +773,7 @@ func (s *Store) EnqueueDue(ctx context.Context, batch int) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	rows, err := tx.Query(ctx, `SELECT `+jobColumns+` FROM jobs WHERE enabled AND next_run_at<=now() ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT $1`, batch)
+	rows, err := tx.Query(ctx, enqueueDueJobsQuery(), batch)
 	if err != nil {
 		return err
 	}
@@ -1269,13 +1289,23 @@ func runColumns(alias string) string {
 	return alias + `.id,` + alias + `.tenant_id,` + alias + `.job_id,` + alias + `.trigger_type,` + alias + `.status,` + alias + `.attempt,` + alias + `.scheduled_at,` + alias + `.started_at,` + alias + `.finished_at,COALESCE(` + alias + `.response_status,0),COALESCE(` + alias + `.error_message,''),` + alias + `.runtime_input,COALESCE(` + alias + `.parent_run_id::text,''),COALESCE(` + alias + `.retry_of_run_id::text,''),` + alias + `.external_execution_id,COALESCE(` + alias + `.executor_node_id,''),COALESCE(` + alias + `.executor_address,''),COALESCE(` + alias + `.broadcast_group_id::text,''),COALESCE(` + alias + `.shard_index,0),COALESCE(` + alias + `.shard_total,0),` + alias + `.reschedule_on_terminal,` + alias + `.override_addresses`
 }
 
+const callbackExpiryBatchSize = 200
+
+func enqueueDueJobsQuery() string {
+	return `SELECT ` + jobEnqueueColumns + ` FROM jobs WHERE enabled AND next_run_at<=now() ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT $1`
+}
+
+func expireCallbacksQuery() string {
+	return `SELECT ` + runColumns("r") + `,j.max_retries FROM job_runs r JOIN jobs j ON j.id=r.job_id WHERE r.status='waiting_callback' AND r.callback_deadline<=now() FOR UPDATE OF r SKIP LOCKED LIMIT $1`
+}
+
 func (s *Store) ExpireCallbacks(ctx context.Context) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	rows, err := tx.Query(ctx, `SELECT `+runColumns("r")+`,j.max_retries FROM job_runs r JOIN jobs j ON j.id=r.job_id WHERE r.status='waiting_callback' AND r.callback_deadline<=now() FOR UPDATE OF r SKIP LOCKED`)
+	rows, err := tx.Query(ctx, expireCallbacksQuery(), callbackExpiryBatchSize)
 	if err != nil {
 		return err
 	}
