@@ -58,7 +58,7 @@ func (s *Service) ListUserTenants(ctx context.Context, req *schedulerv1.ListUser
 	}
 	out := &schedulerv1.ListUserTenantsResponse{Tenants: make([]*schedulerv1.TenantAccess, 0, len(tenants))}
 	for _, tenant := range tenants {
-		out.Tenants = append(out.Tenants, &schedulerv1.TenantAccess{Id: tenant.ID, Name: tenant.Name, Role: tenant.Role, MaxConcurrentRuns: int32(tenant.MaxConcurrentRuns)})
+		out.Tenants = append(out.Tenants, &schedulerv1.TenantAccess{Id: tenant.ID, Name: tenant.Name, Role: tenant.Role, MaxConcurrentRuns: int32(tenant.MaxConcurrentRuns)}) // #nosec G115 -- tenant concurrency is stored as a small positive integer.
 	}
 	return out, nil
 }
@@ -122,7 +122,7 @@ func (s *Service) ListTenants(ctx context.Context, _ *schedulerv1.ListTenantsReq
 	}
 	out := &schedulerv1.ListTenantsResponse{Tenants: make([]*schedulerv1.Tenant, 0, len(tenants))}
 	for _, tenant := range tenants {
-		out.Tenants = append(out.Tenants, &schedulerv1.Tenant{Id: tenant.ID, Name: tenant.Name, MaxConcurrentRuns: int32(tenant.MaxConcurrentRuns), CreatedAt: timestamppb.New(tenant.CreatedAt)})
+		out.Tenants = append(out.Tenants, &schedulerv1.Tenant{Id: tenant.ID, Name: tenant.Name, MaxConcurrentRuns: int32(tenant.MaxConcurrentRuns), CreatedAt: timestamppb.New(tenant.CreatedAt)}) // #nosec G115 -- tenant concurrency is stored as a small positive integer.
 	}
 	return out, nil
 }

@@ -63,10 +63,15 @@ func TestInProcessSchedulerPersistsJobWithoutEtcd(t *testing.T) {
 			t.Errorf("close in-process scheduler: %v", closeErr)
 		}
 	})
+	group, err := inProcess.Client().CreateExecutorGroup(t.Context(), &schedulerv1.CreateExecutorGroupRequest{Group: &schedulerv1.ExecutorGroup{TenantId: tenantID, Name: "standalone", RouteStrategy: "round"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	created, err := inProcess.Client().CreateJob(t.Context(), &schedulerv1.CreateJobRequest{Job: &schedulerv1.Job{
 		TenantId: tenantID, Name: "standalone-job", ScheduleType: "fixed_interval", ScheduleExpression: "60", Timezone: "UTC",
 		TargetUrl: "https://example.com/jobs", HttpMethod: "POST", TimeoutSeconds: 30, OverlapPolicy: "serial",
 		MisfirePolicy: "fire_once", MaxConcurrentRuns: 1, MaxCatchUp: 10, CallbackTimeoutSeconds: 3600, MaxQueueSize: 1000,
+		ExecutorGroupId: group.Id, ExecutorHandler: "__http__",
 	}})
 	if err != nil {
 		t.Fatal(err)
