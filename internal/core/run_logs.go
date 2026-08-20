@@ -2,14 +2,11 @@ package core
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"strings"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -34,18 +31,11 @@ func validateRunLogEntries(entries []*schedulerv1.RunLogInput) error {
 }
 
 func (s *Service) AppendRunLogs(ctx context.Context, req *schedulerv1.AppendRunLogsRequest) (*schedulerv1.AppendRunLogsResponse, error) {
-	if req.GetRunId() == "" || req.GetToken() == "" {
-		return nil, status.Error(codes.InvalidArgument, "run_id and token are required")
-	}
-	if err := validateRunLogEntries(req.GetEntries()); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
 	entries := make([]store.RunLogInput, 0, len(req.Entries))
 	for _, entry := range req.Entries {
 		entries = append(entries, store.RunLogInput{EntryID: entry.EntryId, Stream: entry.Stream, Content: entry.Content})
 	}
-	hash := sha256.Sum256([]byte(req.Token))
-	cursor, err := s.store.AppendRunLogs(ctx, req.RunId, hash[:], entries)
+	cursor, err := s.operations.AppendRunLogs(ctx, req.GetRunId(), req.GetToken(), entries)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -53,10 +43,7 @@ func (s *Service) AppendRunLogs(ctx context.Context, req *schedulerv1.AppendRunL
 }
 
 func (s *Service) ListRunLogs(ctx context.Context, req *schedulerv1.ListRunLogsRequest) (*schedulerv1.ListRunLogsResponse, error) {
-	if req.GetTenantId() == "" || req.GetRunId() == "" || req.GetAfterCursor() < 0 {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id, run_id and a non-negative cursor are required")
-	}
-	entries, cursor, err := s.store.ListRunLogs(ctx, req.TenantId, req.RunId, req.AfterCursor, int(req.Limit))
+	entries, cursor, err := s.operations.ListRunLogs(ctx, req.GetTenantId(), req.GetRunId(), req.GetAfterCursor(), int(req.GetLimit()))
 	if err != nil {
 		return nil, toStatus(err)
 	}

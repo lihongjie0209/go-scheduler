@@ -4,8 +4,8 @@
 
 ## 组件
 
-- `scheduler server`：默认部署入口；REST API 与调度 Core 位于同一进程，通过内存 gRPC 通信，不需要 etcd；同时监听内部 gRPC 端口供 Executor 注册和回报。
-- `scheduler api-server` / `scheduler core`：分布式部署入口；Kubernetes 内可使用无头 Service + gRPC DNS 服务发现，集群外可使用 etcd。
+- `scheduler standalone`：默认部署入口；REST API 与调度 Core 位于同一进程，通过内存 gRPC 通信，不需要 etcd；同时监听内部 gRPC 端口供 Executor 注册和回报。
+- `scheduler api-server` / `scheduler scheduler-core`：分布式部署入口；Kubernetes 内可使用无头 Service + gRPC DNS 服务发现，集群外可使用 etcd。
 - `scheduler executor`：脚本、HTTP、Docker 与 Kubernetes Job 执行器。
 - `scheduler migrate` / `scheduler bootstrap`：数据库迁移和首次初始化。
 - `schedulerctl`：独立的 API 运维客户端，支持账号密码、JWT 和 API Key 认证。发行包只包含 `scheduler` 与 `schedulerctl` 两个二进制。
@@ -25,10 +25,12 @@ export JWT_SECRET="$(openssl rand -base64 48)"
 make migrate-up
 TENANT_NAME=demo ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='replace-with-strong-password' go run ./cmd/scheduler bootstrap
 
-HTTP_ADDRESS=:8080 go run ./cmd/scheduler server
+HTTP_ADDRESS=:8080 go run ./cmd/scheduler standalone
 ```
 
 项目不包含 Web UI，根路径返回 404；管理和运维使用 `schedulerctl` 或 `/api/v1` REST API。`make build` 构建统一的 `scheduler`、独立的 `schedulerctl` 和压测工具。
+
+所有 `scheduler` 子命令使用统一的结构化日志，默认以 JSON 写入 stderr。可通过 `--log-level=debug|info|warn|error`、`--log-format=json|text` 和 `--log-source` 调整，也可分别设置 `LOG_LEVEL`、`LOG_FORMAT`、`LOG_SOURCE`。服务日志自动携带 `service` 和构建 `version` 字段。
 
 `bootstrap` 只显示一次 API Key。调用 REST API 时使用 `Authorization: Bearer <api_key>`。
 
@@ -58,7 +60,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 | `HTTP_ADDRESS` | `:8080` | API 监听地址 |
 | `API_CONTEXT_PATH` | 空 | API URL 前缀，例如 `/scheduler`；健康检查、指标、REST、回调和执行器注册均使用此前缀 |
 | `PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | HTTP 任务异步回调使用的公开 API 地址 |
-| `DISCOVERY_MODE` | `etcd` | 分布式 API/Core 的服务发现模式：`etcd` 或 `kubernetes`；单进程 `server` 不使用该配置 |
+| `DISCOVERY_MODE` | `etcd` | 分布式 API/Core 的服务发现模式：`etcd` 或 `kubernetes`；单进程 `standalone` 不使用该配置 |
 | `CORE_GRPC_TARGET` | `dns:///scheduler-core:9090` | Kubernetes 模式下 API 和 Executor 连接 Core 无头 Service 的 gRPC DNS target |
 | `WORKERS` | `64` | 单 Core 最大并发下发数；执行任务本身在 Executor 运行，不长期占用该槽位 |
 | `API_DATABASE_MAX_CONNS` / `API_DATABASE_MIN_CONNS` | `8` / `1` | API PostgreSQL 连接池上限与保底连接数 |

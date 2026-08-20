@@ -27,7 +27,7 @@ services:
     depends_on: {migrate: {condition: service_completed_successfully}}
   scheduler-server:
     build: {context: .., args: {TARGET: scheduler}}
-    command: [server]
+    command: [standalone]
     environment:
       <<: *app-env
       HTTP_ADDRESS: ":8080"

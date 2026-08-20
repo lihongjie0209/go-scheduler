@@ -6,8 +6,6 @@ import (
 	"time"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 const maxRunReportDays = 90
@@ -51,16 +49,12 @@ func normalizeRunReportRequest(req *schedulerv1.GetRunReportRequest, now time.Ti
 }
 
 func (s *Service) GetRunReport(ctx context.Context, req *schedulerv1.GetRunReportRequest) (*schedulerv1.RunReport, error) {
-	from, to, location, err := normalizeRunReportRequest(req, time.Now())
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	points, err := s.store.RunReport(ctx, req.GetTenantId(), from, to, location.String())
+	result, err := s.operations.RunReport(ctx, RunReportInput{TenantID: req.GetTenantId(), FromDate: req.GetFromDate(), ToDate: req.GetToDate(), Timezone: req.GetTimezone()}, time.Now())
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	response := &schedulerv1.RunReport{FromDate: from.Format(time.DateOnly), ToDate: to.Format(time.DateOnly), Timezone: location.String(), Points: make([]*schedulerv1.RunReportPoint, 0, len(points))}
-	for _, point := range points {
+	response := &schedulerv1.RunReport{FromDate: result.From.Format(time.DateOnly), ToDate: result.To.Format(time.DateOnly), Timezone: result.Location.String(), Points: make([]*schedulerv1.RunReportPoint, 0, len(result.Points))}
+	for _, point := range result.Points {
 		response.Points = append(response.Points, &schedulerv1.RunReportPoint{Date: point.Date, Total: point.Total, Succeeded: point.Succeeded, Failed: point.Failed, Active: point.Active, Cancelled: point.Cancelled, Skipped: point.Skipped})
 	}
 	return response, nil

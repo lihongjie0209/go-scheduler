@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -17,6 +16,7 @@ import (
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
 	apihttp "github.com/lihongjie0209/go-scheduler/internal/api"
+	appRuntime "github.com/lihongjie0209/go-scheduler/internal/app/runtime"
 	"github.com/lihongjie0209/go-scheduler/internal/auth"
 	"github.com/lihongjie0209/go-scheduler/internal/config"
 	"github.com/lihongjie0209/go-scheduler/internal/core"
@@ -28,8 +28,12 @@ import (
 )
 
 func Run() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	fx.New(
+	fx.New(Options()...).Run()
+}
+
+func Options() []fx.Option {
+	return []fx.Option{
+		appRuntime.LoggingOption(),
 		fx.Provide(
 			loadConfig,
 			newStoreCipher,
@@ -39,13 +43,13 @@ func Run() {
 			newGRPCServer,
 			newInProcessScheduler,
 			newCoreClient,
-			newAuthManager,
+			appRuntime.NewAuthManager,
 			newHTTPServer,
 			newEngine,
 			newNotifier,
 		),
 		fx.Invoke(registerDatabasePoolMetrics, run),
-	).Run()
+	}
 }
 
 func loadConfig() (config.Config, error) { return config.Load("scheduler-server") }
@@ -57,17 +61,7 @@ func newStoreCipher(c config.Config) (store.HeaderCipher, error) {
 }
 
 func openStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher, maxConns, minConns int32) (*store.Store, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(cipher), store.WithPoolSize(maxConns, minConns))
-	if err != nil {
-		return nil, err
-	}
-	lc.Append(fx.Hook{OnStop: func(context.Context) error {
-		s.Close()
-		return nil
-	}})
-	return s, nil
+	return appRuntime.OpenStore(lc, c.DatabaseURL, cipher, maxConns, minConns)
 }
 
 func newCoreStore(lc fx.Lifecycle, c config.Config, cipher store.HeaderCipher) (*coreStore, error) {
@@ -136,22 +130,11 @@ func newCoreClient(scheduler *rpc.InProcessScheduler) schedulerv1.SchedulerServi
 	return scheduler.Client()
 }
 
-func newAuthManager(c config.Config) (*auth.Manager, error) {
-	return auth.NewManager(c.JWTSecret, "go-scheduler", 15*time.Minute)
-}
-
 func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, manager *auth.Manager) *http.Server {
 	handler := apihttp.NewServer(client, manager, c.CookieSecure)
 	handler.SetContextPath(c.APIContextPath)
 	handler.SetStandaloneInstance(c.InstanceID, time.Now())
-	return &http.Server{
-		Addr:              c.HTTPAddress,
-		Handler:           handler.Routes(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	return appRuntime.NewHTTPServer(c.HTTPAddress, handler.Routes(), 15*time.Second, 30*time.Second)
 }
 
 func newEngine(c config.Config, s *coreStore, controller *core.ExecutorController) (*core.Engine, error) {

@@ -41,16 +41,36 @@ const (
 var errNotificationBodyTooLarge = errors.New("notification body exceeds 1 MiB")
 
 type Worker struct {
-	store   *store.Store
-	owner   string
-	smtp    SMTPConfig
-	client  *http.Client
-	wg      sync.WaitGroup
-	senders map[string]func(context.Context, store.NotificationChannel, store.OutboxEvent) error
+	repository Repository
+	owner      string
+	smtp       SMTPConfig
+	client     *http.Client
+	wg         sync.WaitGroup
+	senders    map[string]func(context.Context, store.NotificationChannel, store.OutboxEvent) error
 }
 
-func New(s *store.Store, owner string, smtpConfig SMTPConfig) *Worker {
-	w := &Worker{store: s, owner: owner, smtp: smtpConfig, client: &http.Client{Timeout: notificationTimeout}}
+type DeliveryPreparer interface {
+	PrepareNotificationDeliveries(context.Context, int) error
+}
+
+type DeliveryClaimer interface {
+	ClaimNotificationDeliveries(context.Context, string, int) ([]store.NotificationDelivery, error)
+}
+
+type DeliveryStateWriter interface {
+	CompleteNotificationDelivery(context.Context, string, string, string) error
+	DeadLetterNotificationDelivery(context.Context, string, string, string, string) error
+	RetryNotificationDelivery(context.Context, string, string, string, time.Duration) error
+}
+
+type Repository interface {
+	DeliveryPreparer
+	DeliveryClaimer
+	DeliveryStateWriter
+}
+
+func New(repository Repository, owner string, smtpConfig SMTPConfig) *Worker {
+	w := &Worker{repository: repository, owner: owner, smtp: smtpConfig, client: &http.Client{Timeout: notificationTimeout}}
 	w.senders = map[string]func(context.Context, store.NotificationChannel, store.OutboxEvent) error{
 		"webhook":  w.webhook,
 		"email":    w.email,
@@ -100,11 +120,11 @@ func runNotificationLoop(ctx context.Context, idlePoll time.Duration, batchSize 
 }
 
 func (w *Worker) tick(ctx context.Context) int {
-	if err := w.store.PrepareNotificationDeliveries(ctx, notificationBatchSize); err != nil {
+	if err := w.repository.PrepareNotificationDeliveries(ctx, notificationBatchSize); err != nil {
 		slog.Error("prepare notification deliveries", "error", err)
 		return 0
 	}
-	deliveries, err := w.store.ClaimNotificationDeliveries(ctx, w.owner, notificationBatchSize)
+	deliveries, err := w.repository.ClaimNotificationDeliveries(ctx, w.owner, notificationBatchSize)
 	if err != nil {
 		slog.Error("claim notification deliveries", "error", err)
 		return 0
@@ -114,7 +134,7 @@ func (w *Worker) tick(ctx context.Context) int {
 		deliverErr := w.attemptDelivery(ctx, delivery, provider)
 		if deliverErr != nil {
 			if delivery.Attempts >= delivery.Channel.MaxAttempts {
-				if err := w.store.DeadLetterNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID, deliverErr.Error()); err != nil {
+				if err := w.repository.DeadLetterNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID, deliverErr.Error()); err != nil {
 					slog.Error("dead-letter notification delivery", "delivery_id", delivery.ID, "error", err)
 					observability.NotificationDeliveries.WithLabelValues(provider, "state_error").Inc()
 				} else {
@@ -123,7 +143,7 @@ func (w *Worker) tick(ctx context.Context) int {
 				return
 			}
 			delay := retryDelay(delivery.Attempts, time.Duration(delivery.Channel.BackoffInitialSeconds)*time.Second, time.Duration(delivery.Channel.BackoffMaxSeconds)*time.Second)
-			if err := w.store.RetryNotificationDelivery(ctx, w.owner, delivery.ID, deliverErr.Error(), delay); err != nil {
+			if err := w.repository.RetryNotificationDelivery(ctx, w.owner, delivery.ID, deliverErr.Error(), delay); err != nil {
 				slog.Error("retry notification delivery", "delivery_id", delivery.ID, "error", err)
 				observability.NotificationDeliveries.WithLabelValues(provider, "state_error").Inc()
 			} else {
@@ -131,7 +151,7 @@ func (w *Worker) tick(ctx context.Context) int {
 			}
 			return
 		}
-		if err := w.store.CompleteNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID); err != nil {
+		if err := w.repository.CompleteNotificationDelivery(ctx, w.owner, delivery.ID, delivery.EventID); err != nil {
 			slog.Error("complete notification delivery", "delivery_id", delivery.ID, "error", err)
 			observability.NotificationDeliveries.WithLabelValues(provider, "state_error").Inc()
 		} else {

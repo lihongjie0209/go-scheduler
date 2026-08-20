@@ -15,8 +15,6 @@ import (
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
 	"github.com/lihongjie0209/go-scheduler/internal/store"
 	"golang.org/x/net/http/httpguts"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -140,11 +138,7 @@ func validateNotificationConfig(kind string, raw json.RawMessage) error {
 }
 
 func (s *Service) CreateNotificationChannel(ctx context.Context, req *schedulerv1.CreateNotificationChannelRequest) (*schedulerv1.NotificationChannel, error) {
-	channel, err := notificationChannelForWrite(req.GetTenantId(), "", req.GetKind(), req.GetName(), req.GetConfigJson(), req.GetEvents(), req.GetAllJobs(), req.GetJobIds(), req.GetMaxAttempts(), req.GetBackoffInitialSeconds(), req.GetBackoffMaxSeconds(), 0)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	channel, err = s.store.CreateNotificationChannel(ctx, channel)
+	channel, err := s.notifications.Create(ctx, notificationChannelInput(req.GetTenantId(), "", req.GetKind(), req.GetName(), req.GetConfigJson(), req.GetEvents(), req.GetAllJobs(), req.GetJobIds(), req.GetMaxAttempts(), req.GetBackoffInitialSeconds(), req.GetBackoffMaxSeconds(), 0))
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -152,25 +146,7 @@ func (s *Service) CreateNotificationChannel(ctx context.Context, req *schedulerv
 }
 
 func (s *Service) UpdateNotificationChannel(ctx context.Context, req *schedulerv1.UpdateNotificationChannelRequest) (*schedulerv1.NotificationChannel, error) {
-	if req.GetTenantId() == "" || req.GetVersion() < 1 || uuid.Validate(req.GetId()) != nil {
-		return nil, status.Error(codes.InvalidArgument, "UUID id and positive version are required")
-	}
-	config := json.RawMessage(req.GetConfigJson())
-	if len(config) == 0 {
-		current, loadErr := s.store.NotificationChannel(ctx, req.GetTenantId(), req.GetId())
-		if loadErr != nil {
-			return nil, toStatus(loadErr)
-		}
-		if current.Kind != req.GetKind() {
-			return nil, status.Error(codes.InvalidArgument, "config_json is required when changing notification channel kind")
-		}
-		config = current.Config
-	}
-	channel, err := notificationChannelForWrite(req.GetTenantId(), req.GetId(), req.GetKind(), req.GetName(), config, req.GetEvents(), req.GetAllJobs(), req.GetJobIds(), req.GetMaxAttempts(), req.GetBackoffInitialSeconds(), req.GetBackoffMaxSeconds(), req.GetVersion())
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	channel, err = s.store.UpdateNotificationChannel(ctx, channel)
+	channel, err := s.notifications.Update(ctx, notificationChannelInput(req.GetTenantId(), req.GetId(), req.GetKind(), req.GetName(), req.GetConfigJson(), req.GetEvents(), req.GetAllJobs(), req.GetJobIds(), req.GetMaxAttempts(), req.GetBackoffInitialSeconds(), req.GetBackoffMaxSeconds(), req.GetVersion()))
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -178,10 +154,7 @@ func (s *Service) UpdateNotificationChannel(ctx context.Context, req *schedulerv
 }
 
 func (s *Service) SetNotificationChannelEnabled(ctx context.Context, req *schedulerv1.SetNotificationChannelEnabledRequest) (*schedulerv1.NotificationChannel, error) {
-	if req.GetTenantId() == "" || uuid.Validate(req.GetId()) != nil || req.GetVersion() < 1 {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id, UUID id and positive version are required")
-	}
-	channel, err := s.store.SetNotificationChannelEnabled(ctx, req.GetTenantId(), req.GetId(), req.GetEnabled(), req.GetVersion())
+	channel, err := s.notifications.SetEnabled(ctx, req.GetTenantId(), req.GetId(), req.GetEnabled(), req.GetVersion())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -189,10 +162,7 @@ func (s *Service) SetNotificationChannelEnabled(ctx context.Context, req *schedu
 }
 
 func (s *Service) DeleteNotificationChannel(ctx context.Context, req *schedulerv1.DeleteNotificationChannelRequest) (*schedulerv1.DeleteNotificationChannelResponse, error) {
-	if req.GetTenantId() == "" || uuid.Validate(req.GetId()) != nil || req.GetVersion() < 1 {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id, UUID id and positive version are required")
-	}
-	if err := s.store.DeleteNotificationChannel(ctx, req.GetTenantId(), req.GetId(), req.GetVersion()); err != nil {
+	if err := s.notifications.Delete(ctx, req.GetTenantId(), req.GetId(), req.GetVersion()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &schedulerv1.DeleteNotificationChannelResponse{}, nil
@@ -240,10 +210,7 @@ func notificationChannelForWrite(tenantID, id, kind, name string, config json.Ra
 }
 
 func (s *Service) ListNotificationChannels(ctx context.Context, req *schedulerv1.ListNotificationChannelsRequest) (*schedulerv1.ListNotificationChannelsResponse, error) {
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
-	}
-	channels, err := s.store.NotificationChannels(ctx, req.TenantId)
+	channels, err := s.notifications.List(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -320,39 +287,12 @@ func normalizeNotificationJobIDs(ids []string) ([]string, error) {
 }
 
 func (s *Service) ListNotificationHistory(ctx context.Context, req *schedulerv1.ListNotificationHistoryRequest) (*schedulerv1.ListNotificationHistoryResponse, error) {
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
-	}
-	if req.GetChannelId() != "" && uuid.Validate(req.GetChannelId()) != nil {
-		return nil, status.Error(codes.InvalidArgument, "channel_id must be a UUID")
-	}
-	if req.GetJobId() != "" && uuid.Validate(req.GetJobId()) != nil {
-		return nil, status.Error(codes.InvalidArgument, "job_id must be a UUID")
-	}
-	if req.GetStatus() != "" && req.GetStatus() != "pending" && req.GetStatus() != "delivered" && req.GetStatus() != "dead" {
-		return nil, status.Error(codes.InvalidArgument, "status must be pending, delivered, or dead")
-	}
-	limit := int(req.GetLimit())
-	if limit == 0 {
-		limit = 100
-	}
-	if limit < 1 || limit > 500 {
-		return nil, status.Error(codes.InvalidArgument, "limit must be between 1 and 500")
-	}
-	cursor, err := decodeNotificationHistoryCursor(req.GetCursor())
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "invalid notification history cursor")
-	}
-	entries, err := s.store.NotificationHistory(ctx, req.GetTenantId(), req.GetChannelId(), req.GetJobId(), req.GetStatus(), cursor.createdAt, cursor.id, limit+1)
+	result, err := s.notifications.ListHistory(ctx, NotificationHistoryInput{TenantID: req.GetTenantId(), ChannelID: req.GetChannelId(), JobID: req.GetJobId(), Status: req.GetStatus(), Cursor: req.GetCursor(), Limit: int(req.GetLimit())})
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	hasMore := len(entries) > limit
-	if hasMore {
-		entries = entries[:limit]
-	}
-	out := &schedulerv1.ListNotificationHistoryResponse{Deliveries: make([]*schedulerv1.NotificationHistoryEntry, 0, len(entries))}
-	for _, entry := range entries {
+	out := &schedulerv1.ListNotificationHistoryResponse{Deliveries: make([]*schedulerv1.NotificationHistoryEntry, 0, len(result.Entries)), NextCursor: result.NextCursor}
+	for _, entry := range result.Entries {
 		item := &schedulerv1.NotificationHistoryEntry{DeliveryId: entry.DeliveryID, EventId: entry.EventID, ChannelId: entry.ChannelID, ChannelName: entry.ChannelName, ChannelKind: entry.ChannelKind, Topic: entry.Topic, JobId: entry.JobID, RunId: entry.RunID, Status: entry.Status, Attempts: boundedInt32(entry.Attempts), LastError: entry.LastError, CreatedAt: timestamppb.New(entry.CreatedAt)}
 		if entry.DeliveredAt != nil {
 			item.DeliveredAt = timestamppb.New(*entry.DeliveredAt)
@@ -362,11 +302,11 @@ func (s *Service) ListNotificationHistory(ctx context.Context, req *schedulerv1.
 		}
 		out.Deliveries = append(out.Deliveries, item)
 	}
-	if hasMore {
-		last := entries[len(entries)-1]
-		out.NextCursor = encodeNotificationHistoryCursor(last.CreatedAt, last.DeliveryID)
-	}
 	return out, nil
+}
+
+func notificationChannelInput(tenantID, id, kind, name string, config []byte, events []string, allJobs bool, jobIDs []string, maxAttempts, initialBackoff, maxBackoff int32, version int64) NotificationChannelInput {
+	return NotificationChannelInput{TenantID: tenantID, ID: id, Kind: kind, Name: name, Config: json.RawMessage(config), Events: events, AllJobs: allJobs, JobIDs: jobIDs, MaxAttempts: maxAttempts, InitialBackoff: initialBackoff, MaxBackoff: maxBackoff, Version: version}
 }
 
 type notificationHistoryCursor struct {

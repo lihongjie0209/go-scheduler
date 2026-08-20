@@ -13,14 +13,14 @@ import (
 )
 
 func (s *Service) Ping(ctx context.Context, _ *schedulerv1.PingRequest) (*schedulerv1.PingResponse, error) {
-	if err := s.store.Ping(ctx); err != nil {
+	if err := s.identity.Ping(ctx); err != nil {
 		return nil, status.Error(codes.Unavailable, "database unavailable")
 	}
 	return &schedulerv1.PingResponse{}, nil
 }
 
 func (s *Service) AuthenticateAPIKey(ctx context.Context, req *schedulerv1.AuthenticateAPIKeyRequest) (*schedulerv1.AuthenticateAPIKeyResponse, error) {
-	tenantID, role, err := s.store.AuthenticateAPIKey(ctx, req.GetToken())
+	tenantID, role, err := s.identity.AuthenticateAPIKey(ctx, req.GetToken())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -28,7 +28,7 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, req *schedulerv1.Authe
 }
 
 func (s *Service) GetUser(ctx context.Context, req *schedulerv1.GetUserRequest) (*schedulerv1.User, error) {
-	user, err := s.store.GetUser(ctx, req.GetId())
+	user, err := s.identity.GetUser(ctx, req.GetId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -36,7 +36,7 @@ func (s *Service) GetUser(ctx context.Context, req *schedulerv1.GetUserRequest) 
 }
 
 func (s *Service) GetUserByEmail(ctx context.Context, req *schedulerv1.GetUserByEmailRequest) (*schedulerv1.User, error) {
-	user, err := s.store.GetUserByEmail(ctx, req.GetEmail())
+	user, err := s.identity.GetUserByEmail(ctx, req.GetEmail())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -44,7 +44,7 @@ func (s *Service) GetUserByEmail(ctx context.Context, req *schedulerv1.GetUserBy
 }
 
 func (s *Service) GetMembershipRole(ctx context.Context, req *schedulerv1.GetMembershipRoleRequest) (*schedulerv1.GetMembershipRoleResponse, error) {
-	role, err := s.store.GetMembershipRole(ctx, req.GetTenantId(), req.GetUserId())
+	role, err := s.identity.GetMembershipRole(ctx, req.GetTenantId(), req.GetUserId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -52,7 +52,7 @@ func (s *Service) GetMembershipRole(ctx context.Context, req *schedulerv1.GetMem
 }
 
 func (s *Service) ListUserTenants(ctx context.Context, req *schedulerv1.ListUserTenantsRequest) (*schedulerv1.ListUserTenantsResponse, error) {
-	tenants, err := s.store.UserTenants(ctx, req.GetUserId(), req.GetPlatformAdmin())
+	tenants, err := s.identity.UserTenants(ctx, req.GetUserId(), req.GetPlatformAdmin())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -65,7 +65,7 @@ func (s *Service) ListUserTenants(ctx context.Context, req *schedulerv1.ListUser
 
 func (s *Service) CreateRefreshSession(ctx context.Context, req *schedulerv1.CreateRefreshSessionRequest) (*schedulerv1.CreateRefreshSessionResponse, error) {
 	ttl := time.Duration(req.GetTtlSeconds()) * time.Second
-	token, session, err := s.store.CreateRefreshSession(ctx, req.GetUserId(), ttl)
+	token, session, err := s.identity.CreateRefreshSession(ctx, req.GetUserId(), ttl)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -74,7 +74,7 @@ func (s *Service) CreateRefreshSession(ctx context.Context, req *schedulerv1.Cre
 
 func (s *Service) RotateRefreshSession(ctx context.Context, req *schedulerv1.RotateRefreshSessionRequest) (*schedulerv1.RotateRefreshSessionResponse, error) {
 	ttl := time.Duration(req.GetTtlSeconds()) * time.Second
-	token, session, err := s.store.RotateRefreshSession(ctx, req.GetToken(), ttl)
+	token, session, err := s.identity.RotateRefreshSession(ctx, req.GetToken(), ttl)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -82,14 +82,14 @@ func (s *Service) RotateRefreshSession(ctx context.Context, req *schedulerv1.Rot
 }
 
 func (s *Service) RevokeRefreshSession(ctx context.Context, req *schedulerv1.RevokeRefreshSessionRequest) (*schedulerv1.RevokeRefreshSessionResponse, error) {
-	if err := s.store.RevokeRefreshSession(ctx, req.GetToken()); err != nil {
+	if err := s.identity.RevokeRefreshSession(ctx, req.GetToken()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &schedulerv1.RevokeRefreshSessionResponse{}, nil
 }
 
 func (s *Service) ListUsers(ctx context.Context, _ *schedulerv1.ListUsersRequest) (*schedulerv1.ListUsersResponse, error) {
-	users, err := s.store.ListUsers(ctx)
+	users, err := s.identity.ListUsers(ctx)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -101,7 +101,7 @@ func (s *Service) ListUsers(ctx context.Context, _ *schedulerv1.ListUsersRequest
 }
 
 func (s *Service) CreateUser(ctx context.Context, req *schedulerv1.CreateUserRequest) (*schedulerv1.User, error) {
-	user, err := s.store.CreateUser(ctx, req.GetEmail(), req.GetPasswordHash(), req.GetPlatformAdmin())
+	user, err := s.identity.CreateUser(ctx, req.GetEmail(), req.GetPasswordHash(), req.GetPlatformAdmin())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -109,14 +109,14 @@ func (s *Service) CreateUser(ctx context.Context, req *schedulerv1.CreateUserReq
 }
 
 func (s *Service) SetUserDisabled(ctx context.Context, req *schedulerv1.SetUserDisabledRequest) (*schedulerv1.SetUserDisabledResponse, error) {
-	if err := s.store.SetUserDisabled(ctx, req.GetId(), req.GetDisabled()); err != nil {
+	if err := s.identity.SetUserDisabled(ctx, req.GetId(), req.GetDisabled()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &schedulerv1.SetUserDisabledResponse{}, nil
 }
 
 func (s *Service) ListTenants(ctx context.Context, _ *schedulerv1.ListTenantsRequest) (*schedulerv1.ListTenantsResponse, error) {
-	tenants, err := s.store.ListTenants(ctx)
+	tenants, err := s.tenancy.List(ctx)
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -128,7 +128,7 @@ func (s *Service) ListTenants(ctx context.Context, _ *schedulerv1.ListTenantsReq
 }
 
 func (s *Service) CreateTenant(ctx context.Context, req *schedulerv1.CreateTenantRequest) (*schedulerv1.Tenant, error) {
-	id, err := s.store.CreateTenant(ctx, req.GetName())
+	id, err := s.tenancy.Create(ctx, req.GetName())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -136,7 +136,7 @@ func (s *Service) CreateTenant(ctx context.Context, req *schedulerv1.CreateTenan
 }
 
 func (s *Service) ListTenantMembers(ctx context.Context, req *schedulerv1.ListTenantMembersRequest) (*schedulerv1.ListTenantMembersResponse, error) {
-	members, err := s.store.TenantMembers(ctx, req.GetTenantId())
+	members, err := s.tenancy.Members(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -148,21 +148,21 @@ func (s *Service) ListTenantMembers(ctx context.Context, req *schedulerv1.ListTe
 }
 
 func (s *Service) AddMembership(ctx context.Context, req *schedulerv1.AddMembershipRequest) (*schedulerv1.AddMembershipResponse, error) {
-	if err := s.store.AddMembership(ctx, req.GetTenantId(), req.GetUserId(), req.GetRole()); err != nil {
+	if err := s.tenancy.AddMembership(ctx, req.GetTenantId(), req.GetUserId(), req.GetRole()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &schedulerv1.AddMembershipResponse{}, nil
 }
 
 func (s *Service) DeleteMembership(ctx context.Context, req *schedulerv1.DeleteMembershipRequest) (*schedulerv1.DeleteMembershipResponse, error) {
-	if err := s.store.DeleteMembership(ctx, req.GetTenantId(), req.GetUserId()); err != nil {
+	if err := s.tenancy.DeleteMembership(ctx, req.GetTenantId(), req.GetUserId()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &schedulerv1.DeleteMembershipResponse{}, nil
 }
 
 func (s *Service) ListAPIKeys(ctx context.Context, req *schedulerv1.ListAPIKeysRequest) (*schedulerv1.ListAPIKeysResponse, error) {
-	keys, err := s.store.ListAPIKeys(ctx, req.GetTenantId())
+	keys, err := s.tenancy.ListAPIKeys(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -178,7 +178,7 @@ func (s *Service) ListAPIKeys(ctx context.Context, req *schedulerv1.ListAPIKeysR
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, req *schedulerv1.CreateAPIKeyRequest) (*schedulerv1.CreateAPIKeyResponse, error) {
-	key, token, err := s.store.CreateAPIKey(ctx, req.GetTenantId(), req.GetName(), req.GetRole())
+	key, token, err := s.tenancy.CreateAPIKey(ctx, req.GetTenantId(), req.GetName(), req.GetRole())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -186,14 +186,14 @@ func (s *Service) CreateAPIKey(ctx context.Context, req *schedulerv1.CreateAPIKe
 }
 
 func (s *Service) RevokeAPIKey(ctx context.Context, req *schedulerv1.RevokeAPIKeyRequest) (*schedulerv1.RevokeAPIKeyResponse, error) {
-	if err := s.store.RevokeAPIKey(ctx, req.GetTenantId(), req.GetId()); err != nil {
+	if err := s.tenancy.RevokeAPIKey(ctx, req.GetTenantId(), req.GetId()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &schedulerv1.RevokeAPIKeyResponse{}, nil
 }
 
 func (s *Service) GetDashboard(ctx context.Context, req *schedulerv1.GetDashboardRequest) (*schedulerv1.Dashboard, error) {
-	dashboard, err := s.store.Dashboard(ctx, req.GetTenantId())
+	dashboard, err := s.tenancy.Dashboard(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -212,7 +212,7 @@ func (s *Service) GetDashboard(ctx context.Context, req *schedulerv1.GetDashboar
 }
 
 func (s *Service) ListKubernetesClusters(ctx context.Context, req *schedulerv1.ListKubernetesClustersRequest) (*schedulerv1.ListKubernetesClustersResponse, error) {
-	clusters, err := s.store.ListKubernetesClusters(ctx, req.GetTenantId())
+	clusters, err := s.clusters.List(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -224,7 +224,7 @@ func (s *Service) ListKubernetesClusters(ctx context.Context, req *schedulerv1.L
 }
 
 func (s *Service) GetKubernetesCluster(ctx context.Context, req *schedulerv1.GetKubernetesClusterRequest) (*schedulerv1.KubernetesCluster, error) {
-	cluster, err := s.store.GetKubernetesCluster(ctx, req.GetTenantId(), req.GetId())
+	cluster, err := s.clusters.Get(ctx, req.GetTenantId(), req.GetId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -232,10 +232,7 @@ func (s *Service) GetKubernetesCluster(ctx context.Context, req *schedulerv1.Get
 }
 
 func (s *Service) CreateKubernetesCluster(ctx context.Context, req *schedulerv1.CreateKubernetesClusterRequest) (*schedulerv1.KubernetesCluster, error) {
-	if req.GetCluster() == nil {
-		return nil, status.Error(codes.InvalidArgument, "cluster is required")
-	}
-	cluster, err := s.store.CreateKubernetesCluster(ctx, kubernetesClusterFromProto(req.GetCluster()))
+	cluster, err := s.clusters.Create(ctx, KubernetesClusterInput{Cluster: kubernetesClusterFromProto(req.GetCluster()), Provided: req.GetCluster() != nil})
 	if err != nil {
 		return nil, kubernetesWriteStatus(err)
 	}
@@ -243,21 +240,7 @@ func (s *Service) CreateKubernetesCluster(ctx context.Context, req *schedulerv1.
 }
 
 func (s *Service) UpdateKubernetesCluster(ctx context.Context, req *schedulerv1.UpdateKubernetesClusterRequest) (*schedulerv1.KubernetesCluster, error) {
-	if req.GetCluster() == nil {
-		return nil, status.Error(codes.InvalidArgument, "cluster is required")
-	}
-	incoming := kubernetesClusterFromProto(req.GetCluster())
-	if incoming.Credentials.Kubeconfig == "" && incoming.Credentials.Token == "" && incoming.Credentials.CAData == "" {
-		current, err := s.store.GetKubernetesCluster(ctx, incoming.TenantID, incoming.ID)
-		if err != nil {
-			return nil, toStatus(err)
-		}
-		if current.AuthMode != incoming.AuthMode {
-			return nil, status.Error(codes.InvalidArgument, "credentials are required when changing auth_mode")
-		}
-		incoming.Credentials = current.Credentials
-	}
-	cluster, err := s.store.UpdateKubernetesCluster(ctx, incoming)
+	cluster, err := s.clusters.Update(ctx, KubernetesClusterInput{Cluster: kubernetesClusterFromProto(req.GetCluster()), Provided: req.GetCluster() != nil})
 	if err != nil {
 		return nil, kubernetesWriteStatus(err)
 	}
@@ -274,7 +257,7 @@ func kubernetesWriteStatus(err error) error {
 }
 
 func (s *Service) DeleteKubernetesCluster(ctx context.Context, req *schedulerv1.DeleteKubernetesClusterRequest) (*schedulerv1.DeleteKubernetesClusterResponse, error) {
-	if err := s.store.DeleteKubernetesCluster(ctx, req.GetTenantId(), req.GetId(), req.GetVersion()); err != nil {
+	if err := s.clusters.Delete(ctx, req.GetTenantId(), req.GetId(), req.GetVersion()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &schedulerv1.DeleteKubernetesClusterResponse{}, nil
@@ -289,6 +272,9 @@ func userToProto(user store.User, createdAt time.Time) *schedulerv1.User {
 }
 
 func kubernetesClusterFromProto(cluster *schedulerv1.KubernetesCluster) store.KubernetesCluster {
+	if cluster == nil {
+		return store.KubernetesCluster{}
+	}
 	return store.KubernetesCluster{
 		ID: cluster.GetId(), TenantID: cluster.GetTenantId(), Name: cluster.GetName(), AuthMode: cluster.GetAuthMode(),
 		APIServer: cluster.GetApiServer(), Namespace: cluster.GetNamespace(),

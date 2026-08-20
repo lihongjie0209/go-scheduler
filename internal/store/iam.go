@@ -115,7 +115,9 @@ func (s *Store) RotateRefreshSession(ctx context.Context, raw string, ttl time.D
 		return "", RefreshSession{}, fmt.Errorf("get refresh session: %w", err)
 	}
 	if consumed != nil || revoked != nil || time.Now().After(old.ExpiresAt) {
-		_, _ = tx.Exec(ctx, `UPDATE refresh_sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE family_id=$1`, old.FamilyID)
+		if _, err = tx.Exec(ctx, `UPDATE refresh_sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE family_id=$1`, old.FamilyID); err != nil {
+			return "", RefreshSession{}, fmt.Errorf("revoke replayed refresh session family: %w", err)
+		}
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return "", RefreshSession{}, commitErr
 		}

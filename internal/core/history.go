@@ -31,11 +31,7 @@ func (s *Service) PurgeRunHistory(ctx context.Context, req *schedulerv1.PurgeRun
 	if err := validatePurgeRunHistoryRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	limit := int(req.GetLimit())
-	if limit == 0 {
-		limit = 1000
-	}
-	deleted, err := s.store.PurgeRunHistory(ctx, req.GetTenantId(), req.GetJobId(), req.GetBefore().AsTime(), limit)
+	deleted, err := s.operations.PurgeRunHistory(ctx, req.GetTenantId(), req.GetJobId(), req.GetBefore().AsTime(), int(req.GetLimit()))
 	if err != nil {
 		return nil, toStatus(err)
 	}

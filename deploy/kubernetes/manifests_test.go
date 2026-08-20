@@ -30,3 +30,17 @@ func TestWorkloadsUseNumericNonRootIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestSchedulerCoreUsesCanonicalSubcommand(t *testing.T) {
+	content, err := os.ReadFile("scheduler-core.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := string(content)
+	if !strings.Contains(manifest, `args: ["scheduler-core"]`) {
+		t.Fatal("scheduler-core workload does not use the scheduler-core subcommand")
+	}
+	if strings.Contains(manifest, `args: ["core"]`) {
+		t.Fatal("scheduler-core workload still uses the removed core subcommand")
+	}
+}

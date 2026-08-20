@@ -9,9 +9,9 @@ spec:
     spec:
       terminationGracePeriodSeconds: 60
       containers:
-        - name: core
+        - name: scheduler-core
           image: ghcr.io/lihongjie0209/go-scheduler:latest
-          args: ["core"]
+          args: ["scheduler-core"]
           ports: [{name: grpc, containerPort: 9090}, {name: admin, containerPort: 8081}]
           envFrom: [{secretRef: {name: scheduler-secrets}}, {configMapRef: {name: scheduler-config}}]
           env:

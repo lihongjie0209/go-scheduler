@@ -1,13 +1,15 @@
 package api
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
-	"github.com/lihongjie0209/go-scheduler/internal/store"
 )
 
 func TestRoutesDoNotServeWebUI(t *testing.T) {
@@ -37,6 +39,36 @@ func TestRoutesUseConfiguredContextPath(t *testing.T) {
 			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.target, nil))
 			if response.Code != test.want {
 				t.Fatalf("GET %s status = %d, want %d", test.target, response.Code, test.want)
+			}
+		})
+	}
+}
+
+func TestRequestLogIncludesResponseStatus(t *testing.T) {
+	previous := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	for _, test := range []struct {
+		name string
+		code int
+	}{
+		{name: "success", code: http.StatusNoContent},
+		{name: "client error", code: http.StatusTeapot},
+		{name: "server error", code: http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+			handler := NewServer(nil, nil).requestLog(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.code)
+			}))
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/probe", nil))
+
+			line := output.String()
+			for _, want := range []string{`"msg":"http request"`, `"method":"GET"`, `"path":"/probe"`, `"status":` + strconv.Itoa(test.code)} {
+				if !strings.Contains(line, want) {
+					t.Errorf("log output %q does not contain %q", line, want)
+				}
 			}
 		})
 	}
@@ -101,62 +133,8 @@ func TestKubernetesClusterCapacityRoundTripsThroughAPIModel(t *testing.T) {
 	if cluster.MaxConcurrentJobs != 250 {
 		t.Fatalf("store cluster capacity = %d", cluster.MaxConcurrentJobs)
 	}
-	public := publicKubernetesCluster(store.KubernetesCluster{ID: "cluster", MaxConcurrentJobs: 250})
+	public := publicKubernetesCluster(&schedulerv1.KubernetesCluster{Id: "cluster", MaxConcurrentJobs: 250})
 	if public["max_concurrent_jobs"] != int32(250) {
 		t.Fatalf("public cluster capacity = %#v", public["max_concurrent_jobs"])
-	}
-}
-
-func TestKubernetesCredentialsConfigured(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name        string
-		credentials store.KubernetesCredentials
-		want        bool
-	}{
-		{name: "empty"},
-		{name: "whitespace only", credentials: store.KubernetesCredentials{Token: " \n"}},
-		{name: "kubeconfig", credentials: store.KubernetesCredentials{Kubeconfig: "apiVersion: v1"}, want: true},
-		{name: "token", credentials: store.KubernetesCredentials{Token: "secret"}, want: true},
-		{name: "CA", credentials: store.KubernetesCredentials{CAData: "certificate"}, want: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			if got := kubernetesCredentialsConfigured(test.credentials); got != test.want {
-				t.Fatalf("kubernetesCredentialsConfigured() = %v, want %v", got, test.want)
-			}
-		})
-	}
-}
-
-func TestPreserveKubernetesCredentials(t *testing.T) {
-	t.Parallel()
-	current := store.KubernetesCluster{
-		AuthMode:    "service_account",
-		Credentials: store.KubernetesCredentials{Token: "secret", CAData: "certificate"},
-	}
-	tests := []struct {
-		name    string
-		update  store.KubernetesCluster
-		want    store.KubernetesCredentials
-		wantErr bool
-	}{
-		{name: "preserve omitted credentials", update: store.KubernetesCluster{AuthMode: "service_account"}, want: current.Credentials},
-		{name: "replace supplied credentials", update: store.KubernetesCluster{AuthMode: "service_account", Credentials: store.KubernetesCredentials{Token: "replacement"}}, want: store.KubernetesCredentials{Token: "replacement"}},
-		{name: "reject auth mode change without credentials", update: store.KubernetesCluster{AuthMode: "kubeconfig"}, wantErr: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			update := test.update
-			err := preserveKubernetesCredentials(current, &update)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("preserveKubernetesCredentials() error = %v, want error %v", err, test.wantErr)
-			}
-			if err == nil && update.Credentials != test.want {
-				t.Fatalf("credentials = %+v, want %+v", update.Credentials, test.want)
-			}
-		})
 	}
 }

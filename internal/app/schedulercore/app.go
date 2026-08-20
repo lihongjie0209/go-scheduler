@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -18,6 +17,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
+	appRuntime "github.com/lihongjie0209/go-scheduler/internal/app/runtime"
 	"github.com/lihongjie0209/go-scheduler/internal/config"
 	"github.com/lihongjie0209/go-scheduler/internal/core"
 	"github.com/lihongjie0209/go-scheduler/internal/cryptox"
@@ -29,23 +29,24 @@ import (
 )
 
 func Run() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	fx.New(fx.Provide(loadConfig, newStore, newEtcd, newExecutorRegistry, newExecutorController, newCoreService, newGRPCServer, newRegistrar, newEngine, newNotifier, newCoreHTTPServer), fx.Invoke(registerDatabasePoolMetrics, run)).Run()
+	fx.New(Options()...).Run()
 }
+
+func Options() []fx.Option {
+	return []fx.Option{
+		appRuntime.LoggingOption(),
+		fx.Provide(loadConfig, newStore, appRuntime.NewEtcd, newExecutorRegistry, newExecutorController, newCoreService, newGRPCServer, newRegistrar, newEngine, newNotifier, newCoreHTTPServer),
+		fx.Invoke(registerDatabasePoolMetrics, run),
+	}
+}
+
 func loadConfig() (config.Config, error) { return config.Load("scheduler-core") }
 func newStore(lc fx.Lifecycle, c config.Config) (*store.Store, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	ring, err := cryptox.NewKeyring(c.MasterKeyVersion, c.MasterKey)
 	if err != nil {
 		return nil, err
 	}
-	s, err := store.New(ctx, c.DatabaseURL, store.WithHeaderCipher(ring), store.WithPoolSize(c.CoreDatabaseMaxConns, c.CoreDatabaseMinConns))
-	if err != nil {
-		return nil, err
-	}
-	lc.Append(fx.Hook{OnStop: func(context.Context) error { s.Close(); return nil }})
-	return s, nil
+	return appRuntime.OpenStore(lc, c.DatabaseURL, ring, c.CoreDatabaseMaxConns, c.CoreDatabaseMinConns)
 }
 func registerDatabasePoolMetrics(s *store.Store) error {
 	if err := prometheus.Register(observability.NewDatabasePoolCollector("core", s.PoolStats)); err != nil {
@@ -61,16 +62,6 @@ func registerDatabasePoolMetrics(s *store.Store) error {
 		stats, err := s.ExecutorCommandQueueStats(ctx)
 		return observability.ExecutorCommandQueueSnapshot{Pending: stats.Pending, OldestPendingAge: stats.OldestPendingAge}, err
 	}))
-}
-func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
-	if c.DiscoveryMode == "kubernetes" {
-		return nil, nil
-	}
-	client, err := discovery.NewClient(c.EtcdEndpoints, c.EtcdUsername, c.EtcdPassword, c.EtcdCA, c.EtcdCert, c.EtcdKey)
-	if err == nil {
-		lc.Append(fx.Hook{OnStop: func(context.Context) error { return client.Close() }})
-	}
-	return client, err
 }
 func newExecutorRegistry(c config.Config, client *clientv3.Client, s *store.Store) core.ExecutorRegistry {
 	if c.DiscoveryMode == "kubernetes" {
@@ -133,7 +124,7 @@ func newCoreHTTPServer(c config.Config, s *store.Store) *http.Server {
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
 	mux.Handle("/metrics", promhttp.Handler())
-	return &http.Server{Addr: c.CoreHTTPAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	return appRuntime.NewHTTPServer(c.CoreHTTPAddress, mux, 10*time.Second, 15*time.Second)
 }
 func run(lc fx.Lifecycle, c config.Config, server *grpc.Server, registrar discovery.ServiceRegistrar, engine *core.Engine, notifications *notifier.Worker, adminServer *http.Server) {
 	var listener net.Listener

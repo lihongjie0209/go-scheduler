@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -16,6 +15,7 @@ import (
 
 	schedulerv1 "github.com/lihongjie0209/go-scheduler/gen/scheduler/v1"
 	apihttp "github.com/lihongjie0209/go-scheduler/internal/api"
+	appRuntime "github.com/lihongjie0209/go-scheduler/internal/app/runtime"
 	"github.com/lihongjie0209/go-scheduler/internal/auth"
 	"github.com/lihongjie0209/go-scheduler/internal/config"
 	"github.com/lihongjie0209/go-scheduler/internal/discovery"
@@ -23,20 +23,18 @@ import (
 )
 
 func Run() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	fx.New(fx.Provide(loadConfig, newEtcd, newCoreClient, newRegistrar, newAuthManager, newHTTPServer), fx.Invoke(run)).Run()
+	fx.New(Options()...).Run()
 }
+
+func Options() []fx.Option {
+	return []fx.Option{
+		appRuntime.LoggingOption(),
+		fx.Provide(loadConfig, appRuntime.NewEtcd, newCoreClient, newRegistrar, appRuntime.NewAuthManager, newHTTPServer),
+		fx.Invoke(run),
+	}
+}
+
 func loadConfig() (config.Config, error) { return config.Load("api-server") }
-func newEtcd(lc fx.Lifecycle, c config.Config) (*clientv3.Client, error) {
-	if c.DiscoveryMode == "kubernetes" {
-		return nil, nil
-	}
-	client, err := discovery.NewClient(c.EtcdEndpoints, c.EtcdUsername, c.EtcdPassword, c.EtcdCA, c.EtcdCert, c.EtcdKey)
-	if err == nil {
-		lc.Append(fx.Hook{OnStop: func(context.Context) error { return client.Close() }})
-	}
-	return client, err
-}
 func newCoreClient(lc fx.Lifecycle, c config.Config, etcd *clientv3.Client) (schedulerv1.SchedulerServiceClient, error) {
 	transport, err := rpc.ClientTransportCredentials(c.GRPCTLSCA, c.GRPCTLSServerName)
 	if err != nil {
@@ -64,14 +62,11 @@ func newRegistrar(c config.Config, client *clientv3.Client) (discovery.ServiceRe
 	}
 	return discovery.NewRegistrar(client, c.EtcdPrefix, "api-server", discovery.Metadata{InstanceID: c.InstanceID, HTTPAddress: c.AdvertiseHTTP, Version: "dev", StartedAt: time.Now().UTC()})
 }
-func newAuthManager(c config.Config) (*auth.Manager, error) {
-	return auth.NewManager(c.JWTSecret, "go-scheduler", 15*time.Minute)
-}
 func newHTTPServer(c config.Config, client schedulerv1.SchedulerServiceClient, manager *auth.Manager, etcd *clientv3.Client) *http.Server {
 	handler := apihttp.NewServer(client, manager, c.CookieSecure)
 	handler.SetContextPath(c.APIContextPath)
 	handler.SetDiscovery(etcd, c.EtcdPrefix)
-	return &http.Server{Addr: c.HTTPAddress, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	return appRuntime.NewHTTPServer(c.HTTPAddress, handler.Routes(), 15*time.Second, 30*time.Second)
 }
 func run(lc fx.Lifecycle, server *http.Server, registrar discovery.ServiceRegistrar) {
 	var cancel context.CancelFunc
